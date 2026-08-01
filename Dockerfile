@@ -3,8 +3,13 @@ FROM debian:bookworm-slim AS css
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-# latest = актуальный v4; можно закрепить версию под ту, что стоит локально
-RUN curl -sL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 \
+# Версия совпадает с локальным tailwindcss.exe — иначе CSS может разойтись.
+# PROXY: с сервера release-assets.githubusercontent.com заблокирован — качаем
+# через прокси (значение только в серверном .env, в git не попадает).
+ARG TAILWIND_VERSION=4.3.1
+ARG PROXY
+RUN curl -sSL --connect-timeout 30 ${PROXY:+-x $PROXY} \
+    https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWIND_VERSION}/tailwindcss-linux-x64 \
     -o /usr/local/bin/tailwindcss && chmod +x /usr/local/bin/tailwindcss
 COPY . .
 RUN tailwindcss -i theme/input.css -o core/static/core/css/base.css --minify

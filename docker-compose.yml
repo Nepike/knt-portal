@@ -15,7 +15,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
+    build:
+      context: .
+      args:
+        PROXY: ${PROXY:-}   # из .env; пусто = качать напрямую
     env_file: .env
     depends_on:
       db:
