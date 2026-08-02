@@ -9,6 +9,7 @@ env:
   TG_TOKEN: ${{ secrets.TG_TOKEN }}
   TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
   TG_TOPIC_ID: ${{ secrets.TG_TOPIC_ID }}
+  TG_API: https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage
   RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -16,13 +17,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Telegram — старт
+        continue-on-error: true
         env:
-          ACTOR: ${{ github.actor }}
-          COMMIT: ${{ github.event.head_commit.message }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+          COMPARE: ${{ github.event.compare }}
+          BRANCH: ${{ github.ref_name }}
         run: |
-          TEXT=$(printf '🚀 Деплой запущен\nАвтор: %s\nКоммит: %s' "$ACTOR" "${COMMIT:-—}")
-          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+          echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          if [ -z "$COMMITS" ] || [ "$COMMITS" = "null" ]; then
+            LIST="• ручной запуск"
+          else
+            LIST=$(printf '%s' "$COMMITS" | jq -r '.[] | "• <a href=\"\(.url)\">\(.id[0:7])</a> \(.author.name | @html): \(.message | split("\n")[0] | @html)"')
+          fi
+          TEXT=$(printf '🚀 <b>Деплой запущен</b> · <code>%s</code>\n\n%s' "$BRANCH" "$LIST")
+          if [ -n "$COMPARE" ]; then
+            TEXT=$(printf '%s\n\n<a href="%s">Все изменения</a>' "$TEXT" "$COMPARE")
+          fi
+          curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            -d parse_mode=HTML -d disable_web_page_preview=true \
             --data-urlencode "text=$TEXT"
 
       - name: Deploy over SSH
@@ -40,16 +53,24 @@ jobs:
 
       - name: Telegram — успех
         if: success()
+        continue-on-error: true
         run: |
-          TEXT=$(printf '✅ Деплой прошёл\nhttps://test.inbicst.ru')
-          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+          D=$(( $(date +%s) - ${STARTED:-$(date +%s)} ))
+          [ "$D" -ge 60 ] && T="$((D / 60)) мин $((D % 60)) с" || T="$D с"
+          TEXT=$(printf '✅ <b>Деплой завершён</b> · %s\n\n<a href="https://test.inbicst.ru">test.inbicst.ru</a>' "$T")
+          curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            -d parse_mode=HTML -d disable_web_page_preview=true \
             --data-urlencode "text=$TEXT"
 
       - name: Telegram — падение
         if: failure()
+        continue-on-error: true
         run: |
-          TEXT=$(printf '❌ Деплой упал\nЛоги: %s' "$RUN_URL")
-          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+          D=$(( $(date +%s) - ${STARTED:-$(date +%s)} ))
+          [ "$D" -ge 60 ] && T="$((D / 60)) мин $((D % 60)) с" || T="$D с"
+          TEXT=$(printf '❌ <b>Деплой упал</b> · %s\n\n<a href="%s">Логи прогона</a>' "$T" "$RUN_URL")
+          curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            -d parse_mode=HTML -d disable_web_page_preview=true \
             --data-urlencode "text=$TEXT"
