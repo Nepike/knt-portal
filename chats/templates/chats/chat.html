@@ -1,0 +1,202 @@
+{% extends "core/base.html" %}
+
+{% block title %}{% if chat %}{% if other %}{{ other.name }} {{ other.surname }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
+
+{# Мессенджер занимает ровно экран: страница не скроллится, скроллится лента #}
+{% block wrapper_class %}h-dvh{% endblock %}
+{% block main_class %}min-h-0{% endblock %}
+
+{% block content %}
+<div class="w-full flex-1 min-h-0 grid grid-rows-[minmax(0,1fr)] lg:grid-cols-[300px_1fr] gap-4"
+     x-data="{ newChat: {% if modal_open %}true{% else %}false{% endif %}, members: false }">
+
+  {# На мобильном виден либо список, либо переписка #}
+  <aside class="{% if chat %}hidden lg:flex{% else %}flex{% endif %} flex-col min-h-0 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+    <div class="flex items-center justify-between pl-4 pr-2 py-1.5 border-b border-slate-200 dark:border-slate-800">
+      <h1 class="font-bold">Сообщения</h1>
+      <button type="button" @click="newChat = true" class="btn btn-ghost !px-2.5" aria-label="Новый чат"><i class="fa-solid fa-pen-to-square"></i></button>
+    </div>
+    {# Поллинг панели: новые диалоги, превью, счётчики (в Фазе C заменит WS) #}
+    <div class="flex-1 overflow-y-auto" hx-get="{% url 'chat_list_fragment' %}{% if chat %}?active={{ chat.pk }}{% endif %}"
+         hx-trigger="every 10s [!document.hidden]" hx-swap="innerHTML">
+      {% include "chats/_chat_list.html" %}
+    </div>
+  </aside>
+
+  {% if chat %}
+  <section class="flex flex-col min-h-0 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden" x-data="chat()">
+
+    <header class="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800">
+      <a href="{% url 'chat_list' %}" class="lg:hidden text-slate-400 hover:text-accent" aria-label="К списку"><i class="fa-solid fa-arrow-left"></i></a>
+      {% if chat.kind == "dm" and other %}
+      <a href="{% url 'profile' other.pk %}" class="min-w-0 hover:opacity-80 transition-opacity">
+        <p class="font-semibold text-sm truncate">{{ other.name }} {{ other.surname }}</p>
+        <p class="text-xs text-slate-400">{{ other.team.get_grade_str|default:"личные сообщения" }}</p>
+      </a>
+      {% else %}
+      <button type="button" @click="members = true" class="min-w-0 text-left hover:opacity-80 transition-opacity">
+        <p class="font-semibold text-sm truncate">{{ chat.title }}</p>
+        <p class="text-xs text-slate-400">{{ chat.memberships.all|length }} участников · нажми для списка</p>
+      </button>
+      {% endif %}
+      {% if chat.kind == "dm" %}
+      <form method="post" action="{% url 'chat_delete' chat.pk %}" class="ml-auto" onsubmit="return confirm('Удалить диалог у обоих участников?')">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost !px-2.5 text-slate-400 hover:!text-rose-500" aria-label="Удалить диалог"><i class="fa-solid fa-trash text-sm"></i></button>
+      </form>
+      {% endif %}
+    </header>
+
+    <div id="messages" x-ref="box" class="flex-1 overflow-y-auto p-4 flex flex-col gap-1.5">
+      {% include "chats/_history.html" %}
+    </div>
+
+    {# Поллинг: after из DOM; фоновая вкладка не опрашивает и не «читает». В Фазе C заменит WS #}
+    <div hx-get="{% url 'messages_new' chat.pk %}" hx-trigger="every 3s [!document.hidden]"
+         hx-target="#messages" hx-swap="beforeend"
+         hx-vals='js:{after: window.lastMessageId()}'></div>
+
+    <div class="border-t border-slate-200 dark:border-slate-800">
+      <div x-show="replyTo" x-cloak class="flex items-center gap-2 px-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
+        <i class="fa-solid fa-reply text-accent"></i>
+        <span class="min-w-0 flex-1 truncate">Ответ: <b x-text="replyTo?.author"></b> — <span x-text="replyTo?.text"></span></span>
+        <button type="button" @click="replyTo = null" class="text-slate-400 hover:text-rose-500" aria-label="Отменить ответ"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      {# after — тот же курсор, что у поллинга: ответ донесёт чужие сообщения, пришедшие с последнего опроса #}
+      <form class="chat-send flex items-center gap-2 p-3"
+            hx-post="{% url 'message_send' chat.pk %}" hx-target="#messages" hx-swap="beforeend"
+            hx-vals='js:{after: window.lastMessageId()}'>
+        <input type="hidden" name="reply_to" :value="replyTo?.id ?? ''">
+        <input name="text" x-ref="input" autocomplete="off" placeholder="Сообщение…" maxlength="4000"
+               class="flex-1 h-10 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition">
+        <button type="submit" class="btn btn-primary" aria-label="Отправить"><i class="fa-solid fa-paper-plane"></i></button>
+      </form>
+    </div>
+  </section>
+
+  {% else %}
+  <section class="hidden lg:flex flex-col items-center justify-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400">
+    <i class="fa-regular fa-comments text-4xl mb-3"></i>
+    <p>Выбери чат слева или начни новый</p>
+  </section>
+  {% endif %}
+
+  {# ===== Модалка «Новый чат»: поиск людей + создание группы ===== #}
+  <div x-show="newChat" x-cloak @keydown.escape.window="newChat = false"
+       class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/40" @click="newChat = false"></div>
+    <div class="relative w-full max-w-md max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold">Новый чат</h2>
+        <button type="button" @click="newChat = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Закрыть"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <div class="relative mb-2">
+        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>
+        <input name="q" placeholder="Поиск людей…" autocomplete="off"
+               hx-get="{% url 'user_search' %}" hx-trigger="input changed delay:300ms" hx-target="#user-search"
+               class="w-full h-10 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-10 pr-4 text-sm outline-none focus:border-2 focus:border-accent transition">
+      </div>
+      <div id="user-search" class="flex-1 min-h-0 overflow-y-auto">
+        {% include "chats/_user_search.html" %}
+      </div>
+
+      <div class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3"
+           x-data="{ groupOpen: {% if group_form.errors %}true{% else %}false{% endif %} }">
+        <button type="button" @click="groupOpen = !groupOpen" class="btn btn-secondary w-full"><i class="fa-solid fa-users"></i>Создать группу</button>
+        <form method="post" action="{% url 'chat_create_group' %}" x-show="groupOpen" x-cloak class="space-y-4 mt-4">
+          {% csrf_token %}
+          {% include "core/inputs.html" with field=group_form.title %}
+          {% include "core/inputs.html" with field=group_form.members up=True %}
+          <button type="submit" class="btn btn-primary w-full">Создать</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# ===== Модалка участников группы ===== #}
+  {% if chat and chat.kind != "dm" %}
+  <div x-show="members" x-cloak @keydown.escape.window="members = false"
+       class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/40" @click="members = false"></div>
+    <div class="relative w-full max-w-sm max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold">Участники <span class="text-slate-400 font-normal">{{ chat.memberships.all|length }}</span></h2>
+        <button type="button" @click="members = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Закрыть"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      {% if chat.kind == "group" and membership.is_admin %}
+      <form method="post" action="{% url 'chat_rename' chat.pk %}" class="flex items-center gap-2 mb-3">
+        {% csrf_token %}
+        <input name="title" value="{{ chat.title }}" maxlength="100" required aria-label="Название группы"
+               class="flex-1 min-w-0 h-10 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition">
+        <button type="submit" class="btn btn-secondary shrink-0 !px-3" aria-label="Переименовать"><i class="fa-solid fa-check"></i></button>
+      </form>
+      {% endif %}
+
+      {% if add_form %}
+      <form method="post" action="{% url 'chat_add_members' chat.pk %}" class="flex items-start gap-2 mb-3">
+        {% csrf_token %}
+        <div class="flex-1 min-w-0">{% include "core/inputs.html" with field=add_form.members %}</div>
+        <button type="submit" class="btn btn-secondary shrink-0 !px-3 h-12" aria-label="Добавить"><i class="fa-solid fa-plus"></i></button>
+      </form>
+      {% endif %}
+
+      <div class="flex-1 min-h-0 overflow-y-auto -mx-2">
+        {% for ms in chat.memberships.all %}
+        <div class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+          <a href="{% url 'profile' ms.user_id %}" class="flex items-center gap-3 min-w-0 flex-1">
+            <span class="w-10 h-10 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700">
+              {% if ms.user.photo %}
+                <img src="{{ ms.user.photo.url }}" alt="" class="w-full h-full object-cover">
+              {% else %}
+                <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ ms.user.surname|slice:":1" }}{{ ms.user.name|slice:":1" }}</span>
+              {% endif %}
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-sm font-medium truncate">{{ ms.user.name }} {{ ms.user.surname }}{% if ms.user_id == user.pk %} <span class="text-xs font-normal text-slate-400">(вы)</span>{% endif %}</span>
+              {% if ms.user.team %}<span class="block text-xs text-slate-400">{{ ms.user.team.get_grade_str }}</span>{% endif %}
+            </span>
+          </a>
+          {% if ms.is_admin %}<span class="text-xs text-accent shrink-0">админ</span>{% endif %}
+          {% if chat.kind == "team" and ms.user.team_id != chat.team_id %}<span class="text-xs text-accent shrink-0">куратор</span>{% endif %}
+          {% if chat.kind == "group" and membership.is_admin and ms.user_id != user.pk %}
+          <form method="post" action="{% url 'chat_remove_member' chat.pk ms.user_id %}" onsubmit="return confirm('Исключить {{ ms.user.name }} {{ ms.user.surname }}?')">
+            {% csrf_token %}
+            <button type="submit" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-500" aria-label="Исключить"><i class="fa-solid fa-xmark"></i></button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+
+      {% if chat.kind == "group" %}
+      <div class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 flex gap-2">
+        <form method="post" action="{% url 'chat_leave' chat.pk %}" class="flex-1" onsubmit="return confirm('Покинуть группу?')">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost w-full text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Покинуть</button>
+        </form>
+        {% if membership.is_admin %}
+        <form method="post" action="{% url 'chat_delete' chat.pk %}" class="flex-1" onsubmit="return confirm('Удалить группу со всей перепиской?')">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger w-full"><i class="fa-solid fa-trash"></i>Удалить</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if chat.kind == "team" %}
+      <div class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 space-y-2">
+        <p class="text-xs text-slate-400">Состав синхронизируется с учебной группой — покинуть этот чат или изменить его нельзя. Кураторы добавляются формой выше.</p>
+        {% if user.team_id != chat.team_id %}
+        <form method="post" action="{% url 'chat_leave' chat.pk %}" onsubmit="return confirm('Покинуть чат группы?')">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost w-full text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Покинуть (куратор)</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

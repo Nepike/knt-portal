@@ -29,7 +29,7 @@
 </head>
 
 <body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}' class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
-  <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200"
+  <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
 
          <a href="#" class="flex items-center gap-2.5 px-2 pb-4">
@@ -41,8 +41,10 @@
         </a>
 
         <nav class="flex flex-col gap-1">
-          {# TODO: бейдж непрочитанных на «Сообщениях» — счётчик из context processor, когда будет чат #}
-          <a href="#" class="nav-link"><i class="fa-solid fa-comment"></i>Сообщения</a>
+          <a href="{% url 'chat_list' %}" class="nav-link {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
+            <i class="fa-solid fa-comment"></i>Сообщения
+            {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
+          </a>
           <a href="#" class="nav-link"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
@@ -76,8 +78,8 @@
           </button>
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
-            {# TODO: реальные URL профиля/инвентаря/настроек #}
-            <a href="#" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user"></i>Профиль</a>
+            {# TODO: реальные URL инвентаря/настроек #}
+            <a href="{% url 'profile' request.user.pk %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user"></i>Профиль</a>
             {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
             <form method="post" action="{% url 'logout' %}">
@@ -92,7 +94,8 @@
   </aside>
   <div x-show="sidebar" x-cloak @click="sidebar = false" class="fixed inset-0 z-35 bg-black/40 lg:hidden"></div>
 
-  <div class="lg:pl-64 flex flex-col min-h-screen">
+  {# h-dvh вместо min-h-screen (чат) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
+  <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-screen{% endblock %}">
     <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
@@ -106,7 +109,7 @@
       </div>
     </header>
 
-    <main class="flex-1 flex flex-col w-full max-w-5xl mx-auto px-4 sm:px-6 py-6">
+    <main class="flex-1 flex flex-col w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 {% block main_class %}{% endblock %}">
       {% block content %}{% endblock %}
     </main>
 

@@ -20,6 +20,7 @@ THIRD_PARTY_APPS = []
 LOCAL_APPS = [
     "core",
     "users",
+    "chats",
     "teachers",
     "materials",
     "library",
@@ -29,6 +30,7 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "core.middleware.HtmxRedirectMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -55,6 +57,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.site_theme",
+                "chats.context_processors.unread_messages",
             ],
         },
     },

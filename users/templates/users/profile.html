@@ -1,0 +1,35 @@
+{% extends "core/base.html" %}
+
+{% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-md mx-auto">
+  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 text-center">
+    {# TODO (M5 profiles): рамка-косметика, фон, уровень, значки, инвентарь #}
+    <span class="w-32 h-32 rounded-[22%] p-1 bg-brand-gradient inline-flex">
+      {% if person.photo %}
+        <img src="{{ person.photo.url }}" alt="" class="w-full h-full rounded-[20%] object-cover">
+      {% else %}
+        <span class="flex-1 rounded-[20%] bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-3xl font-medium">{{ person.name|slice:":1" }}{{ person.surname|slice:":1" }}</span>
+      {% endif %}
+    </span>
+
+    <h1 class="text-xl font-bold mt-4">{{ person.name }} {{ person.surname }} {{ person.patronymic }}</h1>
+    {% if person.team %}
+    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ person.team.get_grade_str }} · {{ person.team.number }}</p>
+    {% endif %}
+
+    {% if person.vk_page or person.tg_page or person.email %}
+    <div class="flex flex-wrap justify-center gap-x-5 gap-y-2 mt-4 text-sm">
+      {% if person.email %}<a href="mailto:{{ person.email }}" class="hover:text-accent transition-colors"><i class="fa-solid fa-envelope text-slate-400 mr-1.5"></i>{{ person.email }}</a>{% endif %}
+      {% if person.vk_page %}<a href="https://vk.com/{{ person.vk_page }}" target="_blank" class="hover:text-accent transition-colors"><i class="fa-brands fa-vk text-slate-400 mr-1.5"></i>{{ person.vk_page }}</a>{% endif %}
+      {% if person.tg_page %}<a href="https://t.me/{{ person.tg_page }}" target="_blank" class="hover:text-accent transition-colors"><i class="fa-brands fa-telegram text-slate-400 mr-1.5"></i>{{ person.tg_page }}</a>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if person.pk != user.pk %}
+    <a href="{% url 'dm_start' person.pk %}" class="btn btn-primary mt-6"><i class="fa-solid fa-paper-plane"></i>Написать сообщение</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

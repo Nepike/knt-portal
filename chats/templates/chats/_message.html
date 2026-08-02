@@ -1,0 +1,96 @@
+{# Единый пузырь: первая отрисовка, отправка, поллинг (в Фазе C — WS). data-id — курсор ленты #}
+{# oob=True — пузырь пришёл как обновление существующего: htmx заменит элемент с тем же id на месте #}
+{% load chat_extras %}
+{% if not m.author %}
+{# Системное: «X добавил Y», «X покинул группу» #}
+<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="text-center text-xs text-slate-400 py-1">{{ m.text }}</div>
+{% else %}
+{% with own=m|is_own:user %}
+<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="group flex gap-2 {% if own %}flex-row-reverse{% endif %}">
+
+  {% if not own %}
+  <a href="{% url 'profile' m.author_id %}" class="w-8 h-8 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700 self-end">
+    {% if m.author.photo %}
+      <img src="{{ m.author.photo.url }}" alt="" class="w-full h-full object-cover">
+    {% else %}
+      <span class="flex-1 flex items-center justify-center text-[11px] font-medium">{{ m.author.surname|slice:":1" }}{{ m.author.name|slice:":1" }}</span>
+    {% endif %}
+  </a>
+  {% endif %}
+
+  <div class="max-w-[75%] rounded-2xl px-3 py-1.5 {% if own %}bg-accent text-white dark:text-slate-950{% else %}bg-slate-100 dark:bg-slate-800{% endif %}">
+    {% if not own and chat.kind != "dm" %}
+    <a href="{% url 'profile' m.author_id %}" class="text-xs font-semibold text-accent hover:underline">{{ m.author.name }} {{ m.author.surname }}</a>
+    {% endif %}
+
+    {% if m.reply_to %}
+    <div @click="document.getElementById('msg-{{ m.reply_to_id }}')?.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+         class="border-l-2 pl-2 my-0.5 text-xs opacity-80 cursor-pointer {% if own %}border-white/50 dark:border-slate-950/40{% else %}border-accent{% endif %}">
+      <span class="font-medium">{{ m.reply_to.author.name|default:"—" }}</span>
+      {# цитата не должна переживать удаление оригинала #}
+      <span class="block truncate">{% if m.reply_to.deleted %}<i class="opacity-70">сообщение удалено</i>{% else %}{{ m.reply_to.text|truncatechars:60 }}{% endif %}</span>
+    </div>
+    {% endif %}
+
+    {% if m.deleted %}
+    <p class="text-sm italic opacity-60">сообщение удалено</p>
+    {% else %}
+    {% with summary=m|reaction_summary:user %}
+    {% if summary %}
+    {# С реакциями время живёт в их строке — отступ всегда одинаковый #}
+    <p class="text-sm leading-snug whitespace-pre-line break-words">{{ m.text }}</p>
+    <div class="flex flex-wrap items-center gap-1 mt-1">
+      {% for emoji, count, mine in summary %}
+      <button type="button" hx-post="{% url 'message_react' m.pk %}" hx-vals='{"emoji": "{{ emoji }}"}'
+              hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
+              class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors {% if own %}{% if mine %}bg-white text-accent dark:bg-slate-950{% else %}bg-white/25 dark:bg-slate-950/25{% endif %}{% else %}{% if mine %}bg-accent/20 text-accent{% else %}bg-white dark:bg-slate-900{% endif %}{% endif %}">
+        {{ emoji }} {{ count }}
+      </button>
+      {% endfor %}
+      <span class="ml-auto pl-2 text-[10px] leading-none whitespace-nowrap select-none {% if own %}opacity-70{% else %}text-slate-400{% endif %}">{{ m.created|date:"H:i" }}{% if m.edited %} · изм.{% endif %}</span>
+    </div>
+    {% else %}
+    {# Время «в телеграм-стиле»: float в конце последней строки; clearfix, чтобы пузырь его вмещал #}
+    <p class="text-sm leading-snug whitespace-pre-line break-words after:content-[''] after:block after:clear-both">{{ m.text }}<span class="float-right ml-2 mt-[7px] text-[10px] leading-none whitespace-nowrap select-none {% if own %}opacity-70{% else %}text-slate-400{% endif %}">{{ m.created|date:"H:i" }}{% if m.edited %} · изм.{% endif %}</span></p>
+    {% endif %}
+    {% endwith %}
+    {% endif %}
+  </div>
+
+  {% if not m.deleted %}
+  <div class="self-center flex gap-0.5 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100 transition-opacity">
+    <button type="button" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-accent" aria-label="Ответить"
+            @click="reply({ id: {{ m.id }}, author: '{{ m.author.name|escapejs }} {{ m.author.surname|escapejs }}', text: '{{ m.text|truncatechars:60|escapejs }}' })">
+      <i class="fa-solid fa-reply text-sm"></i>
+    </button>
+
+    <div class="relative" x-data="reactionMenu()">
+      <button type="button" @click="toggle()" @click.outside="open = false" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-accent" aria-label="Реакция">
+        <i class="fa-solid fa-face-smile text-sm"></i>
+      </button>
+      <div x-show="open" x-cloak x-transition
+           :class="up ? 'bottom-full mb-1' : 'top-full mt-1'"
+           class="absolute {% if own %}right-0{% else %}left-0{% endif %} z-20 flex gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg px-2.5 py-1.5">
+        {% reaction_palette as palette %}
+        {% for emoji in palette %}
+        <button type="button" hx-post="{% url 'message_react' m.pk %}" hx-vals='{"emoji": "{{ emoji }}"}'
+                hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
+                class="text-lg leading-none hover:scale-125 transition-transform">{{ emoji }}</button>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if own %}
+    <button type="button" hx-get="{% url 'message_edit' m.pk %}" hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
+            class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-accent" aria-label="Изменить"><i class="fa-solid fa-pen text-sm"></i></button>
+    {% endif %}
+    {% if own or is_chat_admin %}
+    <button type="button" hx-post="{% url 'message_delete' m.pk %}" hx-confirm="Удалить сообщение?"
+            hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
+            class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-500" aria-label="Удалить"><i class="fa-solid fa-trash text-sm"></i></button>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endwith %}
+{% endif %}

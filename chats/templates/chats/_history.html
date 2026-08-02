@@ -1,0 +1,8 @@
+{# Порция истории. Маячок сверху: попал в зону видимости — подтянул предыдущие 30 #}
+{% if has_more and chat_messages %}
+<div id="history-top" hx-get="{% url 'messages_older' chat.pk %}?before={{ chat_messages.0.pk }}"
+     hx-trigger="intersect once" hx-swap="outerHTML" class="py-3 text-center text-slate-400">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</div>
+{% endif %}
+{% for m in chat_messages %}{% include "chats/_message.html" %}{% endfor %}

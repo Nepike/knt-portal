@@ -11,9 +11,16 @@ from django.contrib.auth.views import (
 )
 from django.core.cache import cache
 from django.http import HttpResponseRedirect
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import RegisterUserForm
+from .models import User
+
+
+def profile(request, pk):
+    # TODO (M5 profiles): косметика, уровень, значки, инвентарь
+    person = get_object_or_404(User.objects.select_related("team"), pk=pk, is_active=True)
+    return render(request, "users/profile.html", {"person": person})
 
 
 def _clear_must_change_password(user):

@@ -1,0 +1,2 @@
+{% for m in chat_messages %}{% include "chats/_message.html" %}{% endfor %}
+{% for m in updated_messages %}{% include "chats/_message.html" with oob=True %}{% endfor %}
