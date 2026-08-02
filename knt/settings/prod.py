@@ -18,6 +18,15 @@ EMAIL_USE_SSL = True
 EMAIL_HOST_USER = "info@knt-mipt.ru"
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 
+# Без этого при DEBUG=False Django пишет ошибки только на почту ADMINS — в логи контейнера ничего.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"simple": {"format": "{asctime} {levelname} {name} {message}", "style": "{"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "simple"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
+}
+
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True

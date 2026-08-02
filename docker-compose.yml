@@ -1,6 +1,13 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:17
+    logging: *logging
     environment:
       POSTGRES_DB: knt
       POSTGRES_USER: knt
@@ -15,6 +22,7 @@ services:
     restart: unless-stopped
 
   web:
+    logging: *logging
     build:
       context: .
       args:
@@ -27,6 +35,19 @@ services:
       - "127.0.0.1:8001:8000"   # хост-порт 8001 (рядом с основным сайтом), nginx проксирует
     volumes:
       - ./media:/app/media       # bind-mount: nginx отдаёт /media с хоста
+    restart: unless-stopped
+
+  bot:
+    logging: *logging
+    build:
+      context: .
+      args:
+        PROXY: ${PROXY:-}
+    entrypoint: ["python", "manage.py", "bot"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

@@ -92,3 +92,6 @@ LOGIN_REDIRECT_URL = "/demo/"  # TODO: сменить на главную, ко�
 LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"
+
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
+PROXY = env("PROXY", default="")  # общий прокси для заблокированных ресурсов

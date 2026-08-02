@@ -1,5 +1,7 @@
 anyio==4.13.0
 asgiref==3.11.1
+certifi==2026.7.22
+charset-normalizer==3.4.9
 click==8.4.1
 colorama==0.4.6
 Django==6.0.6
@@ -12,7 +14,9 @@ pillow==12.2.0
 psycopg==3.3.4
 psycopg-binary==3.3.4
 PyYAML==6.0.3
+requests==2.34.2
 sqlparse==0.5.5
 typing_extensions==4.15.0
 tzdata==2026.2
+urllib3==2.7.0
 whitenoise==6.12.0

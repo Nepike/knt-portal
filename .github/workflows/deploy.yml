@@ -2,22 +2,54 @@ name: deploy
 
 on:
   push:
-    branches: [main]        # поправь, если дефолтная ветка master
-  workflow_dispatch:         # позволяет запустить деплой вручную из вкладки Actions
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  TG_TOKEN: ${{ secrets.TG_TOKEN }}
+  TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+  TG_TOPIC_ID: ${{ secrets.TG_TOPIC_ID }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Telegram — старт
+        env:
+          ACTOR: ${{ github.actor }}
+          COMMIT: ${{ github.event.head_commit.message }}
+        run: |
+          TEXT=$(printf '🚀 Деплой запущен\nАвтор: %s\nКоммит: %s' "$ACTOR" "${COMMIT:-—}")
+          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            --data-urlencode "text=$TEXT"
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          script_stop: true   # упасть на первой же ошибке, а не молча продолжить
+          script_stop: true
           script: |
             cd /srv/test-knt
             git pull --ff-only
             docker compose up -d --build
             docker image prune -f
+
+      - name: Telegram — успех
+        if: success()
+        run: |
+          TEXT=$(printf '✅ Деплой прошёл\nhttps://test.inbicst.ru')
+          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            --data-urlencode "text=$TEXT"
+
+      - name: Telegram — падение
+        if: failure()
+        run: |
+          TEXT=$(printf '❌ Деплой упал\nЛоги: %s' "$RUN_URL")
+          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            --data-urlencode "text=$TEXT"
