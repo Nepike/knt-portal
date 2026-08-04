@@ -24,6 +24,5 @@ COPY --from=debian /app/core/static/core/css/base.css core/static/core/css/base.
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-# ASGI вместо WSGI: WebSocket приходит в то же приложение. gunicorn остаётся
-# менеджером процессов, но воркеры теперь uvicorn'овские — они умеют держать сокеты.
+# ASGI: gunicorn остаётся менеджером процессов, но воркеры uvicorn'овские — держат сокеты.
 CMD ["gunicorn", "knt.asgi:application", "-k", "uvicorn_worker.UvicornWorker", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]

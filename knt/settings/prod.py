@@ -32,7 +32,7 @@ LOGGING = {
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": ["redis://redis:6379/0"]},  # имя сервиса из docker-compose
+        "CONFIG": {"hosts": REDIS_HOSTS},  # noqa: F405
     }
 }
 

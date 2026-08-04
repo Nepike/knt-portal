@@ -1,5 +1,5 @@
-{# Единый пузырь: первая отрисовка, отправка, поллинг (в Фазе C — WS). data-id — курсор ленты #}
-{# oob=True — пузырь пришёл как обновление существующего: htmx заменит элемент с тем же id на месте #}
+{# Единый пузырь: первая отрисовка, отправка, догрузка. data-id — курсор ленты #}
+{# oob=True — обновление уже показанного: htmx заменит элемент с тем же id на месте #}
 {% load chat_extras %}
 {% if not m.author %}
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="text-center text-xs text-slate-400 py-1">{{ m.text }}</div>
@@ -17,8 +17,7 @@
   </a>
   {% endif %}
 
-  {% comment %}data-* здесь, а не на корне строки: меню зовёт сам пузырь, а не пустое место рядом.
-  Набор атрибутов — он же набор прав: нет data-edit-url — нет пункта «Изменить»{% endcomment %}
+  {# Набор атрибутов = набор прав: нет data-edit-url — нет пункта «Изменить» #}
   <div class="max-w-[75%] rounded-2xl px-3 py-1.5 {% if own %}bg-accent text-white dark:text-slate-950{% else %}bg-slate-100 dark:bg-slate-800{% endif %}"
        {% if not m.deleted %}data-msg="{{ m.id }}" data-author="{{ m.author.name }} {{ m.author.surname }}"
        data-preview="{{ m.text|truncatechars:60 }}" data-react-url="{% url 'message_react' m.pk %}"

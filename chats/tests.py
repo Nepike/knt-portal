@@ -715,6 +715,16 @@ class PublishTests(TestCase):
         self.assertFalse(Chat.objects.filter(pk=chat.pk).exists())
 
 
+class ChannelLayerConfigTests(TestCase):
+    def test_socket_timeout_outlives_the_blocking_read(self):
+        """Совпадение этих двух чисел рвёт живые сокеты раз в 5 секунд тишины:
+        redis-py считает чтение зависшим ровно тогда, когда channels_redis его ещё ждёт."""
+        from channels_redis.core import RedisChannelLayer
+
+        socket_timeout = settings.REDIS_HOSTS[0]["socket_timeout"]
+        self.assertGreater(socket_timeout, RedisChannelLayer.brpop_timeout)
+
+
 class ConsumerTests(TransactionTestCase):
     """Сокет чата. TransactionTestCase, а не TestCase: консьюмер ходит в БД из другого
     потока и данных незакоммиченной транзакции теста просто не увидел бы."""

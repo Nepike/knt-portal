@@ -42,7 +42,7 @@ def _chat_items(user):
 
 def _membership(request, pk):
     """Он же проверка доступа: не участник — 404. Намеренно один запрос:
-    зовётся из каждого опроса, состав чата ему не нужен."""
+    фрагментам и действиям состав чата не нужен."""
     return get_object_or_404(Membership.objects.select_related("chat"), chat_id=pk, user=request.user)
 
 
@@ -141,9 +141,8 @@ def messages_new(request, pk):
     after = _int(request.GET.get("after"))
     qs = membership.chat.messages.select_related(*MESSAGE_RELATIONS).prefetch_related("reactions")
     messages = list(qs.filter(id__gt=after))
-    # правки/удаления/реакции последних секунд; повторная oob-замена безвредна, поэтому окно с запасом
-    # TODO: новые сообщения после обрыва догоняются курсором, а правка старше окна — нет.
-    # Лечится вторым курсором (по updated) вместо временного окна.
+    # правки/удаления/реакции последних секунд; повторная oob-замена безвредна, окно берём с запасом
+    # TODO: правку старше окна пропустившая вкладка не увидит — нужен второй курсор, по updated
     updated = list(qs.filter(id__lte=after, updated__gte=timezone.now() - timedelta(seconds=12))) if after else []
     _mark_read(membership, messages)
     return render(request, "chats/_messages.html", {
@@ -177,8 +176,8 @@ def message_send(request, pk):
     message = Message.objects.create(chat=membership.chat, author=request.user, text=text, reply_to=reply_to)
     Chat.objects.filter(pk=membership.chat_id).update(last_message=message)
 
-    # Вместе со своим отдаём всё, что пришло после последнего опроса: курсор ленты
-    # сдвинется на наш id, и чужое сообщение с меньшим id не пришло бы уже никогда.
+    # Курсор ленты сдвинется на наш id, поэтому чужое сообщение с меньшим id
+    # отдаём прямо сейчас — иначе оно не придёт уже никогда.
     after = _int(request.POST.get("after"))
     fresh = (
         list(membership.chat.messages.select_related(*MESSAGE_RELATIONS).prefetch_related("reactions").filter(id__gt=after))

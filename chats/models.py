@@ -8,8 +8,7 @@ from django.utils import timezone
 
 from core.models import Team
 
-# Единственный источник правды: и палитра в UI (тег reaction_palette),
-# и проверка входящего эмодзи на сервере (message_react).
+# Один список на палитру в UI (reaction_palette) и на проверку входящего эмодзи (message_react).
 REACTIONS = ["👍", "❤️", "🔥", "😂", "😮", "😢",]
 
 
@@ -36,9 +35,8 @@ class Chat(models.Model):
     kind = models.CharField("тип", max_length=10, choices=KIND_CHOICES, default="dm")
     title = models.CharField("название", max_length=100, blank=True)
 
-    # Чат курса адресуется парой «год поступления + ступень», а не номером курса:
-    # номер растёт каждый сентябрь, год — нет. Ступень нужна, потому что бакалавры
-    # и магистры одного года набора — разные люди.
+    # Курс адресуем парой «год поступления + ступень»: номер курса растёт каждый сентябрь,
+    # год — нет; ступень нужна, потому что бакалавры и магистры одного набора — разные люди.
     admission_year = models.PositiveSmallIntegerField("год поступления", null=True, blank=True)
     stage = models.CharField("ступень обучения", max_length=20, choices=Team.STAGE_CHOICES, blank=True)
 
@@ -163,15 +161,14 @@ class Message(models.Model):
     created = models.DateTimeField("создано", default=timezone.now)
     edited = models.DateTimeField("изменено", null=True, blank=True)
     deleted = models.BooleanField("удалено", default=False)
-    # Пусто, пока контент не менялся. Правка/удаление/реакция ставят метку,
-    # и поллинг разошлёт пузырь oob-заменой (см. messages_new).
+    # Пусто, пока контент не трогали: по метке messages_new отдаёт пузырь oob-заменой.
     updated = models.DateTimeField("изменение контента", null=True, blank=True)
 
     class Meta:
         verbose_name = "сообщение"
         verbose_name_plural = "сообщения"
         # id, а не created: у одновременных сообщений таймстемпы совпадают и порядок плывёт.
-        # Он же курсор — для поллинга, для догрузки истории и для переподключения WS.
+        # Он же курсор — и для догрузки, и для переподключения сокета.
         ordering = ["id"]
         indexes = [models.Index(fields=["chat", "id"])]
 

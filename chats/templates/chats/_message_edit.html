@@ -1,4 +1,4 @@
-{# Пузырь на время редактирования; data-id сохраняем — это курсор поллинга #}
+{# Пузырь на время редактирования; data-id сохраняем — это курсор ленты #}
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" class="flex flex-row-reverse">
   <form hx-post="{% url 'message_edit' m.pk %}" hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
         class="w-full max-w-[75%] rounded-2xl border-2 border-accent/60 bg-white dark:bg-slate-900 p-3 space-y-2">

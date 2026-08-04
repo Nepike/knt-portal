@@ -16,8 +16,8 @@ from chats.routing import websocket_urlpatterns  # noqa: E402
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
-    # AllowedHostsOriginValidator — CSRF для сокетов: same-origin на WebSocket не
-    # распространяется, без него чужая страница открыла бы соединение с cookie пользователя.
+    # CSRF для сокетов: same-origin на WebSocket не распространяется, и без проверки
+    # Origin чужая страница открыла бы соединение с cookie пользователя.
     "websocket": AllowedHostsOriginValidator(
         AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
     ),

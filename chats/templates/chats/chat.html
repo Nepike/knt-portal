@@ -3,8 +3,7 @@
 
 {% block title %}{% if chat %}{% if other %}{{ other.name }} {{ other.surname }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
 
-{% comment %}Мессенджер занимает ровно экран: страница не скроллится, скроллится лента.
-На мобиле — во всю ширину без рамок и подвала: экран маленький, поля дороги{% endcomment %}
+{# Мессенджер ровно на экран: скроллится лента, не страница. На мобиле — без полей и подвала #}
 {% block wrapper_class %}h-dvh{% endblock %}
 {% block main_class %}min-h-0 sm:px-6 sm:py-6{% endblock %}
 {% block footer %}{% endblock %}
@@ -49,16 +48,14 @@
       {% endif %}
     </header>
 
-    {% comment %}Меню вызывается делегированно: пузыри постоянно приезжают и
-    перерисовываются htmx, вешать обработчики на каждый — лишняя работа{% endcomment %}
+    {# Делегированно: пузыри постоянно перерисовываются htmx, обработчик на каждом — лишний #}
     <div id="messages" x-ref="box" class="flex-1 overflow-y-auto p-4 flex flex-col gap-1.5"
          @click="openMenu($event)" @contextmenu="openMenu($event)">
       {% include "chats/_history.html" %}
     </div>
 
-    {% comment %}Забираем новое, когда сокет сказал, что оно есть. chats:current шлётся только
-    для открытого чата и только если вкладка на экране (иначе пометили бы прочитанным невиденное),
-    chats:sync — после обрыва связи: тот же запрос с курсором закрывает пропущенное.{% endcomment %}
+    {% comment %}chats:current — открытый чат и вкладка на экране (иначе пометили бы
+    прочитанным невиденное); chats:sync — догон после обрыва связи.{% endcomment %}
     <div hx-get="{% url 'messages_new' chat.pk %}" hx-swap="beforeend" hx-target="#messages"
          hx-trigger="chats:current from:body, chats:sync from:body"
          hx-vals='js:{after: window.lastMessageId()}'></div>
@@ -69,7 +66,7 @@
         <span class="min-w-0 flex-1 truncate">Ответ: <b x-text="replyTo?.author"></b> — <span x-text="replyTo?.text"></span></span>
         <button type="button" @click="replyTo = null" class="text-slate-400 hover:text-rose-500" aria-label="Отменить ответ"><i class="fa-solid fa-xmark"></i></button>
       </div>
-      {# after — тот же курсор, что у поллинга: ответ донесёт чужие сообщения, пришедшие с последнего опроса #}
+      {# after — курсор ленты: ответ донесёт и чужое, пришедшее пока набирали #}
       <form class="chat-send flex items-center gap-2 p-3"
             hx-post="{% url 'message_send' chat.pk %}" hx-target="#messages" hx-swap="beforeend"
             hx-vals='js:{after: window.lastMessageId()}'>
@@ -80,9 +77,8 @@
       </form>
     </div>
 
-    {% comment %}Меню сообщения — ОДНО на весь чат и ВНЕ ленты: внутри пузыря его сносило бы
-    перерисовкой (после реакции пузырь 12с приходит oob-заменой) и резало overflow'ом.
-    На узком экране это шторка снизу, на широком — попап у курсора{% endcomment %}
+    {% comment %}Меню ОДНО на весь чат и ВНЕ ленты: внутри пузыря его сносило бы
+    перерисовкой и резало overflow'ом. Узкий экран — шторка снизу, широкий — попап.{% endcomment %}
     <template x-if="menu">
       <div class="fixed inset-0 z-50" @click="menu = null" @contextmenu.prevent="menu = null"
            @keydown.escape.window="menu = null" @resize.window="menu = null">

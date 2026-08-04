@@ -5,10 +5,9 @@ window.lastMessageId = () => {
   return items.length ? items[items.length - 1].dataset.id : 0;
 };
 
-// Живая связь вместо опроса: сервер сам будит вкладку, когда в чате что-то произошло.
-// По сокету приходит ТОЛЬКО {"chat": id} — разметка у каждого получателя своя, поэтому
-// её клиент забирает обычным запросом (тем же, что раньше дёргал таймер).
-// Наружу отдаём события на <body>, чтобы htmx ловил их через hx-trigger="… from:body".
+// По сокету приходит ТОЛЬКО {"chat": id}: разметка у каждого получателя своя, поэтому
+// её клиент забирает обычным запросом. События вешаем на <body> — оттуда их берёт htmx
+// через hx-trigger="… from:body".
 window.chatSocket = (() => {
   if (!document.body.hasAttribute("data-live")) return { sync() {} }; // не залогинен — некуда
 
@@ -48,7 +47,7 @@ window.chatSocket = (() => {
     socket.onclose = () => {
       // 1, 2, 4… до 30с: если сервер лежит, не добиваем его переподключениями
       const wait = Math.min(1000 * 2 ** attempt++, 30000);
-      if (attempt > 2) startFallback(); // сокет не поднимается (прокси?) — возвращаемся к опросу
+      if (attempt > 2) startFallback(); // не поднимается (прокси?) — включаем запасной опрос
       setTimeout(connect, wait);
     };
   }
@@ -219,7 +218,7 @@ document.addEventListener("alpine:init", () => {
       const target = "#msg-" + id;
       htmx.ajax(verb, url, { source: document.querySelector(target), target, swap: "outerHTML", values });
     },
-    // Отправка и поллинг могут разойтись и принести одно сообщение дважды.
+    // Отправка и догрузка могут разойтись и принести одно сообщение дважды.
     dedupe() {
       const seen = new Set();
       this.$refs.box.querySelectorAll("[data-id]").forEach((el) => {

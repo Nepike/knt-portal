@@ -97,5 +97,10 @@ LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"
 
+# Шина событий чата (только prod, dev держит слой в памяти). socket_timeout ОБЯЗАТЕЛЕН:
+# в redis-py 8 у него впервые появилось значение по умолчанию — 5с, ровно столько же
+# channels_redis ждёт сообщение блокирующим чтением; таймеры гонятся и рвут сокет.
+REDIS_HOSTS = [{"address": "redis://redis:6379/0", "socket_timeout": 30}]  # redis — имя сервиса из compose
+
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
 PROXY = env("PROXY", default="")  # общий прокси для заблокированных ресурсов
