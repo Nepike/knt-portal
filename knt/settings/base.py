@@ -16,7 +16,7 @@ DJANGO_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
 ]
-THIRD_PARTY_APPS = []
+THIRD_PARTY_APPS = ["channels"]
 LOCAL_APPS = [
     "core",
     "users",
@@ -26,7 +26,8 @@ LOCAL_APPS = [
     "library",
     "attachments",
 ]
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+# daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
+INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

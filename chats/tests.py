@@ -1,6 +1,13 @@
-from django.contrib.auth.models import Permission
+from pathlib import Path
+from unittest import mock
+
+from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
+from channels.testing import WebsocketCommunicator
+from django.conf import settings
+from django.contrib.auth.models import AnonymousUser, Permission
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -8,6 +15,8 @@ from django.utils import timezone
 from core.models import Team
 from users.models import User
 
+from .consumers import ChatConsumer
+from .events import chat_group, user_group
 from .models import Chat, Membership, Message, unread_total
 
 
@@ -16,10 +25,10 @@ def make_user(email, name="Иван", surname="Иванов", **extra):
     return User.objects.create_user(email=email, name=name, surname=surname, password="pass12345", **extra)
 
 
-def make_team(number="Б01-001"):
+def make_team(number, stage="bachelor", year=2024):
     return Team.objects.create(
         number=number, profile="Прикладная математика", course_code="03.03.01",
-        stage="bachelor", year_of_admission=timezone.now().year,
+        stage=stage, year_of_admission=year,
     )
 
 
@@ -432,6 +441,25 @@ class GroupManagementTests(TestCase):
         self.client.post(reverse("chat_remove_member", args=[chat.pk, self.member.pk]))
         self.assertFalse(Membership.objects.filter(chat=chat, user=self.member).exists())
 
+    def test_admin_cannot_remove_another_admin(self):
+        chat = self.create_group()
+        Membership.objects.filter(chat=chat, user=self.member).update(is_admin=True)
+        self.client.force_login(self.admin)
+        self.assertEqual(
+            self.client.post(reverse("chat_remove_member", args=[chat.pk, self.member.pk])).status_code, 403
+        )
+        self.assertTrue(Membership.objects.filter(chat=chat, user=self.member).exists())
+
+    def test_leaving_admin_hands_over(self):
+        """Иначе группа осталась бы без управления навсегда."""
+        chat = self.create_group()
+        Membership.objects.create(chat=chat, user=self.outsider)
+        self.client.force_login(self.admin)
+        self.client.post(reverse("chat_leave", args=[chat.pk]))
+        self.assertTrue(Membership.objects.get(chat=chat, user=self.member).is_admin)
+        self.assertFalse(Membership.objects.get(chat=chat, user=self.outsider).is_admin)
+        self.assertIn("администратор", chat.messages.latest("id").text)
+
     def test_last_member_leaving_removes_group(self):
         chat = self.create_group()
         self.client.force_login(self.member)
@@ -455,72 +483,288 @@ class GroupManagementTests(TestCase):
         self.assertEqual(self.client.post(reverse("chat_leave", args=[chat.pk])).status_code, 403)
 
 
-class TeamChatTests(TestCase):
-    """Чат учебной группы ведёт сигнал: состав едет за полем team пользователя."""
+class CourseChatTests(TestCase):
+    """Чат курса ведёт сигнал: одна лента на весь поток, состав едет за полем team."""
 
     @classmethod
     def setUpTestData(cls):
-        cls.first = make_team("Б01-001")
-        cls.second = make_team("Б01-002")
+        cls.a24 = make_team("Б01-001", year=2024)
+        cls.b24 = make_team("Б01-002", year=2024)  # тот же курс, другая группа
+        cls.a25 = make_team("Б01-003", year=2025)
+        cls.m24 = make_team("М01-001", stage="master", year=2024)
 
-    def test_chat_appears_with_first_student(self):
-        student = make_user("s@t.local", team=self.first)
-        chat = Chat.objects.get(kind="team", team=self.first)
-        self.assertEqual(chat.title, "Б01-001")
+    def curator(self, email="c@t.local"):
+        user = make_user(email, "Кира", "Курова")
+        user.user_permissions.add(Permission.objects.get(codename="curate_course_chats"))
+        return user
+
+    def test_whole_course_lands_in_one_chat(self):
+        first = make_user("s1@t.local", team=self.a24)
+        second = make_user("s2@t.local", team=self.b24)
+        chat = Chat.objects.get(kind="course")
+        self.assertEqual(chat.title, "Бакалавриат 2024")
+        self.assertEqual(chat.memberships.count(), 2)
+        self.assertTrue(Membership.objects.filter(chat=chat, user=first).exists())
+        self.assertTrue(Membership.objects.filter(chat=chat, user=second).exists())
+
+    def test_year_and_stage_split_courses(self):
+        make_user("s1@t.local", team=self.a24)
+        make_user("s2@t.local", team=self.a25)
+        make_user("s3@t.local", team=self.m24)  # магистры 2024 — не бакалавры 2024
+        self.assertEqual(Chat.objects.filter(kind="course").count(), 3)
+        self.assertTrue(Chat.objects.filter(title="Магистратура 2024").exists())
+
+    def test_transfer_inside_the_course_keeps_chat(self):
+        student = make_user("s@t.local", team=self.a24)
+        chat = Chat.objects.get(kind="course")
+        student.team = self.b24
+        student.save()
+        self.assertEqual(Chat.objects.filter(kind="course").count(), 1)
         self.assertTrue(Membership.objects.filter(chat=chat, user=student).exists())
 
-    def test_transfer_moves_membership(self):
-        student = make_user("s@t.local", team=self.first)
-        student.team = self.second
+    def test_transfer_to_another_course_moves_membership(self):
+        student = make_user("s@t.local", team=self.a24)
+        student.team = self.a25
         student.save()
-        self.assertFalse(Membership.objects.filter(user=student, chat__team=self.first).exists())
-        self.assertTrue(Membership.objects.filter(user=student, chat__team=self.second).exists())
+        self.assertFalse(Membership.objects.filter(user=student, chat__admission_year=2024).exists())
+        self.assertTrue(Membership.objects.filter(user=student, chat__admission_year=2025).exists())
 
     def test_unrelated_save_keeps_membership(self):
-        student = make_user("s@t.local", team=self.first)
+        student = make_user("s@t.local", team=self.a24)
         student.phone = "+70000000000"
         student.save(update_fields=["phone"])
-        self.assertTrue(Membership.objects.filter(user=student, chat__team=self.first).exists())
+        self.assertTrue(Membership.objects.filter(user=student, chat__kind="course").exists())
 
-    def test_own_team_chat_cannot_be_left_or_deleted(self):
-        student = make_user("s@t.local", team=self.first)
-        chat = Chat.objects.get(team=self.first)
+    def test_own_course_chat_cannot_be_left_or_deleted(self):
+        student = make_user("s@t.local", team=self.a24)
+        chat = Chat.objects.get(kind="course")
         self.client.force_login(student)
         self.assertEqual(self.client.post(reverse("chat_leave", args=[chat.pk])).status_code, 403)
         self.assertEqual(self.client.post(reverse("chat_delete", args=[chat.pk])).status_code, 403)
 
-    def test_member_invites_curator_and_curator_may_leave(self):
-        student = make_user("s@t.local", team=self.first)
-        curator = make_user("c@t.local", "Кира", "Курова")
-        curator.user_permissions.add(Permission.objects.get(codename="curate_team_chats"))
-        chat = Chat.objects.get(team=self.first)
+    def test_curator_is_invited_by_any_member_and_moderates(self):
+        student = make_user("s@t.local", team=self.a24)
+        curator = self.curator()
+        chat = Chat.objects.get(kind="course")
 
+        self.client.force_login(student)  # обычный участник, не админ
+        self.client.post(reverse("chat_add_members", args=[chat.pk]), {"members": [curator.pk]})
+        self.assertTrue(Membership.objects.get(chat=chat, user=curator).is_admin)
+
+        message = Message.objects.create(chat=chat, author=student, text="нарушение")
+        self.client.force_login(curator)
+        self.assertEqual(self.client.post(reverse("message_delete", args=[message.pk])).status_code, 200)
+
+    def test_curator_may_leave_a_foreign_course(self):
+        student = make_user("s@t.local", team=self.a24)
+        curator = self.curator()
+        chat = Chat.objects.get(kind="course")
         self.client.force_login(student)
         self.client.post(reverse("chat_add_members", args=[chat.pk]), {"members": [curator.pk]})
-        self.assertTrue(Membership.objects.filter(chat=chat, user=curator).exists())
 
         self.client.force_login(curator)
         self.client.post(reverse("chat_leave", args=[chat.pk]))
         self.assertFalse(Membership.objects.filter(chat=chat, user=curator).exists())
 
-    def test_plain_user_cannot_be_invited_to_team_chat(self):
-        student = make_user("s@t.local", team=self.first)
+    def test_plain_user_cannot_be_invited(self):
+        student = make_user("s@t.local", team=self.a24)
         other = make_user("o@t.local")
-        chat = Chat.objects.get(team=self.first)
+        chat = Chat.objects.get(kind="course")
         self.client.force_login(student)
         self.client.post(reverse("chat_add_members", args=[chat.pk]), {"members": [other.pk]})
         self.assertFalse(Membership.objects.filter(chat=chat, user=other).exists())
 
     def test_curator_keeps_membership_after_profile_save(self):
-        make_user("s@t.local", team=self.first)
-        curator = make_user("c@t.local")
-        curator.user_permissions.add(Permission.objects.get(codename="curate_team_chats"))
-        chat = Chat.objects.get(team=self.first)
-        Membership.objects.create(chat=chat, user=curator)
+        make_user("s@t.local", team=self.a24)
+        curator = self.curator()
+        chat = Chat.objects.get(kind="course")
+        Membership.objects.create(chat=chat, user=curator, is_admin=True)
 
         curator = User.objects.get(pk=curator.pk)  # has_perm кэшируется на инстансе
         curator.save()
         self.assertTrue(Membership.objects.filter(chat=chat, user=curator).exists())
+
+
+class MessageMenuTests(TestCase):
+    """Меню сообщения собирается из data-* пузыря: набор атрибутов = набор прав."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+        cls.mine = Message.objects.create(chat=cls.chat, author=cls.alice, text="моё")
+
+    def card(self, message):
+        return self.client.get(reverse("message_card", args=[message.pk]))
+
+    def test_own_message_offers_edit_and_delete(self):
+        self.client.force_login(self.alice)
+        response = self.card(self.mine)
+        self.assertContains(response, f'data-msg="{self.mine.pk}"')
+        self.assertContains(response, reverse("message_edit", args=[self.mine.pk]))
+        self.assertContains(response, reverse("message_delete", args=[self.mine.pk]))
+
+    def test_foreign_message_offers_neither(self):
+        self.client.force_login(self.bob)
+        response = self.card(self.mine)
+        self.assertContains(response, reverse("message_react", args=[self.mine.pk]))  # реакция доступна всем
+        self.assertNotContains(response, reverse("message_edit", args=[self.mine.pk]))
+        self.assertNotContains(response, reverse("message_delete", args=[self.mine.pk]))
+
+    def test_chat_admin_gets_delete_on_foreign_message(self):
+        chat = Chat.objects.create(kind="group", title="Группа")
+        Membership.objects.create(chat=chat, user=self.alice)
+        Membership.objects.create(chat=chat, user=self.bob, is_admin=True)
+        message = Message.objects.create(chat=chat, author=self.alice, text="нарушение")
+        self.client.force_login(self.bob)
+        response = self.card(message)
+        self.assertContains(response, reverse("message_delete", args=[message.pk]))
+        self.assertNotContains(response, reverse("message_edit", args=[message.pk]))
+
+    def test_deleted_message_has_no_menu(self):
+        self.mine.deleted = True
+        self.mine.save(update_fields=["deleted"])
+        self.client.force_login(self.alice)
+        self.assertNotContains(self.card(self.mine), "data-msg=")
+
+    def test_system_message_has_no_menu(self):
+        system = Message.objects.create(chat=self.chat, text="Кто-то покинул группу")
+        self.client.force_login(self.alice)
+        self.assertNotContains(self.card(system), "data-msg=")
+
+
+class PublishTests(TestCase):
+    """Кто и о чём сообщает в шину. Транспорт проверен в ConsumerTests, здесь — проводка:
+    забытый вызов означает, что у собеседника просто ничего не появится."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.carol = make_user("c@t.local")
+        cls.dm = Chat.get_or_create_dm(cls.alice, cls.bob)
+        cls.message = Message.objects.create(chat=cls.dm, author=cls.alice, text="привет")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def group(self):
+        chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.create(chat=chat, user=self.alice, is_admin=True)
+        Membership.objects.create(chat=chat, user=self.bob)
+        return chat
+
+    def test_send_notifies_chat(self):
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("message_send", args=[self.dm.pk]), {"text": "ещё"})
+        notify.assert_called_once_with(self.dm.pk)
+
+    def test_reaction_and_delete_notify_chat(self):
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("message_react", args=[self.message.pk]), {"emoji": "🔥"})
+            self.client.post(reverse("message_delete", args=[self.message.pk]))
+        self.assertEqual(notify.call_args_list, [mock.call(self.dm.pk), mock.call(self.dm.pk)])
+
+    def test_edit_notifies_chat(self):
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("message_edit", args=[self.message.pk]), {"text": "правка"})
+        notify.assert_called_once_with(self.dm.pk)
+
+    def test_edit_without_changes_stays_quiet(self):
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("message_edit", args=[self.message.pk]), {"text": self.message.text})
+        notify.assert_not_called()
+
+    def test_new_dm_notifies_the_other_side(self):
+        """Собеседник не подписан на группу чата, которого секунду назад не было."""
+        with mock.patch("chats.views.notify_joined") as notify:
+            self.client.get(reverse("dm_start", args=[self.carol.pk]))
+        chat = Chat.objects.get(kind="dm", dm_key=Chat.dm_key_for(self.alice, self.carol))
+        notify.assert_called_once_with(self.carol.pk, chat.pk)
+
+    def test_group_creation_notifies_members(self):
+        with mock.patch("chats.views.notify_joined") as notify:
+            self.client.post(reverse("chat_create_group"), {"title": "Проект", "members": [self.bob.pk]})
+        chat = Chat.objects.get(kind="group")
+        notify.assert_called_once_with(self.bob.pk, chat.pk)
+
+    def test_adding_member_notifies_him(self):
+        chat = self.group()
+        with mock.patch("chats.views.notify_joined") as notify:
+            self.client.post(reverse("chat_add_members", args=[chat.pk]), {"members": [self.carol.pk]})
+        notify.assert_called_once_with(self.carol.pk, chat.pk)
+
+    def test_removed_member_is_unsubscribed(self):
+        chat = self.group()
+        with mock.patch("chats.views.notify_left") as notify:
+            self.client.post(reverse("chat_remove_member", args=[chat.pk, self.bob.pk]))
+        notify.assert_called_once_with(self.bob.pk, chat.pk)
+
+    def test_leaving_unsubscribes_self(self):
+        chat = self.group()
+        with mock.patch("chats.views.notify_left") as notify:
+            self.client.post(reverse("chat_leave", args=[chat.pk]))
+        notify.assert_called_once_with(self.alice.pk, chat.pk)
+
+    def test_delete_notifies_before_the_chat_is_gone(self):
+        chat = self.group()
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("chat_delete", args=[chat.pk]))
+        notify.assert_called_once_with(chat.pk)
+        self.assertFalse(Chat.objects.filter(pk=chat.pk).exists())
+
+
+class ConsumerTests(TransactionTestCase):
+    """Сокет чата. TransactionTestCase, а не TestCase: консьюмер ходит в БД из другого
+    потока и данных незакоммиченной транзакции теста просто не увидел бы."""
+
+    def setUp(self):
+        self.alice = make_user("a@t.local")
+        self.bob = make_user("b@t.local")
+        self.stranger = make_user("s@t.local")
+        self.chat = Chat.get_or_create_dm(self.alice, self.bob)
+
+    async def open_socket(self, user):
+        socket = WebsocketCommunicator(ChatConsumer.as_asgi(), "/ws/chats/")
+        socket.scope["user"] = user  # обычно ставит AuthMiddlewareStack по cookie сессии
+        connected, _ = await socket.connect()
+        return socket, connected
+
+    async def test_anonymous_is_refused(self):
+        socket, connected = await self.open_socket(AnonymousUser())
+        self.assertFalse(connected)
+        await socket.disconnect()
+
+    async def test_member_gets_event_of_his_chat(self):
+        socket, connected = await self.open_socket(self.alice)
+        self.assertTrue(connected)
+        await get_channel_layer().group_send(chat_group(self.chat.pk), {"type": "chat.event", "chat": self.chat.pk})
+        self.assertEqual(await socket.receive_json_from(), {"chat": self.chat.pk})
+        await socket.disconnect()
+
+    async def test_stranger_gets_nothing(self):
+        socket, _ = await self.open_socket(self.stranger)
+        await get_channel_layer().group_send(chat_group(self.chat.pk), {"type": "chat.event", "chat": self.chat.pk})
+        self.assertTrue(await socket.receive_nothing())
+        await socket.disconnect()
+
+    async def test_added_to_chat_while_online_resubscribes(self):
+        """В группе нового чата сокета ещё нет — зовём по личной, он досоединяется."""
+        socket, _ = await self.open_socket(self.alice)
+        group = await database_sync_to_async(self.make_group)()
+
+        await get_channel_layer().group_send(user_group(self.alice.pk), {"type": "chat.joined", "chat": group.pk})
+        self.assertEqual(await socket.receive_json_from(), {"chat": group.pk})
+
+        await get_channel_layer().group_send(chat_group(group.pk), {"type": "chat.event", "chat": group.pk})
+        self.assertEqual(await socket.receive_json_from(), {"chat": group.pk})
+        await socket.disconnect()
+
+    def make_group(self):
+        chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.create(chat=chat, user=self.alice)
+        return chat
 
 
 class TemplateHealthTests(TestCase):
@@ -535,6 +779,18 @@ class TemplateHealthTests(TestCase):
 
     def setUp(self):
         self.client.force_login(self.alice)
+
+    def test_no_multiline_comments_in_any_template(self):
+        """Ловим в исходниках, а не в вёрстке: страницу с таким комментарием
+        могут просто не открыть в тестах, а текст всё равно уедет пользователю."""
+        root = Path(settings.BASE_DIR)
+        broken = [
+            f"{path.relative_to(root)}:{number}"
+            for path in root.glob("*/templates/**/*.html")
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if line.count("{#") != line.count("#}")
+        ]
+        self.assertFalse(broken, "многострочный {# #} рендерится как текст — нужен {% comment %}: " + ", ".join(broken))
 
     def test_pages_render_without_leaking_template_comments(self):
         for url in (reverse("chat_list"), reverse("chat_detail", args=[self.chat.pk])):

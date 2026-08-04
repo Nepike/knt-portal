@@ -34,7 +34,8 @@ class AddMembersForm(forms.Form):
 
 
 class CuratorAddForm(forms.Form):
-    """В чат учебной группы можно добавить только людей с правом куратора."""
+    """В чат курса можно добавить только людей с правом куратора. Фильтруем по самому
+    праву, а не по имени группы: его можно выдать и напрямую, и через любую роль."""
 
     members = MemberField(label="Добавить куратора", queryset=User.objects.none(), widget=AccentSelectMultiple(search=True))
 
@@ -44,8 +45,8 @@ class CuratorAddForm(forms.Form):
             User.objects.filter(is_active=True)
             .filter(
                 Q(is_superuser=True)
-                | Q(groups__permissions__codename="curate_team_chats")
-                | Q(user_permissions__codename="curate_team_chats")
+                | Q(groups__permissions__codename="curate_course_chats")
+                | Q(user_permissions__codename="curate_course_chats")
             )
             .exclude(chat_memberships__chat=chat)
             .distinct()

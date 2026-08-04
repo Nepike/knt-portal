@@ -6,7 +6,11 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
-REACTIONS = ["👍", "❤️", "🔥", "😂", "😮", "😢"]
+from core.models import Team
+
+# Единственный источник правды: и палитра в UI (тег reaction_palette),
+# и проверка входящего эмодзи на сервере (message_react).
+REACTIONS = ["👍", "❤️", "🔥", "😂", "😮", "😢",]
 
 
 def unread_total(user):
@@ -26,15 +30,18 @@ class Chat(models.Model):
     KIND_CHOICES = (
         ("dm", "личный"),
         ("group", "групповой"),
-        ("team", "учебная группа"),
+        ("course", "курс"),
     )
 
     kind = models.CharField("тип", max_length=10, choices=KIND_CHOICES, default="dm")
     title = models.CharField("название", max_length=100, blank=True)
-    team = models.OneToOneField(
-        "core.Team", verbose_name="учебная группа", on_delete=models.CASCADE,
-        null=True, blank=True, related_name="chat",
-    )
+
+    # Чат курса адресуется парой «год поступления + ступень», а не номером курса:
+    # номер растёт каждый сентябрь, год — нет. Ступень нужна, потому что бакалавры
+    # и магистры одного года набора — разные люди.
+    admission_year = models.PositiveSmallIntegerField("год поступления", null=True, blank=True)
+    stage = models.CharField("ступень обучения", max_length=20, choices=Team.STAGE_CHOICES, blank=True)
+
     # Пара id через "_" — БД не даст создать второй диалог тем же двоим.
     dm_key = models.CharField(max_length=32, unique=True, null=True, blank=True, editable=False)
 
@@ -51,7 +58,12 @@ class Chat(models.Model):
         verbose_name_plural = "чаты"
         ordering = ["-id"]
         permissions = [
-            ("curate_team_chats", "Может быть куратором чата учебной группы"),
+            ("curate_course_chats", "Может быть куратором чата курса"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["admission_year", "stage"], condition=Q(kind="course"), name="unique_course_chat",
+            ),
         ]
 
     def __str__(self):
@@ -71,8 +83,24 @@ class Chat(models.Model):
             ])
         return chat
 
+    @staticmethod
+    def course_title(stage, year):
+        return f"{dict(Team.STAGE_CHOICES).get(stage, stage)} {year}"
+
+    @classmethod
+    def get_or_create_course(cls, team):
+        chat, _ = cls.objects.get_or_create(
+            kind="course", admission_year=team.year_of_admission, stage=team.stage,
+            defaults={"title": cls.course_title(team.stage, team.year_of_admission)},
+        )
+        return chat
+
+    def is_own_course(self, user):
+        """Свой курс покинуть нельзя — в отличие от чужого, где человек куратор."""
+        team = user.team
+        return bool(team and self.admission_year == team.year_of_admission and self.stage == team.stage)
+
     def other_member(self, user):
-        """Собеседник в ЛС — от него берём имя и аватар для шапки и списка."""
         if self.kind != "dm":
             return None
         return next((m.user for m in self.memberships.all() if m.user_id != user.pk), None)
@@ -119,8 +147,8 @@ class Membership(models.Model):
 
 class Message(models.Model):
     chat = models.ForeignKey(Chat, verbose_name="чат", on_delete=models.CASCADE, related_name="messages")
-    # null = системное сообщение («X добавил Y»); SET_NULL, чтобы удаление автора
-    # не выбивало дыры в чужой переписке.
+
+    # null = системное сообщение («X добавил Y»); SET_NULL, чтобы удаление автора не выбивало дыры в чужой переписке.
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL, verbose_name="автор", on_delete=models.SET_NULL,
         null=True, blank=True, related_name="messages",
@@ -142,8 +170,8 @@ class Message(models.Model):
     class Meta:
         verbose_name = "сообщение"
         verbose_name_plural = "сообщения"
-        # Сортировка по id, а не created: у одновременных сообщений таймстемпы
-        # совпадают и порядок «плывёт». id — он же курсор для догрузки новых.
+        # id, а не created: у одновременных сообщений таймстемпы совпадают и порядок плывёт.
+        # Он же курсор — для поллинга, для догрузки истории и для переподключения WS.
         ordering = ["id"]
         indexes = [models.Index(fields=["chat", "id"])]
 
@@ -168,18 +196,18 @@ class Reaction(models.Model):
         return f"{self.emoji} от {self.user}"
 
 
-# Чат учебной группы заводится сам: студента вносим в чат его группы, из чата
-# прежней группы убираем (перевёлся — переехал вместе с ним).
+# Чат курса заводится сам: студента вносим в чат его потока, из чужого убираем
+# (перевёлся на другой курс — переехал вместе с ним).
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
-def sync_team_chat(sender, instance, update_fields=None, **kwargs):
+def sync_course_chat(sender, instance, update_fields=None, **kwargs):
     if update_fields and "team" not in update_fields:
         return  # частый случай — обновление last_login при входе
-    # Кураторы состоят в чужих team-чатах намеренно — их membership'ы не трогаем.
-    if not instance.has_perm("chats.curate_team_chats"):
-        Membership.objects.filter(user=instance, chat__kind="team").exclude(chat__team_id=instance.team_id).delete()
-    if instance.team_id:
-        chat, _ = Chat.objects.get_or_create(
-            team_id=instance.team_id,
-            defaults={"kind": "team", "title": str(instance.team)},
-        )
-        Membership.objects.get_or_create(chat=chat, user=instance)
+    team = instance.team
+    # Кураторы состоят в чужих курсовых чатах намеренно — их membership'ы не трогаем.
+    if not instance.has_perm("chats.curate_course_chats"):
+        stale = Membership.objects.filter(user=instance, chat__kind="course")
+        if team:
+            stale = stale.exclude(chat__admission_year=team.year_of_admission, chat__stage=team.stage)
+        stale.delete()
+    if team:
+        Membership.objects.get_or_create(chat=Chat.get_or_create_course(team), user=instance)

@@ -28,7 +28,8 @@
   {% block css %}{% endblock %}
 </head>
 
-<body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}' class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+<body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+      {% if request.user.is_authenticated %}data-live{% endif %} class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
   <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
 
@@ -109,11 +110,11 @@
       </div>
     </header>
 
-    <main class="flex-1 flex flex-col w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 {% block main_class %}{% endblock %}">
+    <main class="flex-1 flex flex-col w-full max-w-5xl mx-auto {% block main_class %}px-4 sm:px-6 py-6{% endblock %}">
       {% block content %}{% endblock %}
     </main>
 
-
+    {% block footer %}
     <!-- TODO ссылки -->
     <footer class="border-t-2 border-slate-200 dark:border-slate-800 py-5 px-4 text-center text-sm text-slate-500">
       <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
@@ -123,6 +124,7 @@
         <a href="https://vk.com/knt_mipt" target="_blank" rel="noopener" class="hover:text-slate-700 dark:hover:text-slate-300">ВКонтакте</a>
       </div>
     </footer>
+    {% endblock %}
   </div>
 
   {# Тосты: Django messages + событие $dispatch('toast', {type, text}) из любого места #}

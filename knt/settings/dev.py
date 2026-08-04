@@ -9,3 +9,7 @@ DATABASES = {
 }
 
 EMAIL_BACKEND = "core.mail.DevConsoleBackend"
+
+# runserver — один процесс, ему хватает слоя в памяти: Redis локально не нужен.
+# Обратная сторона: события НЕ переходят между процессами (у manage.py shell свой слой).
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}

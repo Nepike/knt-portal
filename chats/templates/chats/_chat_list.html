@@ -10,7 +10,7 @@
       <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ item.other.surname|slice:":1" }}{{ item.other.name|slice:":1" }}</span>
     {% else %}
       <span class="flex-1 flex items-center justify-center text-slate-500 dark:text-slate-400">
-        <i class="fa-solid {% if item.chat.kind == 'team' %}fa-graduation-cap{% else %}fa-users{% endif %}"></i>
+        <i class="fa-solid {% if item.chat.kind == 'course' %}fa-graduation-cap{% else %}fa-users{% endif %}"></i>
       </span>
     {% endif %}
   </span>

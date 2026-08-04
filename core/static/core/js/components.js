@@ -5,6 +5,68 @@ window.lastMessageId = () => {
   return items.length ? items[items.length - 1].dataset.id : 0;
 };
 
+// Живая связь вместо опроса: сервер сам будит вкладку, когда в чате что-то произошло.
+// По сокету приходит ТОЛЬКО {"chat": id} — разметка у каждого получателя своя, поэтому
+// её клиент забирает обычным запросом (тем же, что раньше дёргал таймер).
+// Наружу отдаём события на <body>, чтобы htmx ловил их через hx-trigger="… from:body".
+window.chatSocket = (() => {
+  if (!document.body.hasAttribute("data-live")) return { sync() {} }; // не залогинен — некуда
+
+  const fire = (name, detail) => document.body.dispatchEvent(new CustomEvent(name, { detail, bubbles: true }));
+  const openChat = () => document.querySelector("[data-chat-id]")?.dataset.chatId;
+
+  let socket = null;
+  let attempt = 0;
+  let fallback = null;
+  let missed = false;
+
+  function sync() {
+    missed = false;
+    fire("chats:sync");
+  }
+
+  // Вкладка в фоне — ленту не трогаем: запрос за сообщениями пометил бы их
+  // прочитанными, а человек их не видел. Копим флаг и догоняем при возврате.
+  function deliver(chat) {
+    if (document.hidden) {
+      missed = true;
+      return;
+    }
+    fire("chats:event", { chat });
+    if (String(chat) === openChat()) fire("chats:current", { chat });
+  }
+
+  function connect() {
+    socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/chats/`);
+    socket.onopen = () => {
+      const recovered = attempt > 0;
+      attempt = 0;
+      stopFallback();
+      if (recovered) sync(); // пока лежали, события шли мимо — догоняем по курсору
+    };
+    socket.onmessage = (event) => deliver(JSON.parse(event.data).chat);
+    socket.onclose = () => {
+      // 1, 2, 4… до 30с: если сервер лежит, не добиваем его переподключениями
+      const wait = Math.min(1000 * 2 ** attempt++, 30000);
+      if (attempt > 2) startFallback(); // сокет не поднимается (прокси?) — возвращаемся к опросу
+      setTimeout(connect, wait);
+    };
+  }
+
+  function startFallback() {
+    if (!fallback) fallback = setInterval(() => !document.hidden && sync(), 10000);
+  }
+
+  function stopFallback() {
+    clearInterval(fallback);
+    fallback = null;
+  }
+
+  document.addEventListener("visibilitychange", () => !document.hidden && missed && sync());
+  connect();
+  return { sync, alive: () => !!socket && socket.readyState === WebSocket.OPEN };
+})();
+
 document.addEventListener("alpine:init", () => {
   // Тосты. Источники: Django messages (initial при рендере) и событие window
   // $dispatch('toast', { type, text }) — для действий без перезагрузки (HTMX и т.п.).
@@ -69,16 +131,17 @@ document.addEventListener("alpine:init", () => {
     clear() { this.selectedValue = null; },
   }));
 
-  // Лента чата: автоскролл вниз, защита от дублей (отправка и поллинг могут
-  // принести одно и то же сообщение) и состояние «отвечаю на…».
   Alpine.data("chat", () => ({
     replyTo: null,
     pinned: true, // держимся низа, пока человек не прокрутил вверх
+    menu: null, // открытое меню сообщения: { id, author, preview, react, edit, del }
+    sheet: false, // узкий экран — меню показываем шторкой снизу
+    pos: null, // позиция попапа; пока null, меню держим невидимым (ещё не примерено к экрану)
     init() {
       const box = this.$refs.box;
       const pin = () => this.toBottom();
-      // Высота ленты растёт уже ПОСЛЕ init: догружаются аватары и шрифты.
-      // Одного скролла в init мало — длинный диалог остаётся вверху.
+      // Высота ленты растёт уже ПОСЛЕ init: догружаются аватары и шрифты,
+      // поэтому одного скролла мало — длинный диалог остался бы вверху.
       pin();
       requestAnimationFrame(pin);
       window.addEventListener("load", pin, { once: true });
@@ -106,7 +169,7 @@ document.addEventListener("alpine:init", () => {
         this.dedupe();
         this.toBottom();
       });
-      // Очистка после удачной отправки: hx-on не видит Alpine-состояние, поэтому тут.
+      // Не hx-on на форме: оттуда не достать Alpine-состояние (replyTo).
       this.$el.addEventListener("htmx:afterRequest", (e) => {
         if (e.detail.successful && e.detail.elt.matches?.("form.chat-send")) {
           e.detail.elt.reset();
@@ -119,6 +182,44 @@ document.addEventListener("alpine:init", () => {
       this.replyTo = data;
       this.$refs.input.focus();
     },
+    openMenu(event) {
+      const bubble = event.target.closest("[data-msg]");
+      // ссылки, чипы реакций и цитата работают сами; выделение текста — тоже не вызов меню
+      if (!bubble || event.target.closest("a, button") || String(getSelection())) return;
+      event.preventDefault();
+      const d = bubble.dataset;
+      this.sheet = innerWidth < 640;
+      this.pos = null;
+      this.menu = { id: d.msg, author: d.author, preview: d.preview, react: d.reactUrl, edit: d.editUrl, del: d.delUrl };
+      if (this.sheet) return; // шторке позиция не нужна — она прижата к низу экрана
+      const { clientX, clientY } = event;
+      this.$nextTick(() => {
+        const el = this.$refs.menu;
+        const gap = 8;
+        this.pos = {
+          left: Math.max(gap, Math.min(clientX, innerWidth - (el ? el.offsetWidth : 224) - gap)),
+          top: Math.max(gap, Math.min(clientY, innerHeight - (el ? el.offsetHeight : 220) - gap)),
+        };
+      });
+    },
+    menuAction(kind) {
+      const m = this.menu;
+      this.menu = null;
+      if (kind === "reply") this.reply({ id: m.id, author: m.author, text: m.preview });
+      else if (kind === "edit") this.request("GET", m.edit, m.id);
+      else if (kind === "delete" && confirm("Удалить сообщение?")) this.request("POST", m.del, m.id);
+    },
+    react(emoji) {
+      const m = this.menu;
+      this.menu = null;
+      this.request("POST", m.react, m.id, { emoji });
+    },
+    // source обязателен: по нему htmx поднимается по дереву за hx-headers с <body> — там CSRF-токен
+    request(verb, url, id, values) {
+      const target = "#msg-" + id;
+      htmx.ajax(verb, url, { source: document.querySelector(target), target, swap: "outerHTML", values });
+    },
+    // Отправка и поллинг могут разойтись и принести одно сообщение дважды.
     dedupe() {
       const seen = new Set();
       this.$refs.box.querySelectorAll("[data-id]").forEach((el) => {
@@ -128,19 +229,6 @@ document.addEventListener("alpine:init", () => {
     toBottom(force = false) {
       if (force) this.pinned = true;
       if (this.pinned) this.$refs.box.scrollTop = this.$refs.box.scrollHeight;
-    },
-  }));
-
-  // Палитра реакций. У верхних сообщений раскрываем вниз — иначе её срежет
-  // край ленты (у контейнера overflow-y: auto).
-  Alpine.data("reactionMenu", () => ({
-    open: false,
-    up: true,
-    toggle() {
-      const box = this.$el.closest("#messages");
-      const top = this.$el.getBoundingClientRect().top;
-      this.up = !box || top - box.getBoundingClientRect().top > 70;
-      this.open = !this.open;
     },
   }));
 
