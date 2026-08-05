@@ -1,0 +1,56 @@
+{% extends "core/base.html" %}
+{% load text_extras %}
+
+{% block title %}{{ book.title }}{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-3xl mx-auto">
+  <a href="{% url 'book_list' %}" class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+    <i class="fa-solid fa-arrow-left"></i>Библиотека
+  </a>
+
+  <article class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6">
+    <div class="flex items-start gap-4">
+      <span class="w-14 h-14 rounded-xl shrink-0 inline-flex items-center justify-center bg-accent/10 text-accent text-2xl">
+        <i class="fa-solid fa-book"></i>
+      </span>
+      <div class="min-w-0 flex-1">
+        <h1 class="text-xl sm:text-2xl font-bold leading-tight">{{ book.title }}</h1>
+        <p class="text-slate-500 dark:text-slate-400 mt-1">
+          {% if book.authors %}{{ book.authors }}{% endif %}{% if book.authors and book.year %} · {% endif %}{% if book.year %}{{ book.year }}{% endif %}
+        </p>
+      </div>
+      {% if not book.approved %}
+      <span class="shrink-0 rounded-full bg-amber-400/15 text-amber-600 dark:text-amber-400 text-xs font-medium px-2.5 py-1">на модерации</span>
+      {% endif %}
+    </div>
+
+    {% if book.subjects.all or book.terms.all %}
+    <div class="flex flex-wrap gap-1.5 mt-4">
+      {% for s in book.subjects.all %}
+      <a href="{% url 'book_list' %}?subject={{ s.pk }}" class="rounded-full bg-accent/10 text-accent text-xs px-2.5 py-1 hover:bg-accent/20">{{ s.name }}</a>
+      {% endfor %}
+      {% for t in book.terms.all %}
+      <a href="{% url 'book_list' %}?term={{ t.pk }}" class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-1 hover:bg-slate-200 dark:hover:bg-slate-700">{{ t }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800">
+      <h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">
+        {{ book.files.all|length }} {{ book.files.all|length|plural:"файл,файла,файлов" }}
+      </h2>
+      {% for file in book.files.all %}{% include "attachments/_file.html" %}{% empty %}
+      <p class="px-3 py-2 text-sm text-slate-400">Файлов пока нет</p>
+      {% endfor %}
+    </div>
+
+    {# TODO: кнопки «Редактировать» и «Удалить» — вместе с формой книги #}
+    <p class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400">
+      Добавил{% if book.hide_uploader or not book.uploader %} аноним{% else %}
+      <a href="{% url 'profile' book.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ book.uploader.name }} {{ book.uploader.surname }}</a>{% endif %}
+      · {{ book.created|date:"j E Y" }}
+    </p>
+  </article>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% load text_extras %}
+{# Ссылка на файл: значок с расширением, название, размер и счётчик. Общая для книг и материалов. #}
+<a href="{% url 'file_download' file.pk %}"
+   class="relative flex items-center gap-3 -mx-1 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+  <span class="w-9 h-9 shrink-0 rounded-lg inline-flex items-center justify-center text-[10px] font-bold
+               {% if file.kind == 'pdf' %}bg-rose-500/10 text-rose-500
+               {% elif file.kind == 'doc' %}bg-sky-500/10 text-sky-500
+               {% elif file.kind == 'sheet' %}bg-emerald-500/10 text-emerald-600
+               {% elif file.kind == 'slide' %}bg-orange-500/10 text-orange-500
+               {% elif file.kind == 'image' %}bg-violet-500/10 text-violet-500
+               {% elif file.kind == 'archive' %}bg-amber-500/10 text-amber-600
+               {% else %}bg-slate-400/15 text-slate-500{% endif %}">
+    {% if file.extension %}{{ file.extension|upper|truncatechars:6 }}{% else %}<i class="fa-solid fa-file text-sm"></i>{% endif %}
+  </span>
+  <span class="min-w-0 flex-1">
+    <span class="block text-sm truncate">{{ file.label }}</span>
+    <span class="block text-xs text-slate-400">
+      {{ file.human_size }}{% if file.downloads %} · {{ file.downloads }} {{ file.downloads|plural:"скачивание,скачивания,скачиваний" }}{% endif %}
+    </span>
+  </span>
+  <i class="fa-solid fa-download text-slate-300 dark:text-slate-600"></i>
+</a>

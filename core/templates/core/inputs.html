@@ -33,7 +33,7 @@
     </div>
 
     {% if field.label %}
-    <span class="field-label" :class="active ? 'fl-accent' : ({% if mult %}selected.length{% else %}selectedValue{% endif %} ? 'fl-up' : 'fl-down')">{{ field.label }}{% if not field.field.required %}<span class="opt"> · необязательно</span>{% endif %}</span>
+    <span class="field-label" :class="active ? 'fl-accent' : ({% if mult %}selected.length{% else %}selectedValue{% endif %} ? 'fl-up' : 'fl-down')">{{ field.label }}{% if not field.field.required and not hide_optional %}<span class="opt"> · необязательно</span>{% endif %}</span>
     {% endif %}
 
     {# up=True — меню раскрывается вверх (селект у нижнего края модалки/экрана) #}
@@ -75,7 +75,7 @@
     {{ field }}
     {% if field.label %}
       <label for="{{ field.id_for_label }}" class="field-label"
-             :class="focused ? 'fl-accent' : (up ? 'fl-up' : 'fl-down')">{{ field.label }}{% if not field.field.required %}<span class="opt"> · необязательно</span>{% endif %}</label>
+             :class="focused ? 'fl-accent' : (up ? 'fl-up' : 'fl-down')">{{ field.label }}{% if not field.field.required and not hide_optional %}<span class="opt"> · необязательно</span>{% endif %}</label>
     {% endif %}
   </div>
 {% endif %}

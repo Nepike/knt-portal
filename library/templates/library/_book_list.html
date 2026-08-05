@@ -1,0 +1,61 @@
+{% load text_extras %}
+{% if page.number == 1 and page.paginator.count %}
+<p class="col-span-full -mb-1 text-sm text-slate-400">{{ page.paginator.count }} {{ page.paginator.count|plural:"книга,книги,книг" }}</p>
+{% endif %}
+
+{% for book in books %}
+<article class="relative flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 transition hover:shadow-md">
+  <div class="flex items-start gap-3">
+    <span class="w-10 h-10 rounded-lg shrink-0 inline-flex items-center justify-center bg-accent/10 text-accent">
+      <i class="fa-solid fa-book"></i>
+    </span>
+
+    <div class="min-w-0 flex-1">
+      <div class="flex items-start gap-2">
+        <h3 class="font-semibold leading-snug">
+          {# after:inset-0 растягивает ссылку на всю карточку; ссылки файлов ниже по DOM и relative — они остаются кликабельными #}
+          <a href="{% url 'book_detail' book.pk %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ book.title }}</a>
+        </h3>
+        {% if not book.approved %}
+        <span class="shrink-0 rounded-full bg-amber-400/15 text-amber-600 dark:text-amber-400 text-[11px] font-medium px-2 py-0.5">на модерации</span>
+        {% endif %}
+        {% if book.year %}<span class="ml-auto shrink-0 text-sm text-slate-400">{{ book.year }}</span>{% endif %}
+      </div>
+      {% if book.authors %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ book.authors }}</p>{% endif %}
+
+      {% if book.subjects.all or book.terms.all %}
+      <div class="flex flex-wrap gap-1.5 mt-2">
+        {% for s in book.subjects.all %}
+        <span class="rounded-full bg-accent/10 text-accent text-xs px-2.5 py-0.5">{{ s.name }}</span>
+        {% endfor %}
+        {% for t in book.terms.all %}
+        <span class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-0.5">{{ t }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mt-2">
+    {% for file in book.files.all|slice:":3" %}{% include "attachments/_file.html" %}{% endfor %}
+    {% with more=book.files.all|length|add:"-3" %}
+    {% if more > 0 %}
+    <a href="{% url 'book_detail' book.pk %}" class="relative block px-3 py-1.5 text-sm text-accent hover:underline">Ещё {{ more }} {{ more|plural:"файл,файла,файлов" }}</a>
+    {% endif %}
+    {% endwith %}
+    {% if not book.files.all %}<p class="px-3 py-2 text-sm text-slate-400">Файлов пока нет</p>{% endif %}
+  </div>
+</article>
+{% empty %}
+<p class="col-span-full rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-400">
+  Ничего не нашлось
+</p>
+{% endfor %}
+
+{% if page.has_next %}
+{# маячок: попал в зону видимости — подтянул следующую порцию (фильтры и сортировка едут в querystring) #}
+<div class="col-span-full py-4 text-center text-slate-400"
+     hx-get="{% querystring page=page.next_page_number %}" hx-trigger="intersect once" hx-swap="outerHTML">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</div>
+{% endif %}

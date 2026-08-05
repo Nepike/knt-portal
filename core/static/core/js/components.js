@@ -118,6 +118,10 @@ document.addEventListener("alpine:init", () => {
     },
     onEnter() { const o = this.filtered[this.activeIndex]; if (this.open && o) this.pick(o); else this.openMenu(); },
     onFocusOut(e) { if (!this.$el.contains(e.relatedTarget)) { this.focused = false; this.close(); } },
+    // Значение живёт в hidden input и меняется из Alpine, а такая правка события не даёт.
+    // Шлём change сами (в nextTick — иначе слушатель прочитает ещё старое значение),
+    // чтобы htmx-фильтры и любые формы работали с нашими селектами как с обычными.
+    changed() { this.$nextTick(() => this.$el.dispatchEvent(new Event("change", { bubbles: true }))); },
   });
 
   Alpine.data("select", (cfg) => ({
@@ -126,8 +130,19 @@ document.addEventListener("alpine:init", () => {
     get active() { return this.open || this.focused; },
     get selectedLabel() { const o = this.options.find((o) => o.value === this.selectedValue); return o ? o.label : ""; },
     get filtered() { const q = this.query.trim().toLowerCase(); return q ? this.options.filter((o) => o.label.toLowerCase().includes(q)) : this.options; },
-    pick(o) { this.selectedValue = o.value; this.close(); },
-    clear() { this.selectedValue = null; },
+    pick(o) { this.selectedValue = o.value; this.close(); this.changed(); },
+    clear() { this.selectedValue = null; this.changed(); },
+  }));
+
+  // Переключатель сортировки списков. Значение живёт в hidden input формы,
+  // change шлём вручную — по той же причине, что и в селектах (см. changed()).
+  Alpine.data("segmented", (value) => ({
+    value,
+    pick(v) {
+      if (v === this.value) return;
+      this.value = v;
+      this.$nextTick(() => this.$refs.field.dispatchEvent(new Event("change", { bubbles: true })));
+    },
   }));
 
   Alpine.data("chat", () => ({
@@ -245,7 +260,7 @@ document.addEventListener("alpine:init", () => {
     get active() { return this.open || this.focused; },
     get selectedOptions() { return this.options.filter((o) => this.selected.includes(o.value)); },
     get filtered() { const q = this.query.trim().toLowerCase(); return this.options.filter((o) => !this.selected.includes(o.value) && (!q || o.label.toLowerCase().includes(q))); },
-    pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; if (this.search) this.$refs.search.focus(); },
-    remove(v) { this.selected = this.selected.filter((x) => x !== v); },
+    pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; this.changed(); if (this.search) this.$refs.search.focus(); },
+    remove(v) { this.selected = this.selected.filter((x) => x !== v); this.changed(); },
   }));
 });

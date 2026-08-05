@@ -47,7 +47,7 @@
             {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
           </a>
           <a href="#" class="nav-link"><i class="fa-solid fa-folder"></i>Материалы</a>
-          <a href="#" class="nav-link"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
+          <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>

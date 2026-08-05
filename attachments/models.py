@@ -1,9 +1,21 @@
+from pathlib import Path
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
+
+# Расширение → вид значка в attachments/_file.html.
+FILE_KINDS = {
+    "pdf": ("pdf", "djvu"),
+    "doc": ("doc", "docx", "odt", "rtf", "txt", "md"),
+    "sheet": ("xls", "xlsx", "ods", "csv"),
+    "slide": ("ppt", "pptx", "odp"),
+    "image": ("jpg", "jpeg", "png", "gif", "webp", "svg", "heic"),
+    "archive": ("zip", "rar", "7z", "tar", "gz"),
+}
 
 
 def file_upload_to(instance, filename):
@@ -66,6 +78,21 @@ class File(models.Model):
 
     def human_size(self):
         return human_size(self.size)
+
+    @property
+    def extension(self):
+        """Из самого файла, а не из названия: название пишет человек и может соврать."""
+        return Path(self.file.name or "").suffix.lstrip(".").lower()
+
+    @property
+    def kind(self):
+        return next((kind for kind, group in FILE_KINDS.items() if self.extension in group), "other")
+
+    @property
+    def label(self):
+        """Название без расширения — оно уже нарисовано на значке."""
+        suffix = f".{self.extension}"
+        return self.name[: -len(suffix)] if self.extension and self.name.lower().endswith(suffix) else self.name
 
 
 class Image(models.Model):
