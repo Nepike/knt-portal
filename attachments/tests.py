@@ -107,22 +107,27 @@ class AdoptUploadTests(TestCase):
         self.assertEqual(file.size, len(b"pdf-payload"))
         self.assertEqual(file.uploader, self.author)
 
-    def test_tampered_token_is_ignored(self):
+    def test_tampered_token_stops_the_save(self):
         good = self.put(key="uploads/ok/Целый.pdf")
         broken = self.put(key="uploads/bad/Подделка.pdf")
-        self.create(uploaded=[self.token(good, name="Целый.pdf"), self.token(broken) + "x"])
-        self.assertEqual([f.name for f in File.objects.all()], ["Целый.pdf"])
+        response = self.create(uploaded=[self.token(good, name="Целый.pdf"), self.token(broken) + "x"])
+        self.assertContains(response, "не доехал до хранилища")
+        self.assertFalse(Book.objects.exists())
 
-    def test_token_for_a_missing_object_is_ignored(self):
-        self.create(uploaded=self.token("uploads/abc/пусто.pdf"))
+    def test_missing_object_stops_the_save(self):
+        # Файл не доехал — книга НЕ сохраняется молча без него.
+        response = self.create(uploaded=self.token("uploads/abc/пусто.pdf"))
+        self.assertContains(response, "не доехал до хранилища")
         self.assertFalse(File.objects.exists())
+        self.assertFalse(Book.objects.exists())
 
-    def test_oversized_object_is_dropped(self):
+    def test_oversized_object_stops_the_save(self):
         key = self.put(body=b"x" * 100)
         with mock.patch("attachments.uploads.MAX_DIRECT_SIZE", 10):
-            self.create(uploaded=self.token(key))
+            response = self.create(uploaded=self.token(key))
+        self.assertContains(response, "больше")
+        self.assertFalse(Book.objects.exists())
         self.assertFalse(File.objects.exists())
-        self.assertFalse(file_storage().exists(key))  # и сам блоб не оставляем
 
     def test_order_follows_the_rows_on_screen(self):
         book = Book.objects.create(title="Фихтенгольц", approved=True, uploader=self.author)

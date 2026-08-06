@@ -34,5 +34,8 @@ class Command(BaseCommand):
                 if options["apply"]:
                     storage.delete(key)
 
+        # Окно печатаем всегда: без него «удалено: 0» выглядит поломкой, хотя сироты
+        # просто моложе --days (свежую загрузку ещё может подобрать открытая форма).
+        window = f"старше {options['days']} дн" if options["days"] else "любого возраста"
         verdict = "удалено" if options["apply"] else "нашлось (запусти с --apply)"
-        self.stdout.write(self.style.SUCCESS(f"{verdict}: {found}, освободится {size // 1024 // 1024} МБ"))
+        self.stdout.write(self.style.SUCCESS(f"{verdict}: {found} ({window}), {size // 1024 // 1024} МБ"))

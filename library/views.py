@@ -8,7 +8,7 @@ from django.views.decorators.http import require_POST
 
 from attachments.models import File, human_size
 from attachments.uploads import (
-    check_uploads, max_upload_size, pending_uploads, saved_files, sync_files, upload_limits,
+    check_pending, check_uploads, max_upload_size, pending_uploads, saved_files, sync_files, upload_limits,
 )
 
 from .forms import BookFilterForm, BookForm
@@ -91,7 +91,7 @@ def book_edit(request, pk=None):
     form = BookForm(request.POST or None, instance=book)
     file_errors = []
     if request.method == "POST":
-        file_errors = check_uploads(request.FILES.getlist("files"))
+        file_errors = check_uploads(request.FILES.getlist("files")) + check_pending(request)
         # Книга — это и есть файл. Без него она бесполезна, в отличие от материала,
         # где есть текст и картинки.
         if not _files_left(request, book):

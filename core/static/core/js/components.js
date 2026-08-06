@@ -152,15 +152,13 @@ document.addEventListener("alpine:init", () => {
     clear() { this.selectedValue = null; this.changed(); },
   }));
 
-  // Форма с файлами: выбор, лимиты, прямая загрузка в R2 и общий прогресс.
-  // Живёт на самой форме, поэтому htmx-события и x-ref инпута в одной области видимости.
-  // Настройки приезжают из Python (attachments/uploads.py) — правило одно на клиент и сервер.
+  // Форма с файлами: выбор, лимиты, прямая загрузка в R2 и общий прогресс. Висит на самой
+  // форме — оттуда видно и htmx-события, и инпут. Лимиты приезжают из attachments/uploads.py.
   Alpine.data("fileForm", ({ maxSize = 0, forbidden = [], direct = false, signUrl = "" } = {}, saved = []) => ({
     items: [], // { file, name, size, percent, done, token } — он же и список на экране
     request: null, // текущий XHR: по нему отменяем загрузку
     cancelled: false,
-    // Уже сохранённые файлы: их можно переставлять и переименовывать. marked заводим
-    // сразу: на неизвестном ключе :disabled внутри x-for ведёт себя непредсказуемо.
+    // marked заводим сразу: на неизвестном ключе :disabled внутри x-for ведёт себя непредсказуемо.
     saved: saved.map((file) => ({ ...file, marked: false })),
     errors: [],
     over: false,
@@ -258,12 +256,24 @@ document.addEventListener("alpine:init", () => {
         return; // форму не отправляем: книга без файлов никому не нужна
       }
 
-      // Последний рубеж: недогруженный файл не должен уехать «молча» — форма
-      // сохранилась бы без него, а объект остался бы висеть в хранилище сиротой.
+      // Недогруженный файл не должен уехать «молча»: форма сохранилась бы без него.
       if (this.items.some((item) => !item.done)) {
         this.end();
         return;
       }
+
+      // Скрытые поля с токенами рисует Alpine, а он правит DOM в микрозадаче.
+      // issueRequest собирает форму СИНХРОННО, поэтому без этой паузы поле последнего
+      // файла ещё не существует и книга сохраняется без него — молча.
+      await this.$nextTick();
+      const carried = new FormData(this.$el).getAll("uploaded");
+      const lost = this.items.find((item) => !carried.includes(item.token));
+      if (lost) {
+        this.errors = [`«${lost.name}» не попал в форму — сохрани ещё раз`];
+        this.end();
+        return;
+      }
+
       this.percent = 100;
       event.detail.issueRequest(true);
     },
@@ -300,9 +310,8 @@ document.addEventListener("alpine:init", () => {
       });
     },
 
-    // Уже залитые файлы остаются: они в хранилище, и перезаливать их незачем.
-    // Прерванная отдача может всё равно доехать до хранилища (браузер уже отдал байты) —
-    // такой объект остаётся сиротой и убирается командой clean_uploads.
+    // Залитые файлы остаются: они уже в хранилище. Прерванная отдача может доехать
+    // и всё равно (байты браузер отдал) — такую сироту убирает clean_uploads.
     cancel() {
       this.cancelled = true;
       this.request?.abort();

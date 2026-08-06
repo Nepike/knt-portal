@@ -82,34 +82,59 @@ def sign_upload(name):
     return url, signing.dumps({"key": key, "name": name}, salt=UPLOAD_SALT)
 
 
-def pending_uploads(request):
-    """Файлы, которые уже уехали в хранилище, но не доехали до сохранения — форма
-    вернулась с ошибкой. Отдаём токены обратно в разметку, чтобы не заливать заново."""
-    pending = []
-    for token in request.POST.getlist("uploaded"):
-        try:
-            payload = signing.loads(token, salt=UPLOAD_SALT, max_age=UPLOAD_MAX_AGE)
-        except signing.BadSignature:
-            continue
-        pending.append({"token": token, "name": payload["name"]})
-    return pending
-
-
-def _adopt(token, owner, request, order, name=""):
-    """Файл уже в хранилище — заводим на него запись, проверив, что он реально доехал."""
+def _unsign(token):
+    """Содержимое токена или None, если подпись не наша или протухла."""
     try:
-        payload = signing.loads(token, salt=UPLOAD_SALT, max_age=UPLOAD_MAX_AGE)
+        return signing.loads(token, salt=UPLOAD_SALT, max_age=UPLOAD_MAX_AGE)
     except signing.BadSignature:
         return None
 
-    storage = file_storage()
-    try:
-        size = storage.size(payload["key"])
-    except FileNotFoundError:
-        return None  # браузер не догрузил или соврал
 
-    if size > MAX_DIRECT_SIZE:
-        storage.delete(payload["key"])  # подписью размер не ограничить, ловим после факта
+def _stored_size(request, key):
+    """Размер объекта в хранилище (None — объекта нет). Кешируем на запрос: об одном
+    и том же файле спрашивают и check_pending до сохранения, и _adopt после."""
+    cache = getattr(request, "_upload_sizes", None)
+    if cache is None:
+        cache = request._upload_sizes = {}
+    if key not in cache:
+        try:
+            cache[key] = file_storage().size(key)
+        except FileNotFoundError:
+            cache[key] = None
+    return cache[key]
+
+
+def check_pending(request):
+    """Каждый присланный токен должен указывать на реально лежащий в хранилище файл.
+    Без этой проверки недоехавший файл терялся бы МОЛЧА: книга сохранялась бы без него,
+    а человек узнавал бы об этом, только открыв её."""
+    errors = []
+    for token in request.POST.getlist("uploaded"):
+        payload = _unsign(token)
+        if payload is None:
+            errors.append("Один из файлов не доехал до хранилища — загрузи его заново.")
+            continue
+        size = _stored_size(request, payload["key"])
+        if size is None:
+            errors.append(f"«{payload['name']}» не доехал до хранилища — загрузи заново.")
+        elif size > MAX_DIRECT_SIZE:
+            errors.append(f"«{payload['name']}» больше {human_size(MAX_DIRECT_SIZE)}")
+    return errors
+
+
+def pending_uploads(request):
+    """Файлы, которые уже уехали в хранилище, но не доехали до сохранения — форма
+    вернулась с ошибкой. Отдаём токены обратно в разметку, чтобы не заливать заново."""
+    unsigned = ((token, _unsign(token)) for token in request.POST.getlist("uploaded"))
+    return [{"token": token, "name": payload["name"]} for token, payload in unsigned if payload]
+
+
+def _adopt(token, owner, request, order, name=""):
+    """Файл уже в хранилище — заводим на него запись. Что он туда доехал и влезает
+    в лимит, проверил check_pending: сюда доходят только целые загрузки."""
+    payload = _unsign(token)
+    size = _stored_size(request, payload["key"]) if payload else None
+    if size is None:
         return None
 
     return File.objects.create(
@@ -141,7 +166,7 @@ def sync_files(request, owner):
 
     # Имена новых файлов идут отдельными списками, но строго парами со своим файлом:
     # они рисуются в той же строке формы, поэтому порядок совпадает.
-    order = len(by_pk)  # новые файлы встают в конец
+    order = len(by_pk)
     names = request.POST.getlist("files-name")
     for index, upload in enumerate(request.FILES.getlist("files")):
         chosen = names[index].strip() if index < len(names) else ""
