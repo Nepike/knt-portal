@@ -1,0 +1,35 @@
+{% extends "core/base.html" %}
+{% load static %}
+
+{% block title %}{% if book %}Редактирование книги{% else %}Новая книга{% endif %}{% endblock %}
+
+{# Перетаскивание файлов нужно только здесь — на остальных страницах плагин не грузим #}
+{% block plugins %}<script defer src="{% static 'core/vendor/alpine-sort.min.js' %}"></script>{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-2xl mx-auto">
+  <a href="{% if book %}{% url 'book_detail' book.pk %}{% else %}{% url 'book_list' %}{% endif %}"
+     class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+    <i class="fa-solid fa-arrow-left"></i>{% if book %}К книге{% else %}Библиотека{% endif %}
+  </a>
+  <h1 class="text-2xl font-bold mt-4 mb-6">{% if book %}Редактирование книги{% else %}Новая книга{% endif %}</h1>
+
+  {% include "library/_book_form.html" %}
+
+  {% if book %}
+  <div x-data="{ confirming: false }" class="mt-8 pt-5 border-t border-slate-200 dark:border-slate-800">
+    <button type="button" x-show="!confirming" @click="confirming = true" class="btn btn-ghost text-rose-500">
+      <i class="fa-solid fa-trash"></i>Удалить книгу
+    </button>
+    <div x-show="confirming" x-cloak class="flex flex-wrap items-center gap-3">
+      <span class="text-sm">Удалить книгу вместе с файлами?</span>
+      <form method="post" action="{% url 'book_delete' book.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">Удалить</button>
+      </form>
+      <button type="button" @click="confirming = false" class="btn btn-ghost">Отмена</button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

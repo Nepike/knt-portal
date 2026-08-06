@@ -1,7 +1,8 @@
-import tempfile
+from unittest import mock
 
+from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.urls import reverse
 
 from attachments.models import File
@@ -16,23 +17,6 @@ def make_user(email):
     return User.objects.create_user(
         email=email, name="Иван", surname="Иванов", password="pass12345", must_change_password=False,
     )
-
-
-class MediaTestCase(TestCase):
-    """Файлы тестов — во временный каталог, иначе они копятся в media/ проекта."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls._media = tempfile.TemporaryDirectory()
-        cls._override = override_settings(MEDIA_ROOT=cls._media.name)
-        cls._override.enable()
-        super().setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        cls._override.disable()
-        cls._media.cleanup()
 
 
 class BookListTests(TestCase):
@@ -100,7 +84,7 @@ class BookListTests(TestCase):
         self.assertNotContains(response, "<html")  # без обвязки страницы
 
 
-class SortingTests(MediaTestCase):
+class SortingTests(TestCase):
     """Порядок книг: по скачиваниям, по свежести, по алфавиту."""
 
     @classmethod
@@ -177,7 +161,7 @@ class PaginationTests(TestCase):
         self.assertIn("page=2", body)
 
 
-class BookDetailTests(MediaTestCase):
+class BookDetailTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.reader = make_user("r@t.local")
@@ -217,7 +201,7 @@ class BookDetailTests(MediaTestCase):
         self.assertEqual(self.client.get(reverse("book_detail", args=[book.pk])).status_code, 200)
 
 
-class FileTests(MediaTestCase):
+class FileTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.reader = make_user("r@t.local")
@@ -270,3 +254,157 @@ class FileTests(MediaTestCase):
         self.make_file(name="Зорич том 1.pdf")
         self.client.force_login(self.reader)
         self.assertContains(self.client.get(reverse("book_list")), "PDF")
+
+
+def upload(name="Зорич том 1.pdf", size=64):
+    return SimpleUploadedFile(name, b"x" * size)
+
+
+class BookEditTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = make_user("a@t.local")
+        cls.stranger = make_user("s@t.local")
+        cls.moderator = make_user("m@t.local")
+        cls.moderator.user_permissions.add(
+            Permission.objects.get(codename="change_book", content_type__app_label="library")
+        )
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+        cls.term = Term.objects.create(number=1)
+
+    def fields(self, **extra):
+        data = {"title": "Механика", "authors": "Ландау Л. Д.", "year": "2004",
+                "subjects": [self.subject.pk], "terms": [self.term.pk]}
+        return {**data, **extra}
+
+    def create(self, user, **extra):
+        self.client.force_login(user)
+        extra.setdefault("files", [upload()])  # книга без файлов теперь не сохраняется
+        return self.client.post(reverse("book_new"), self.fields(**extra))
+
+    def test_student_adds_a_book_and_it_waits_for_moderation(self):
+        response = self.create(self.author, files=[upload()])
+        book = Book.objects.get(title="Механика")
+        self.assertRedirects(response, reverse("book_detail", args=[book.pk]))
+        self.assertEqual(book.uploader, self.author)
+        self.assertFalse(book.approved)
+        self.assertEqual(book.year, 2004)
+        self.assertEqual(list(book.subjects.all()), [self.subject])
+
+        # Чужой её не видит, пока не проверили.
+        self.client.force_login(self.stranger)
+        self.assertNotContains(self.client.get(reverse("book_list")), "Механика")
+
+    def test_moderator_publishes_at_once(self):
+        self.create(self.moderator)
+        self.assertTrue(Book.objects.get(title="Механика").approved)
+
+    def test_uploaded_files_keep_their_names(self):
+        self.create(self.author, files=[upload("Ландау том 1.pdf"), upload("Задачи.djvu")])
+        book = Book.objects.get(title="Механика")
+        self.assertEqual([f.name for f in book.files.all()], ["Ландау том 1.pdf", "Задачи.djvu"])
+        self.assertEqual([f.order for f in book.files.all()], [0, 1])
+        self.assertEqual(book.files.first().uploader, self.author)
+
+    def test_new_files_can_be_named_at_upload(self):
+        self.create(self.author, files=[upload("scan001.pdf"), upload("scan002.pdf")],
+                    **{"files-name": ["Ландау. Том 1", ""]})
+        book = Book.objects.get(title="Механика")
+        # пустое имя — остаётся имя файла
+        self.assertEqual([f.name for f in book.files.all()], ["Ландау. Том 1", "scan002.pdf"])
+
+    def test_dangerous_file_is_refused(self):
+        response = self.create(self.author, files=[upload("страница.html")])
+        self.assertContains(response, "загружать нельзя")
+        self.assertFalse(Book.objects.exists())  # книга не создаётся, пока файл не исправят
+
+    def test_too_big_file_is_refused(self):
+        with mock.patch("attachments.uploads.MAX_FILE_SIZE", 10):
+            response = self.create(self.author, files=[upload(size=100)])
+        self.assertContains(response, "больше 10 Б")
+        self.assertFalse(Book.objects.exists())
+
+    def test_book_without_files_is_refused(self):
+        response = self.create(self.author, files=[])
+        self.assertContains(response, "хотя бы один файл")
+        self.assertFalse(Book.objects.exists())
+
+    def test_last_file_cannot_be_deleted(self):
+        self.create(self.author, files=[upload()])
+        book = Book.objects.get(title="Механика")
+        only = book.files.get()
+
+        response = self.client.post(reverse("book_edit", args=[book.pk]),
+                                    self.fields(**{f"delete-{only.pk}": "on"}))
+        self.assertContains(response, "хотя бы один файл")
+        self.assertTrue(book.files.exists())
+
+    def test_impossible_year_is_refused(self):
+        response = self.create(self.author, year="20004")
+        self.assertContains(response, "опечатку")
+        self.assertFalse(Book.objects.exists())
+
+    def test_uploader_renames_and_deletes_files_and_adds_new(self):
+        self.create(self.author, files=[upload("Старое имя.pdf"), upload("Лишний.pdf")])
+        book = Book.objects.get(title="Механика")
+        old, extra = book.files.all()
+
+        self.client.post(reverse("book_edit", args=[book.pk]), self.fields(
+            title="Механика, 5-е издание",
+            **{f"name-{old.pk}": "Ландау том 1", f"delete-{extra.pk}": "on"},
+            files=[upload("Добавка.pdf")],
+        ))
+        book.refresh_from_db()
+        self.assertEqual(book.title, "Механика, 5-е издание")
+        self.assertEqual([f.name for f in book.files.all()], ["Ландау том 1", "Добавка.pdf"])
+        self.assertFalse(extra.file.storage.exists(extra.file.name))  # блоб удалённого файла тоже ушёл
+
+    def test_stranger_cannot_edit_or_delete(self):
+        self.create(self.author)
+        book = Book.objects.get(title="Механика")
+
+        self.client.force_login(self.stranger)
+        self.assertEqual(self.client.get(reverse("book_edit", args=[book.pk])).status_code, 404)  # ещё и не видна
+
+        Book.objects.filter(pk=book.pk).update(approved=True)
+        self.assertEqual(self.client.get(reverse("book_edit", args=[book.pk])).status_code, 403)
+        self.assertEqual(self.client.post(reverse("book_delete", args=[book.pk])).status_code, 403)
+        self.assertTrue(Book.objects.filter(pk=book.pk).exists())
+
+    def test_moderator_edits_and_sees_foreign_unapproved(self):
+        self.create(self.author)
+        book = Book.objects.get(title="Механика")
+
+        self.client.force_login(self.moderator)
+        self.assertContains(self.client.get(reverse("book_list")), "Механика")
+        self.assertEqual(self.client.get(reverse("book_edit", args=[book.pk])).status_code, 200)
+
+    def test_delete_takes_the_files_with_it(self):
+        self.create(self.author, files=[upload()])
+        book = Book.objects.get(title="Механика")
+        blob = book.files.first().file
+
+        response = self.client.post(reverse("book_delete", args=[book.pk]))
+        self.assertRedirects(response, reverse("book_list"))
+        self.assertFalse(Book.objects.exists())
+        self.assertFalse(File.objects.exists())
+        self.assertFalse(blob.storage.exists(blob.name))
+
+    def test_htmx_submit_gets_the_form_back_with_errors(self):
+        self.client.force_login(self.author)
+        response = self.client.post(reverse("book_new"), self.fields(year="20004"), headers={"HX-Request": "true"})
+        self.assertContains(response, "опечатку")
+        self.assertNotContains(response, "<html")  # меняем только форму, не страницу
+
+    def test_htmx_success_sends_the_browser_to_the_book(self):
+        self.client.force_login(self.author)
+        response = self.client.post(reverse("book_new"), self.fields(files=[upload()]),
+                                    headers={"HX-Request": "true"})
+        book = Book.objects.get(title="Механика")
+        # редирект htmx не отработает — HtmxRedirectMiddleware отдаёт заголовок
+        self.assertEqual(response["HX-Redirect"], reverse("book_detail", args=[book.pk]))
+
+    def test_delete_is_post_only(self):
+        self.create(self.author)
+        book = Book.objects.get(title="Механика")
+        self.assertEqual(self.client.get(reverse("book_delete", args=[book.pk])).status_code, 405)

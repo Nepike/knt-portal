@@ -3,7 +3,10 @@
 {% block title %}Библиотека{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-bold text-center mb-6">Библиотека</h1>
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <h1 class="text-2xl font-bold">Библиотека</h1>
+  <a href="{% url 'book_new' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i>Добавить книгу</a>
+</div>
 
 {# Один hx-get на всю форму: строка поиска шлёт input, селекты и сортировка — change (см. changed() в components.js) #}
 <form hx-get="{% url 'book_list' %}" hx-target="#book-list" hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">

@@ -5,6 +5,24 @@ window.lastMessageId = () => {
   return items.length ? items[items.length - 1].dataset.id : 0;
 };
 
+// Размер файла для списка выбранных — пара к human_size() из attachments/models.py.
+const humanSize = (bytes) => {
+  let size = bytes;
+  for (const unit of ["Б", "КБ", "МБ", "ГБ"]) {
+    if (size < 1024) return unit === "Б" ? `${size} ${unit}` : `${size.toFixed(1)} ${unit}`;
+    size /= 1024;
+  }
+  return `${size.toFixed(1)} ТБ`;
+};
+
+// Свой id у каждого выбранного файла: имя можно править, а ключ списка и сортировки
+// должен пережить правку — иначе строка пересоздастся прямо во время набора.
+let pickedFiles = 0;
+
+// Уход со страницы во время отправки оборвёт загрузку — спрашиваем подтверждение.
+// Текст задаёт браузер, свой показать нельзя.
+const warnOnLeave = (event) => event.preventDefault();
+
 // По сокету приходит ТОЛЬКО {"chat": id}: разметка у каждого получателя своя, поэтому
 // её клиент забирает обычным запросом. События вешаем на <body> — оттуда их берёт htmx
 // через hx-trigger="… from:body".
@@ -132,6 +150,182 @@ document.addEventListener("alpine:init", () => {
     get filtered() { const q = this.query.trim().toLowerCase(); return q ? this.options.filter((o) => o.label.toLowerCase().includes(q)) : this.options; },
     pick(o) { this.selectedValue = o.value; this.close(); this.changed(); },
     clear() { this.selectedValue = null; this.changed(); },
+  }));
+
+  // Форма с файлами: выбор, лимиты, прямая загрузка в R2 и общий прогресс.
+  // Живёт на самой форме, поэтому htmx-события и x-ref инпута в одной области видимости.
+  // Настройки приезжают из Python (attachments/uploads.py) — правило одно на клиент и сервер.
+  Alpine.data("fileForm", ({ maxSize = 0, forbidden = [], direct = false, signUrl = "" } = {}, saved = []) => ({
+    items: [], // { file, name, size, percent, done, token } — он же и список на экране
+    request: null, // текущий XHR: по нему отменяем загрузку
+    cancelled: false,
+    // Уже сохранённые файлы: их можно переставлять и переименовывать. marked заводим
+    // сразу: на неизвестном ключе :disabled внутри x-for ведёт себя непредсказуемо.
+    saved: saved.map((file) => ({ ...file, marked: false })),
+    errors: [],
+    over: false,
+    percent: null,
+    sent: 0, // байт в уже залитых файлах — из них считается общий процент
+
+    add(files) {
+      if (this.percent !== null) return; // идёт загрузка: новые файлы прошли бы мимо прогресса
+      this.errors = [];
+      for (const file of files) {
+        const problem = this.problem(file);
+        if (problem) {
+          this.errors.push(problem);
+          continue;
+        }
+        if (this.items.some((item) => item.file.name === file.name && item.file.size === file.size)) continue;
+        this.items.push({
+          id: ++pickedFiles, file, name: file.name, size: humanSize(file.size),
+          percent: null, done: false, token: null,
+        });
+      }
+      this.syncInput();
+    },
+    // Тот же отказ, что и на сервере, но до отправки: незачем гнать гигабайт впустую.
+    problem(file) {
+      const extension = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "";
+      if (forbidden.includes(extension)) return `«${file.name}» — такой тип файла загружать нельзя`;
+      if (maxSize && file.size > maxSize) return `«${file.name}» больше ${humanSize(maxSize)}`;
+      return null;
+    },
+    remove(index) {
+      this.items.splice(index, 1);
+      this.syncInput();
+    },
+    // В инпуте только то, что ещё не уехало в хранилище: залитые файлы остаются
+    // в списке (иначе кажется, будто они отвалились), но второй раз не отправляются.
+    syncInput() {
+      const data = new DataTransfer(); // FileList только для чтения, собираем заново
+      for (const item of this.items) if (!item.done) data.items.add(item.file);
+      this.$refs.input.files = data.files;
+    },
+
+    // Перестановку рисует плагин x-sort (он же двигает узел), нам остаётся привести
+    // состояние в тот же порядок — иначе Alpine на следующем рендере вернёт строку назад.
+    move(list, from, position) {
+      if (from === -1 || from === position) return;
+      list.splice(position, 0, ...list.splice(from, 1));
+    },
+    reorderSaved(pk, position) {
+      this.move(this.saved, this.saved.findIndex((file) => file.pk === pk), position);
+    },
+    // Порядок строк задаёт и порядок отправки: из этого же списка собираются
+    // файловый инпут и скрытые поля с токенами и именами.
+    reorderNew(id, position) {
+      this.move(this.items, this.items.findIndex((file) => file.id === id), position);
+      this.syncInput();
+    },
+
+    // htmx:confirm — единственное место, где запрос можно отложить и сделать что-то async.
+    // Сначала льём файлы прямо в хранилище, в форме остаются только подписанные токены.
+    async beforeSend(event) {
+      if (this.percent !== null) return event.preventDefault(); // уже льём, второй раз не начинаем
+      const pending = this.items.filter((item) => !item.done);
+      if (!direct || !pending.length) return; // некуда или нечего — обычная отправка
+      event.preventDefault();
+
+      this.errors = [];
+      this.cancelled = false;
+      this.request = null;
+      this.begin();
+      this.sent = 0;
+      const total = pending.reduce((sum, item) => sum + item.file.size, 0);
+      try {
+        for (const item of pending) {
+          // Отмену ловим и между файлами, и во время подписи: там abort() нечего прерывать,
+          // а без проверки загрузка поехала бы дальше как ни в чём не бывало.
+          if (this.cancelled) throw new Error("Загрузка отменена");
+          item.percent = 0;
+          const { url, token } = await this.sign(item.file);
+          if (this.cancelled) throw new Error("Загрузка отменена");
+          await this.put(url, item, total);
+          this.sent += item.file.size;
+          // Помечаем сразу: повторная отправка после ошибки на следующем файле
+          // не должна залить этот вторым экземпляром.
+          item.percent = 100;
+          item.done = true;
+          item.token = token; // скрытое поле рисуется из строки, уберут строку — уйдёт и токен
+          this.syncInput();
+        }
+      } catch (error) {
+        this.errors = this.cancelled ? [] : [error.message];
+        for (const item of pending) if (!item.done) item.percent = null;
+        this.request = null;
+        this.end();
+        return; // форму не отправляем: книга без файлов никому не нужна
+      }
+
+      // Последний рубеж: недогруженный файл не должен уехать «молча» — форма
+      // сохранилась бы без него, а объект остался бы висеть в хранилище сиротой.
+      if (this.items.some((item) => !item.done)) {
+        this.end();
+        return;
+      }
+      this.percent = 100;
+      event.detail.issueRequest(true);
+    },
+
+    async sign(file) {
+      const response = await fetch(signUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": this.$el.querySelector("[name=csrfmiddlewaretoken]").value,
+        },
+        body: JSON.stringify({ name: file.name, size: file.size }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Не удалось получить ссылку на загрузку");
+      return data;
+    },
+
+    put(url, item, total) {
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        this.request = request;
+        request.open("PUT", url);
+        request.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          item.percent = Math.round((e.loaded / e.total) * 100);
+          this.percent = Math.round(((this.sent + e.loaded) / total) * 100);
+        };
+        request.onload = () =>
+          request.status < 300 ? resolve() : reject(new Error(`Хранилище ответило ${request.status}`));
+        request.onerror = () => reject(new Error(`Не удалось загрузить «${item.name}»`));
+        request.onabort = () => reject(new Error("Загрузка отменена"));
+        request.send(item.file);
+      });
+    },
+
+    // Уже залитые файлы остаются: они в хранилище, и перезаливать их незачем.
+    // Прерванная отдача может всё равно доехать до хранилища (браузер уже отдал байты) —
+    // такой объект остаётся сиротой и убирается командой clean_uploads.
+    cancel() {
+      this.cancelled = true;
+      this.request?.abort();
+      this.request = null;
+    },
+
+    begin() {
+      if (this.percent === null) this.percent = 0; // после прямой загрузки шкала уже на 100
+      window.addEventListener("beforeunload", warnOnLeave);
+    },
+    // Снимаем охранника, КАК ТОЛЬКО пришёл ответ (htmx:before-on-load), а не по
+    // afterRequest: htmx обрабатывает HX-Redirect раньше, и браузер спрашивал бы
+    // «точно уйти?» на нашем же переходе к книге.
+    end() {
+      this.percent = null;
+      window.removeEventListener("beforeunload", warnOnLeave);
+    },
+    // htmx вешает слушателей и на xhr, и на xhr.upload, поэтому следом придёт прогресс
+    // ОТВЕТА со своим total — шкалу назад не откатываем.
+    track({ detail }) {
+      if (this.percent === null || !detail.lengthComputable) return;
+      this.percent = Math.max(this.percent, Math.round((detail.loaded / detail.total) * 100));
+    },
   }));
 
   // Переключатель сортировки списков. Значение живёт в hidden input формы,

@@ -22,6 +22,8 @@
   <link href="{% static 'core/vendor/fontawesome/css/solid.min.css' %}" rel="stylesheet">
   <script defer src="{% static 'core/vendor/htmx.min.js' %}"></script>
   <script defer src="{% static 'core/js/components.js' %}"></script>
+  {# Плагины Alpine — сюда: они вешаются на alpine:init, значит грузиться должны ДО ядра #}
+  {% block plugins %}{% endblock %}
   <script defer src="{% static 'core/vendor/alpine.min.js' %}"></script>
 
   <link href="{% static 'core/css/base.css' %}" rel="stylesheet">

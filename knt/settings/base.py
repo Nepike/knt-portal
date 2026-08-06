@@ -87,6 +87,28 @@ STORAGES = {
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
 
+# Cloudflare R2 для файлов книг и материалов (attachments.storage.media_storage).
+# Пусто — работаем с локальным диском, так живёт разработка.
+R2_BUCKET = env("R2_BUCKET", default="")
+R2_OPTIONS = {
+    "bucket_name": R2_BUCKET,
+    "endpoint_url": f"https://{env('R2_ACCOUNT_ID', default='')}.r2.cloudflarestorage.com",
+    "access_key": env("R2_ACCESS_KEY_ID", default=""),
+    "secret_key": env("R2_SECRET_ACCESS_KEY", default=""),
+    # Префикс ключей: разработка и прод могут жить в одном бакете, не перемешиваясь.
+    "location": env("R2_PREFIX", default=""),
+    "region_name": "auto",  # у R2 один регион, размещение задаётся при создании бакета
+    "signature_version": "s3v4",
+    "addressing_style": "path",  # bucket в пути: у R2 нет DNS-имён на бакет
+    # Бакет закрытый, ссылку подписываем на час: сайт закрытый, файлы наружу не раздаём.
+    # Скачивание всё равно идёт через attachments.views.download — там и права, и счётчик.
+    "querystring_auth": True,
+    "querystring_expire": 3600,
+    "file_overwrite": False,  # S3-хранилище иначе молча затирает одноимённый файл
+}
+
+TEST_RUNNER = "core.test_runner.MediaIsolatedRunner"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "users.User"

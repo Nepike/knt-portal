@@ -45,7 +45,10 @@
       {% endfor %}
     </div>
 
-    {# TODO: кнопки «Редактировать» и «Удалить» — вместе с формой книги #}
+    {% if may_edit %}
+    <a href="{% url 'book_edit' book.pk %}" class="btn btn-secondary mt-5"><i class="fa-solid fa-pen"></i>Редактировать</a>
+    {% endif %}
+
     <p class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400">
       Добавил{% if book.hide_uploader or not book.uploader %} аноним{% else %}
       <a href="{% url 'profile' book.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ book.uploader.name }} {{ book.uploader.surname }}</a>{% endif %}

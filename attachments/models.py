@@ -7,6 +7,8 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 
+from .storage import media_storage
+
 # Расширение → вид значка в attachments/_file.html.
 FILE_KINDS = {
     "pdf": ("pdf", "djvu"),
@@ -48,8 +50,7 @@ class File(models.Model):
     book = models.ForeignKey("library.Book", verbose_name="книга", on_delete=models.CASCADE, related_name="files", null=True, blank=True)
 
     name = models.CharField("название", max_length=150)
-    # TODO (M2): file -> Cloudflare R2 (django-storages), пока локально
-    file = models.FileField("файл", upload_to=file_upload_to)
+    file = models.FileField("файл", upload_to=file_upload_to, storage=media_storage)
     size = models.PositiveBigIntegerField("размер (байт)", null=True, blank=True)
     downloads = models.PositiveIntegerField("скачиваний", default=0)
     order = models.PositiveIntegerField("порядок", default=0)
