@@ -1,6 +1,15 @@
 from django import template
+from django.utils.safestring import mark_safe
+
+from core.markup import render
 
 register = template.Library()
+
+
+@register.filter
+def markdown(text):
+    """{{ material.text|markdown }} — разметка автора превращается в вычищенный HTML."""
+    return mark_safe(render(text))  # noqa: S308 — на выходе nh3, сырого HTML там уже нет
 
 
 @register.filter

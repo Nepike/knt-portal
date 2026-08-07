@@ -1,0 +1,65 @@
+{% load text_extras attachment_extras %}
+{% comment %}
+  Галерея на странице: превью сеткой, по клику — просмотрщик. Ждёт images.
+  Адреса идут через фильтр media: подпись R2 живёт час и меняется на каждом рендере,
+  вклеивать её в разметку нельзя (см. attachments/media.py).
+{% endcomment %}
+<div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800"
+     x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media }}', name: '{{ image.name|escapejs }}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">
+  <h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2">
+    {{ images|length }} {{ images|length|plural:"изображение,изображения,изображений" }}
+  </h2>
+
+  <div class="grid grid-cols-3 sm:grid-cols-5 gap-2">
+    {% for image in images %}
+    <button type="button" @click="show({{ forloop.counter0 }})"
+            class="aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 hover:opacity-80 transition">
+      <img src="{{ image.image|media }}" alt="{{ image.name }}" loading="lazy" class="w-full h-full object-cover">
+    </button>
+    {% endfor %}
+  </div>
+
+  {% comment %}
+    Просмотрщик. Пока открыт, страницу под ним скроллить нельзя — иначе колесо,
+    которым здесь масштабируют, уезжало бы вместе с фоном.
+  {% endcomment %}
+  <div x-show="open" x-cloak x-effect="document.body.style.overflow = open ? 'hidden' : ''"
+       @keydown.escape.window="close()"
+       @keydown.arrow-left.window="open && step(-1)"
+       @keydown.arrow-right.window="open && step(1)"
+       @mousemove.window="move($event)" @mouseup.window="drop()"
+       class="fixed inset-0 z-50 bg-slate-950/90 flex flex-col">
+    <div class="flex items-center gap-3 p-3 text-white/80">
+      <span class="text-sm" x-text="`${index + 1} / ${items.length}`"></span>
+      <span class="text-sm truncate" x-text="current.name"></span>
+      <div class="ml-auto flex items-center gap-1">
+        <button type="button" @click="zoom(-0.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Отдалить"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+        <button type="button" @click="zoom(0.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Приблизить"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+        <a :href="current.url" target="_blank" rel="noopener" class="w-9 h-9 rounded-lg hover:bg-white/10 inline-flex items-center justify-center" aria-label="Открыть отдельно"><i class="fa-solid fa-up-right-from-square"></i></a>
+        <button type="button" @click="close()" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Закрыть"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+    </div>
+
+    {# Клик по пустому месту закрывает, по самой картинке — нет: там таскают #}
+    <div class="relative flex-1 overflow-hidden" @click.self="close()">
+      <img :src="current.url" :alt="current.name" draggable="false"
+           @mousedown.prevent="grab($event)" @wheel.prevent="onWheel($event)"
+           @dblclick="scale === 1 ? zoom(1) : fit()"
+           :style="{ transform: transform, cursor: scale > 1 ? (drag ? 'grabbing' : 'grab') : 'zoom-in' }"
+           class="absolute inset-0 m-auto max-w-full max-h-full object-contain select-none transition-transform duration-75">
+
+      <template x-if="items.length > 1">
+        <div>
+          <button type="button" @click="step(-1)" aria-label="Предыдущая"
+                  class="absolute left-2 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 text-white hover:bg-white/20">
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <button type="button" @click="step(1)" aria-label="Следующая"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 text-white hover:bg-white/20">
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>

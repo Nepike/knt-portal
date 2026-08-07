@@ -5,8 +5,8 @@ from .models import Comment, Material
 
 @admin.register(Material)
 class MaterialAdmin(admin.ModelAdmin):
-    list_display = ("title", "subject", "year", "approved", "uploader")
-    list_filter = ("approved", "subject")
+    list_display = ("title", "subject", "year", "status", "uploader")
+    list_filter = ("status", "subject")
     search_fields = ("title", "synopsis")
     autocomplete_fields = ("uploader",)
     filter_horizontal = ("teachers", "terms")

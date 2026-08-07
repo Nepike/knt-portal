@@ -97,6 +97,27 @@ html { color-scheme: light; }
     @apply sm:py-2.5 sm:text-sm;
   }
 
+  /* Текст материала: Markdown автора. Плагина typography у нас нет (он ставится через
+     npm, а мы живём на standalone-бинарнике), поэтому оформляем теги руками. */
+  .prose > * + * { @apply mt-3; }
+  .prose h1, .prose h2, .prose h3, .prose h4 { @apply font-bold mt-6 mb-2 leading-snug; }
+  .prose h1 { @apply text-xl; }
+  .prose h2 { @apply text-lg; }
+  .prose h3, .prose h4 { @apply text-base; }
+  .prose a { @apply text-accent hover:underline; }
+  .prose ul { @apply list-disc pl-6; }
+  .prose ol { @apply list-decimal pl-6; }
+  .prose li::marker { @apply text-slate-400; }
+  .prose code { @apply rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[13px]; }
+  .prose pre { @apply rounded-xl bg-slate-100 dark:bg-slate-800 p-3 overflow-x-auto; }
+  .prose pre code { @apply bg-transparent p-0; }
+  .prose blockquote { @apply border-l-4 border-slate-200 dark:border-slate-700 pl-4 text-slate-500 dark:text-slate-400; }
+  .prose img { @apply max-w-full h-auto rounded-xl; }
+  .prose hr { @apply border-slate-200 dark:border-slate-800; }
+  /* Таблица шире экрана не должна тащить за собой всю страницу. */
+  .prose table { @apply block w-full overflow-x-auto text-sm; }
+  .prose th, .prose td { @apply border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-left; }
+
   .nav-link {
     @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition;
   }

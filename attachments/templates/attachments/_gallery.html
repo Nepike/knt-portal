@@ -1,0 +1,50 @@
+{% comment %}
+  Галерея картинок. Свой x-data, а не общий с файлами: у картинок ни прогресса,
+  ни токенов — они маленькие и едут обычным multipart. От вьюхи ждёт saved_images
+  и image_errors.
+{% endcomment %}
+<div x-data="gallery({{ saved_images }})">
+  {# Удаление отложенное: помеченная картинка тускнеет и уходит при сохранении #}
+  <div x-sort="reorderSaved($item, $position)" class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+    <template x-for="image in saved" :key="image.pk">
+      <div x-sort:item="image.pk" class="relative aspect-square rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 touch-none cursor-grab active:cursor-grabbing"
+           :class="image.marked && 'opacity-40'">
+        <img :src="image.url" :alt="image.name" class="w-full h-full object-cover pointer-events-none">
+        <input type="hidden" name="image-order" :value="image.pk" :disabled="image.marked">
+        <input type="checkbox" :name="'delete-image-' + image.pk" x-model="image.marked" class="hidden">
+        <button type="button" @click="image.marked = !image.marked"
+                class="absolute top-1 right-1 w-7 h-7 rounded-full bg-slate-900/60 text-white inline-flex items-center justify-center hover:bg-slate-900/80"
+                :aria-label="image.marked ? 'Вернуть' : 'Удалить картинку'">
+          <i class="fa-solid text-xs" :class="image.marked ? 'fa-rotate-left' : 'fa-trash'"></i>
+        </button>
+      </div>
+    </template>
+
+    <template x-for="(image, index) in picked" :key="image.id">
+      <div class="relative aspect-square rounded-xl overflow-hidden border-2 border-accent/40">
+        <img :src="image.url" alt="" class="w-full h-full object-cover">
+        <button type="button" @click="remove(index)"
+                class="absolute top-1 right-1 w-7 h-7 rounded-full bg-slate-900/60 text-white inline-flex items-center justify-center hover:bg-slate-900/80"
+                aria-label="Убрать">
+          <i class="fa-solid fa-xmark text-xs"></i>
+        </button>
+      </div>
+    </template>
+  </div>
+
+  <div @dragover.prevent="over = true" @dragleave.prevent="over = false"
+       @drop.prevent="over = false; add($event.dataTransfer.files)" x-data="{ over: false }" class="mt-2">
+    <label class="flex flex-col items-center gap-1 rounded-2xl border-2 border-dashed px-4 py-6 text-center cursor-pointer transition border-slate-300 dark:border-slate-700"
+           :class="over && 'border-accent bg-accent/5'">
+      <input type="file" name="images" multiple accept="image/*" x-ref="images"
+             @change="add($event.target.files)" class="hidden">
+      <i class="fa-solid fa-images text-2xl text-slate-400"></i>
+      <span class="text-sm">Перетащи картинки сюда или нажми, чтобы выбрать</span>
+      <span class="text-xs text-slate-400">до {{ max_image_hint }} на картинку</span>
+    </label>
+  </div>
+
+  {% for error in image_errors %}
+  <p class="mt-2 text-xs text-rose-500">{{ error }}</p>
+  {% endfor %}
+</div>

@@ -1,9 +1,11 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import Count
+from django.urls import reverse
 from django.utils import timezone
 
-from core.models import Subject, Term
+from attachments.storage import media_storage
+from core.models import Moderated, Subject, Term
 from teachers.models import Teacher
 
 
@@ -11,7 +13,7 @@ def current_year():
     return timezone.now().year
 
 
-class Material(models.Model):
+class Material(Moderated):
     title = models.CharField("заголовок", max_length=100)
     synopsis = models.TextField("описание", blank=True)
     # TODO (frontend): редактор форматированного текста (формат хранения уточним позже)
@@ -27,7 +29,6 @@ class Material(models.Model):
     )
     hide_uploader = models.BooleanField("анонимно", default=False)
 
-    approved = models.BooleanField("одобрен", default=False)
     year = models.PositiveSmallIntegerField("год", default=current_year)
     created = models.DateTimeField("дата добавления", default=timezone.now)
 
@@ -41,6 +42,9 @@ class Material(models.Model):
 
     def __str__(self):
         return f"#{self.pk}: {self.title}"
+
+    def get_absolute_url(self):
+        return reverse("material_detail", args=[self.pk])
 
 
 class CommentQuerySet(models.QuerySet):
@@ -61,8 +65,9 @@ class Comment(models.Model):
     hide_author = models.BooleanField("анонимно", default=False)
 
     text = models.TextField("текст", blank=True)
-    # TODO (M2): image -> Cloudflare R2 (django-storages), пока локально
-    image = models.ImageField("изображение", upload_to="comments/images", null=True, blank=True)
+    image = models.ImageField(
+        "изображение", upload_to="comments/images", storage=media_storage, null=True, blank=True,
+    )
 
     liked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_comments", blank=True)
     disliked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="disliked_comments", blank=True)

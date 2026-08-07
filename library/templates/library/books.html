@@ -8,8 +8,15 @@
   <a href="{% url 'book_new' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i>Добавить книгу</a>
 </div>
 
-{# Один hx-get на всю форму: строка поиска шлёт input, селекты и сортировка — change (см. changed() в components.js) #}
-<form hx-get="{% url 'book_list' %}" hx-target="#book-list" hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">
+{% comment %}
+  Один hx-get на всю форму: строка поиска шлёт input, селекты и сортировка — change
+  (см. changed() в components.js). Адрес обновляет сама вьюха заголовком HX-Push-Url.
+  hx-history="false" запрещает класть страницу в кеш истории: htmx хранит там innerHTML,
+  и «назад» вернул бы пустое поле поиска при отфильтрованном списке. Вместо кеша —
+  честный перезапрос (refreshOnHistoryMiss в base.html), фильтры и так все в адресе.
+{% endcomment %}
+<form hx-get="{% url 'book_list' %}" hx-target="#book-list" hx-history="false"
+      hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">
   <div class="grid gap-3 sm:grid-cols-[1.4fr_1fr_.8fr]">
     <div class="relative">
       <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>

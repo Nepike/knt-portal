@@ -51,6 +51,26 @@ services:
       - ./media:/app/media       # bind-mount: nginx отдаёт /media с хоста
     restart: unless-stopped
 
+  # Фоновые задачи: почта, телеграм — всё, чего запрос пользователя ждать не должен.
+  # entrypoint переопределён, значит migrate/collectstatic из него не выполняются — и
+  # правильно: миграции накатывает web, двое одновременно только подрались бы.
+  worker:
+    logging: *logging
+    build:
+      context: .
+      args:
+        PROXY: ${PROXY:-}
+    entrypoint: ["celery", "-A", "knt", "worker", "-l", "info", "--concurrency", "2"]
+    env_file: .env
+    volumes:
+      - ./media:/app/media   # задачам с файлами нужен тот же диск, что и сайту
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   bot:
     logging: *logging
     build:

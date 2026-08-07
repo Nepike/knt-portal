@@ -4,6 +4,7 @@
 """
 import json
 import os
+from types import SimpleNamespace
 from unittest import mock
 
 from django.core import signing
@@ -15,9 +16,15 @@ from django.urls import reverse
 from library.models import Book
 from users.models import User
 
+from .media import media_url
 from .models import File
 from .storage import file_storage
 from .uploads import UPLOAD_SALT
+
+
+def media_url_for(key):
+    """media_url ждёт поле модели, а тут проверяется голый ключ хранилища."""
+    return media_url(SimpleNamespace(name=key))
 
 
 def make_user(email="u@t.local"):
@@ -77,6 +84,25 @@ class PresignTests(TestCase):
         self.assertEqual(self.ask().status_code, 409)
 
 
+class MediaImageTests(TestCase):
+    """Постоянный адрес картинки вместо подписанной на час ссылки хранилища."""
+
+    def setUp(self):
+        self.client.force_login(make_user())
+        self.key = file_storage().save("images/board.png", ContentFile(b"png"))
+
+    def test_redirect_leads_to_the_storage_and_may_be_cached(self):
+        response = self.client.get(media_url_for(self.key))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(self.key, response["Location"])
+        # Кеш чуть короче подписи R2: иначе браузер переиспользовал бы протухшую ссылку.
+        self.assertIn("max-age", response["Cache-Control"])
+
+    def test_tampered_token_is_not_found(self):
+        self.assertEqual(self.client.get(media_url_for(self.key) + "x/").status_code, 404)
+
+
 class AdoptUploadTests(TestCase):
     """Форма присылает подписанный токен вместо файла — файл уже в хранилище."""
 
@@ -130,7 +156,7 @@ class AdoptUploadTests(TestCase):
         self.assertFalse(File.objects.exists())
 
     def test_order_follows_the_rows_on_screen(self):
-        book = Book.objects.create(title="Фихтенгольц", approved=True, uploader=self.author)
+        book = Book.objects.create(title="Фихтенгольц", status=Book.Status.APPROVED, uploader=self.author)
         first, second, third = [
             File.objects.create(book=book, name=f"Том {n}.pdf", order=n - 1,
                                 file=ContentFile(b"x", name=f"tom{n}.pdf"))
@@ -144,7 +170,7 @@ class AdoptUploadTests(TestCase):
         self.assertEqual([f.name for f in book.files.all()], ["Том 3.pdf", "Том 1.pdf", "Том 2.pdf"])
 
     def test_new_file_lands_after_the_reordered_ones(self):
-        book = Book.objects.create(title="Книга", approved=True, uploader=self.author)
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.author)
         old = File.objects.create(book=book, name="Старый.pdf", order=0,
                                   file=ContentFile(b"x", name="old.pdf"))
         key = self.put(key="uploads/new/Новый.pdf")

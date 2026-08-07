@@ -1,0 +1,91 @@
+{% extends "core/base.html" %}
+{% load static text_extras %}
+
+{% block title %}{{ material.title }}{% endblock %}
+
+{% comment %}
+  KaTeX только здесь: он весит с шрифтами полмегабайта, и остальным страницам не нужен.
+  Порядок важен — math.js зовёт renderMathInElement из auto-render.
+{% endcomment %}
+{% block js %}
+<script defer src="{% static 'core/vendor/katex/katex.min.js' %}"></script>
+<script defer src="{% static 'core/vendor/katex/auto-render.min.js' %}"></script>
+<script defer src="{% static 'core/js/math.js' %}"></script>
+{% endblock %}
+
+{% block css %}<link href="{% static 'core/vendor/katex/katex.min.css' %}" rel="stylesheet">{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-3xl mx-auto">
+  <a href="{% url 'material_list' %}" class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+    <i class="fa-solid fa-arrow-left"></i>Материалы
+  </a>
+
+  <article class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6">
+    <div class="flex items-start gap-4">
+      <span class="w-14 h-14 rounded-xl shrink-0 inline-flex items-center justify-center bg-accent/10 text-accent text-2xl">
+        <i class="fa-solid fa-folder-open"></i>
+      </span>
+      <div class="min-w-0 flex-1">
+        <h1 class="text-xl sm:text-2xl font-bold leading-tight">{{ material.title }}</h1>
+        <p class="text-slate-500 dark:text-slate-400 mt-1">{{ material.subject.name }} · {{ material.year }}</p>
+      </div>
+      {% include "moderation/_badge.html" with item=material %}
+    </div>
+
+    {% if material.status == "rejected" and material.review_note %}
+    <p class="mt-4 rounded-xl bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
+      <b>Отклонено:</b> {{ material.review_note }}{% if may_edit %} Исправь и сохрани — материал снова уйдёт на проверку.{% endif %}
+    </p>
+    {% endif %}
+
+    <div class="flex flex-wrap gap-1.5 mt-4">
+      <a href="{% url 'material_list' %}?subject={{ material.subject.pk }}" class="rounded-full bg-accent/10 text-accent text-xs px-2.5 py-1 hover:bg-accent/20">{{ material.subject.name }}</a>
+      {% for teacher in material.teachers.all %}
+      <a href="{% url 'material_list' %}?teacher={{ teacher.pk }}" class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-1 hover:bg-slate-200 dark:hover:bg-slate-700">{{ teacher.short_name }}</a>
+      {% endfor %}
+      {% for term in material.terms.all %}
+      <a href="{% url 'material_list' %}?term={{ term.pk }}" class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-1 hover:bg-slate-200 dark:hover:bg-slate-700">{{ term }}</a>
+      {% endfor %}
+    </div>
+
+    {% if material.synopsis %}
+    <p class="mt-5 text-slate-600 dark:text-slate-300">{{ material.synopsis }}</p>
+    {% endif %}
+
+    {% if material.text %}
+    <div class="prose mt-5 leading-relaxed">{{ material.text|markdown }}</div>
+    {% endif %}
+
+    {% if material.images.all %}
+    {% include "attachments/_images.html" with images=material.images.all %}
+    {% endif %}
+
+    {% if material.files.all %}
+    <div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800">
+      <h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">
+        {{ material.files.all|length }} {{ material.files.all|length|plural:"файл,файла,файлов" }}
+      </h2>
+      {% for file in material.files.all %}{% include "attachments/_file.html" %}{% endfor %}
+    </div>
+    {% endif %}
+
+    {% if may_edit %}
+    <a href="{% url 'material_edit' material.pk %}" class="btn btn-secondary mt-5"><i class="fa-solid fa-pen"></i>Редактировать</a>
+    {% endif %}
+
+    {% if may_moderate and material.is_pending %}
+    {% url 'material_review' material.pk as review_url %}
+    {% include "moderation/_decide.html" %}
+    {% endif %}
+
+    <p class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400">
+      Добавил{% if material.hide_uploader or not material.uploader %} аноним{% else %}
+      <a href="{% url 'profile' material.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ material.uploader.name }} {{ material.uploader.surname }}</a>{% endif %}
+      · {{ material.created|date:"j E Y" }}
+    </p>
+  </article>
+
+  {% include "materials/_comments.html" %}
+</div>
+{% endblock %}

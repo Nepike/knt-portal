@@ -1,0 +1,14 @@
+{% comment %}
+  Общая шкала загрузки под кнопками формы. Тоже опирается на fileForm.
+  z-20 — выше накладки, иначе «Отменить» окажется под ней и не нажмётся.
+{% endcomment %}
+<div x-show="percent !== null" x-cloak class="relative z-20 mt-3">
+  <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+    <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: percent + '%' }"></div>
+  </div>
+  <div class="flex items-center gap-3 mt-1">
+    <p class="text-xs text-slate-400" x-text="percent < 100 ? `Загрузка… ${percent}%` : 'Сохраняем…'"></p>
+    <button type="button" x-show="percent < 100" @click="cancel()"
+            class="ml-auto text-xs text-slate-500 hover:text-rose-500">Отменить загрузку</button>
+  </div>
+</div>

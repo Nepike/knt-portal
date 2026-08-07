@@ -16,9 +16,7 @@
           {# after:inset-0 растягивает ссылку на всю карточку; ссылки файлов ниже по DOM и relative — они остаются кликабельными #}
           <a href="{% url 'book_detail' book.pk %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ book.title }}</a>
         </h3>
-        {% if not book.approved %}
-        <span class="shrink-0 rounded-full bg-amber-400/15 text-amber-600 dark:text-amber-400 text-[11px] font-medium px-2 py-0.5">на модерации</span>
-        {% endif %}
+        {% include "moderation/_badge.html" with item=book %}
         {% if book.year %}<span class="ml-auto shrink-0 text-sm text-slate-400">{{ book.year }}</span>{% endif %}
       </div>
       {% if book.authors %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ book.authors }}</p>{% endif %}

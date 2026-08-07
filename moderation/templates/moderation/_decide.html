@@ -1,0 +1,28 @@
+{% comment %}
+  Панель решения на странице самого объекта: из телеграма модератор приходит сюда,
+  смотрит файлы и решает не отходя. Ждёт review_url. Формы обычные, без htmx —
+  после решения нужен редирект с сообщением, а не подмена куска.
+  Причина обязательна: отказ без объяснения автор не сможет исправить.
+{% endcomment %}
+<div x-data="{ rejecting: false }" class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800">
+  <p class="text-sm font-semibold mb-2">Проверка</p>
+  <div class="flex flex-wrap items-center gap-2">
+    <form method="post" action="{{ review_url }}">
+      {% csrf_token %}
+      <input type="hidden" name="decision" value="approve">
+      <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i>Одобрить</button>
+    </form>
+    <button type="button" x-show="!rejecting" @click="rejecting = true" class="btn btn-ghost text-rose-500">
+      <i class="fa-solid fa-xmark"></i>Отклонить
+    </button>
+  </div>
+  <form method="post" action="{{ review_url }}" x-show="rejecting" x-cloak
+        class="flex flex-wrap items-center gap-2 mt-2">
+    {% csrf_token %}
+    <input type="hidden" name="decision" value="reject">
+    <input name="note" required maxlength="300" placeholder="Причина — её увидит автор"
+           class="min-w-0 flex-1 h-11 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition">
+    <button type="submit" class="btn btn-danger">Отклонить</button>
+    <button type="button" @click="rejecting = false" class="btn btn-ghost">Отмена</button>
+  </form>
+</div>

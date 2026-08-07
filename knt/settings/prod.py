@@ -36,6 +36,10 @@ CHANNEL_LAYERS = {
     }
 }
 
+# Тот же Redis, что и у шины чата, но другие базы (0 — шина, 1 — очередь, 2 — ответы).
+CELERY_BROKER_URL = "redis://redis:6379/1"
+CELERY_RESULT_BACKEND = "redis://redis:6379/2"
+
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True

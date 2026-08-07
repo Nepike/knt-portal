@@ -1,0 +1,8 @@
+{% if created %}📚 Новая книга{% else %}✏️ Книга отредактирована и вернулась на проверку{% endif %}: <a href="{{ url }}">{{ book.title }}</a>
+
+{% if book.authors %}<b>Авторы:</b> {{ book.authors }}
+{% endif %}{% if book.year %}<b>Год:</b> {{ book.year }}
+{% endif %}<b>Файлов:</b> {{ book.files.count }}
+{% if book.subjects.all %}<b>Предметы:</b> {% for subject in book.subjects.all %}{{ subject.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}{% if book.terms.all %}<b>Семестры:</b> {% for term in book.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if book.hide_uploader %} (на сайте анонимно){% endif %}

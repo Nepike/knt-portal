@@ -1,0 +1,34 @@
+{% extends "core/base.html" %}
+
+{% block title %}Материалы{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <h1 class="text-2xl font-bold">Материалы</h1>
+  <a href="{% url 'material_new' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i>Добавить материал</a>
+</div>
+
+{% comment %}
+  Фильтры и адрес устроены как в библиотеке: строка поиска шлёт input, селекты — change,
+  адрес обновляет сама вьюха заголовком HX-Push-Url (в него уходят только непустые поля).
+  hx-history="false" — снимок htmx хранит innerHTML, и «назад» вернул бы пустое поле
+  поиска при отфильтрованном списке; вместо кеша честный перезапрос.
+{% endcomment %}
+<form hx-get="{% url 'material_list' %}" hx-target="#material-list" hx-history="false"
+      hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">
+  <div class="grid gap-3 sm:grid-cols-[1.4fr_1fr_1fr_.8fr]">
+    <div class="relative">
+      <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>
+      <input name="q" value="{{ q }}" placeholder="Название или описание…" autocomplete="off"
+             class="w-full h-12 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-10 pr-4 text-sm outline-none focus:border-2 focus:border-accent transition">
+    </div>
+    {% include "core/inputs.html" with field=form.subject hide_optional=True %}
+    {% include "core/inputs.html" with field=form.teacher hide_optional=True %}
+    {% include "core/inputs.html" with field=form.term hide_optional=True %}
+  </div>
+</form>
+
+<div id="material-list" class="flex flex-col gap-3">
+  {% include "materials/_material_list.html" %}
+</div>
+{% endblock %}

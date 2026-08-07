@@ -337,6 +337,97 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  // Просмотрщик картинок: превью маленькие, по клику — крупно, со стрелками,
+  // зумом и перетаскиванием. Своими руками, а не библиотекой: нужного тут строк на сто,
+  // а любая готовая тянет за собой сборку, которой у нас нет.
+  Alpine.data("lightbox", (items = []) => ({
+    items,
+    index: 0,
+    open: false,
+    scale: 1,
+    x: 0,
+    y: 0,
+    drag: null, // { x, y } — точка захвата, пока тянем
+
+    show(index) {
+      this.index = index;
+      this.fit();
+      this.open = true;
+    },
+    close() {
+      this.open = false;
+      this.drag = null;
+    },
+    step(delta) {
+      this.index = (this.index + delta + this.items.length) % this.items.length;
+      this.fit(); // соседнюю картинку показываем целиком, а не в чужом масштабе
+    },
+    fit() {
+      this.scale = 1;
+      this.x = 0;
+      this.y = 0;
+    },
+    zoom(delta) {
+      const next = Math.min(Math.max(this.scale + delta, 1), 6);
+      if (next === 1) return this.fit(); // вернулись к целой картинке — снимаем и сдвиг
+      this.scale = next;
+    },
+    // Колесо масштабирует, а не листает страницу за спиной у оверлея.
+    onWheel(event) {
+      this.zoom(event.deltaY < 0 ? 0.3 : -0.3);
+    },
+    grab(event) {
+      if (this.scale === 1) return; // нечего таскать, картинка и так целиком
+      this.drag = { x: event.clientX - this.x, y: event.clientY - this.y };
+    },
+    move(event) {
+      if (!this.drag) return;
+      this.x = event.clientX - this.drag.x;
+      this.y = event.clientY - this.drag.y;
+    },
+    drop() {
+      this.drag = null;
+    },
+    get current() {
+      return this.items[this.index] ?? {};
+    },
+    get transform() {
+      return `translate(${this.x}px, ${this.y}px) scale(${this.scale})`;
+    },
+  }));
+
+  // Галерея материала. Проще fileForm: картинки маленькие и едут обычным multipart,
+  // поэтому ни подписанных ссылок, ни прогресса — только выбор, порядок и удаление.
+  Alpine.data("gallery", (saved = []) => ({
+    saved: saved.map((image) => ({ ...image, marked: false })),
+    picked: [], // { id, file, url } — url живёт до отправки формы, это objectURL
+
+    add(files) {
+      for (const file of files) {
+        if (!file.type.startsWith("image/")) continue;
+        if (this.picked.some((item) => item.file.name === file.name && item.file.size === file.size)) continue;
+        this.picked.push({ id: ++pickedFiles, file, url: URL.createObjectURL(file) });
+      }
+      this.syncInput();
+    },
+    remove(index) {
+      URL.revokeObjectURL(this.picked[index].url); // иначе картинка висит в памяти до перезагрузки
+      this.picked.splice(index, 1);
+      this.syncInput();
+    },
+    syncInput() {
+      const data = new DataTransfer(); // FileList только для чтения, собираем заново
+      for (const item of this.picked) data.items.add(item.file);
+      this.$refs.images.files = data.files;
+    },
+    // Порядок задаётся только у сохранённых: новые всегда встают в конец.
+    reorderSaved(pk, position) {
+      const from = this.saved.findIndex((image) => image.pk === pk);
+      if (from === -1 || from === position) return;
+      this.saved.splice(position, 0, ...this.saved.splice(from, 1));
+    },
+  }));
+
   // Переключатель сортировки списков. Значение живёт в hidden input формы,
   // change шлём вручную — по той же причине, что и в селектах (см. changed()).
   Alpine.data("segmented", (value) => ({

@@ -27,103 +27,7 @@
 
   <div>
     <h2 class="font-semibold mb-2">Файлы</h2>
-
-    {% comment %}
-      Строки сохранённых файлов рисует Alpine, а не шаблонный цикл: порядок меняется
-      перетаскиванием, а вместе со строками едут и скрытые input name="order".
-      Удаление отложенное — строка помечается и применяется при сохранении,
-      чтобы промах по кнопке не стоил файла.
-    {% endcomment %}
-    <div x-ref="list" x-sort="reorderSaved($item, $position)">
-      <template x-for="file in saved" :key="file.pk">
-        <div x-sort:item="file.pk" class="flex items-center gap-2 mb-2 rounded-lg"
-             :class="file.marked && 'opacity-50'">
-          <button type="button" x-sort:handle class="btn btn-ghost !px-1 shrink-0 touch-none cursor-grab active:cursor-grabbing"
-                  aria-label="Переставить">
-            <i class="fa-solid fa-grip-vertical text-slate-400"></i>
-          </button>
-          <span class="w-11 h-9 shrink-0 rounded-lg inline-flex items-center justify-center bg-slate-400/15 text-slate-500 text-[10px] font-bold"
-                x-text="file.extension || '—'"></span>
-          <input :name="'name-' + file.pk" x-model="file.name" maxlength="150" :disabled="file.marked"
-                 class="min-w-0 flex-1 h-11 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition"
-                 :class="file.marked && 'line-through'">
-          <span class="hidden sm:block w-20 text-xs text-slate-400 text-right" x-text="file.size"></span>
-          <input type="hidden" name="order" :value="file.pk" :disabled="file.marked">
-          <input type="checkbox" :name="'delete-' + file.pk" x-model="file.marked" class="hidden">
-          <button type="button" @click="file.marked = !file.marked" class="btn btn-ghost shrink-0"
-                  :aria-label="file.marked ? 'Вернуть' : 'Удалить файл'">
-            <i class="fa-solid" :class="file.marked ? 'fa-rotate-left' : 'fa-trash'"></i>
-          </button>
-        </div>
-      </template>
-    </div>
-
-    {% comment %}
-      Файлы, залитые в хранилище до того, как форма вернулась с ошибкой: токен едет
-      обратно скрытым полем, иначе человек заливал бы гигабайты повторно из-за опечатки.
-    {% endcomment %}
-    {% for item in pending %}
-    <div class="flex items-center gap-2 mb-2 px-2 py-2 rounded-lg bg-emerald-500/10">
-      <i class="fa-solid fa-circle-check text-emerald-500 px-2"></i>
-      <input name="uploaded-name" value="{{ item.name }}" maxlength="150"
-             class="min-w-0 flex-1 h-9 rounded-md bg-transparent px-2 text-sm outline-none border border-transparent hover:border-slate-300 dark:hover:border-slate-700 focus:border-accent focus:bg-white dark:focus:bg-slate-900 transition">
-      <span class="text-xs text-emerald-600 dark:text-emerald-400">загружено</span>
-      <input type="hidden" name="uploaded" value="{{ item.token }}">
-    </div>
-    {% endfor %}
-
-    <div @dragover.prevent="over = true" @dragleave.prevent="over = false"
-         @drop.prevent="over = false; add($event.dataTransfer.files)">
-      <label class="flex flex-col items-center gap-1 rounded-2xl border-2 border-dashed px-4 py-7 text-center cursor-pointer transition border-slate-300 dark:border-slate-700"
-             :class="over && 'border-accent bg-accent/5'">
-        <input type="file" name="files" multiple x-ref="input" @change="add($event.target.files)" class="hidden">
-        <i class="fa-solid fa-cloud-arrow-up text-2xl text-slate-400"></i>
-        <span class="text-sm">Перетащи файлы сюда или нажми, чтобы выбрать</span>
-        <span class="text-xs text-slate-400">до {{ max_size_hint }} на файл</span>
-      </label>
-
-      {% comment %}
-        Новые файлы тоже переставляются: порядок строк — это и порядок отправки,
-        из этого же списка собираются и файловый инпут, и скрытые токены.
-        Полоса загрузки — заливка самой строки: файл остаётся на месте и видно,
-        сколько от него уехало. Содержимое строки relative, иначе заливка накроет его.
-      {% endcomment %}
-      <div x-sort="reorderNew($item, $position)">
-        <template x-for="(file, index) in items" :key="file.id">
-          <div x-sort:item="file.id"
-               class="relative flex items-center gap-2 mt-2 px-2 py-2 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800/60">
-            <div class="absolute inset-y-0 left-0 bg-accent/20 transition-[width] duration-150"
-                 :style="{ width: (file.percent ?? 0) + '%' }"></div>
-            <button type="button" x-sort:handle class="relative btn btn-ghost !px-1 shrink-0 touch-none cursor-grab active:cursor-grabbing"
-                    aria-label="Переставить">
-              <i class="fa-solid" :class="file.done ? 'fa-circle-check text-emerald-500' : 'fa-grip-vertical text-slate-400'"></i>
-            </button>
-            {% comment %}
-              Имя правится сразу при загрузке. Поля идут парами со своим файлом:
-              uploaded-name — к токену, files-name — к файлу в multipart-инпуте.
-            {% endcomment %}
-            <input x-model="file.name" maxlength="150" :name="file.token ? 'uploaded-name' : 'files-name'"
-                   class="relative min-w-0 flex-1 h-9 rounded-md bg-transparent px-2 text-sm outline-none border border-transparent hover:border-slate-300 dark:hover:border-slate-700 focus:border-accent focus:bg-white dark:focus:bg-slate-900 transition">
-            <span class="relative text-xs whitespace-nowrap" :class="file.done ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'"
-                  x-text="file.done ? 'загружено' : (file.percent === null ? file.size : file.percent + '%')"></span>
-            {# токен живёт в строке: убрали строку — файл к книге не прицепится #}
-            <template x-if="file.token"><input type="hidden" name="uploaded" :value="file.token"></template>
-            <button type="button" x-show="file.percent === null || file.done" @click="remove(index)"
-                    class="relative text-slate-400 hover:text-rose-500 px-1" aria-label="Убрать">
-              <i class="fa-solid fa-xmark"></i>
-            </button>
-          </div>
-        </template>
-      </div>
-
-      <template x-for="error in errors" :key="error">
-        <p class="mt-2 text-xs text-rose-500" x-text="error"></p>
-      </template>
-    </div>
-
-    {% for error in file_errors %}
-    <p class="mt-2 text-xs text-rose-500">{{ error }}</p>
-    {% endfor %}
+    {% include "attachments/_uploader.html" %}
   </div>
 
   <div>
@@ -131,17 +35,6 @@
       <button type="submit" class="btn btn-primary" :disabled="percent !== null">{% if book %}Сохранить{% else %}Добавить книгу{% endif %}</button>
       <a href="{% if book %}{% url 'book_detail' book.pk %}{% else %}{% url 'book_list' %}{% endif %}" class="btn btn-ghost">Отмена</a>
     </div>
-
-    {# z-20 — выше накладки, иначе «Отменить» окажется под ней и не нажмётся #}
-    <div x-show="percent !== null" x-cloak class="relative z-20 mt-3">
-      <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-        <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: percent + '%' }"></div>
-      </div>
-      <div class="flex items-center gap-3 mt-1">
-        <p class="text-xs text-slate-400" x-text="percent < 100 ? `Загрузка… ${percent}%` : 'Сохраняем…'"></p>
-        <button type="button" x-show="percent < 100" @click="cancel()"
-                class="ml-auto text-xs text-slate-500 hover:text-rose-500">Отменить загрузку</button>
-      </div>
-    </div>
+    {% include "attachments/_upload_progress.html" %}
   </div>
 </form>

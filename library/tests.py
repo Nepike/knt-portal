@@ -33,9 +33,9 @@ class BookListTests(TestCase):
         cls.irodov = cls.book("Задачи по общей физике", "Иродов И. Е.", cls.physics, cls.second)
 
     @classmethod
-    def book(cls, title, authors, subject, term, approved=True, uploader=None):
+    def book(cls, title, authors, subject, term, status=Book.Status.APPROVED, uploader=None):
         book = Book.objects.create(
-            title=title, authors=authors, approved=approved, uploader=uploader or cls.author,
+            title=title, authors=authors, status=status, uploader=uploader or cls.author,
         )
         book.subjects.add(subject)
         book.terms.add(term)
@@ -53,13 +53,13 @@ class BookListTests(TestCase):
         self.assertContains(response, "Задачи по общей физике")
 
     def test_unapproved_is_visible_only_to_its_uploader(self):
-        draft = self.book("Черновик", "Некто", self.matan, self.first, approved=False)
+        draft = self.book("Черновик", "Некто", self.matan, self.first, status=Book.Status.PENDING)
         self.assertNotContains(self.get(), "Черновик")
 
         self.client.force_login(self.author)
         response = self.get()
         self.assertContains(response, "Черновик")
-        self.assertContains(response, "на модерации")
+        self.assertContains(response, "на проверке")
 
     def test_search_matches_title_and_author(self):
         self.assertContains(self.get(q="математич"), "Зорич")
@@ -83,6 +83,24 @@ class BookListTests(TestCase):
         self.assertContains(response, "Зорич")
         self.assertNotContains(response, "<html")  # без обвязки страницы
 
+    def htmx(self, **params):
+        return self.client.get(reverse("book_list"), params, headers={"HX-Request": "true"})
+
+    def test_filters_go_into_the_address(self):
+        response = self.htmx(q="зорич", subject=self.matan.pk, term="", sort="new")
+        pushed = response["HX-Push-Url"]
+        self.assertIn("q=%D0%B7%D0%BE%D1%80%D0%B8%D1%87", pushed)
+        self.assertIn(f"subject={self.matan.pk}", pushed)
+        self.assertIn("sort=new", pushed)
+        self.assertNotIn("term=", pushed)  # пустое в адрес не тащим
+
+    def test_empty_filters_give_a_clean_address(self):
+        self.assertEqual(self.htmx(q="", sort="")["HX-Push-Url"], reverse("book_list"))
+
+    def test_next_portion_leaves_the_address_alone(self):
+        # Иначе каждая догруженная порция — своя запись в истории.
+        self.assertNotIn("HX-Push-Url", self.htmx(q="зорич", page=2).headers)
+
 
 class SortingTests(TestCase):
     """Порядок книг: по скачиваниям, по свежести, по алфавиту."""
@@ -100,7 +118,7 @@ class SortingTests(TestCase):
 
     @classmethod
     def make(cls, title, downloads):
-        book = Book.objects.create(title=title, approved=True)
+        book = Book.objects.create(title=title, status=Book.Status.APPROVED)
         for n in downloads:
             File.objects.create(
                 book=book, name=f"{title}.pdf", downloads=n,
@@ -135,7 +153,7 @@ class PaginationTests(TestCase):
         cls.reader = make_user("r@t.local")
         cls.total = PAGE_SIZE + 5
         for n in range(cls.total):
-            Book.objects.create(title=f"Книга {n:02}", approved=True)
+            Book.objects.create(title=f"Книга {n:02}", status=Book.Status.APPROVED)
 
     def setUp(self):
         self.client.force_login(self.reader)
@@ -167,8 +185,8 @@ class BookDetailTests(TestCase):
         cls.reader = make_user("r@t.local")
         cls.author = make_user("a@t.local")
 
-    def make(self, files=1, approved=True):
-        book = Book.objects.create(title="Книга", approved=approved, uploader=self.author, hide_uploader=False)
+    def make(self, files=1, status=Book.Status.APPROVED):
+        book = Book.objects.create(title="Книга", status=status, uploader=self.author, hide_uploader=False)
         for n in range(files):
             File.objects.create(
                 book=book, name=f"Том {n}.pdf", order=n,
@@ -193,7 +211,7 @@ class BookDetailTests(TestCase):
         self.assertIn("Ещё 2 файла", body)
 
     def test_unapproved_page_is_hidden_from_strangers(self):
-        book = self.make(approved=False)
+        book = self.make(status=Book.Status.PENDING)
         self.client.force_login(self.reader)
         self.assertEqual(self.client.get(reverse("book_detail", args=[book.pk])).status_code, 404)
 
@@ -207,8 +225,8 @@ class FileTests(TestCase):
         cls.reader = make_user("r@t.local")
         cls.author = make_user("a@t.local")
 
-    def make_file(self, name="скан.pdf", stored="скан.pdf", approved=True):
-        book = Book.objects.create(title="Книга", approved=approved, uploader=self.author)
+    def make_file(self, name="скан.pdf", stored="скан.pdf", status=Book.Status.APPROVED):
+        book = Book.objects.create(title="Книга", status=status, uploader=self.author)
         return File.objects.create(
             book=book, name=name, uploader=self.author,
             file=SimpleUploadedFile(stored, b"%PDF-1.4 test"),
@@ -224,7 +242,7 @@ class FileTests(TestCase):
         self.assertEqual(file.downloads, 1)
 
     def test_file_of_unapproved_book_is_hidden_from_strangers(self):
-        file = self.make_file(approved=False)
+        file = self.make_file(status=Book.Status.PENDING)
         self.client.force_login(self.reader)
         self.assertEqual(self.client.get(reverse("file_download", args=[file.pk])).status_code, 404)
 
@@ -287,7 +305,7 @@ class BookEditTests(TestCase):
         book = Book.objects.get(title="Механика")
         self.assertRedirects(response, reverse("book_detail", args=[book.pk]))
         self.assertEqual(book.uploader, self.author)
-        self.assertFalse(book.approved)
+        self.assertTrue(book.is_pending)
         self.assertEqual(book.year, 2004)
         self.assertEqual(list(book.subjects.all()), [self.subject])
 
@@ -297,7 +315,7 @@ class BookEditTests(TestCase):
 
     def test_moderator_publishes_at_once(self):
         self.create(self.moderator)
-        self.assertTrue(Book.objects.get(title="Механика").approved)
+        self.assertTrue(Book.objects.get(title="Механика").is_published)
 
     def test_uploaded_files_keep_their_names(self):
         self.create(self.author, files=[upload("Ландау том 1.pdf"), upload("Задачи.djvu")])
@@ -366,7 +384,7 @@ class BookEditTests(TestCase):
         self.client.force_login(self.stranger)
         self.assertEqual(self.client.get(reverse("book_edit", args=[book.pk])).status_code, 404)  # ещё и не видна
 
-        Book.objects.filter(pk=book.pk).update(approved=True)
+        Book.objects.filter(pk=book.pk).update(status=Book.Status.APPROVED)
         self.assertEqual(self.client.get(reverse("book_edit", args=[book.pk])).status_code, 403)
         self.assertEqual(self.client.post(reverse("book_delete", args=[book.pk])).status_code, 403)
         self.assertTrue(Book.objects.filter(pk=book.pk).exists())

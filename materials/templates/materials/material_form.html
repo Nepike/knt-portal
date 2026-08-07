@@ -1,0 +1,35 @@
+{% extends "core/base.html" %}
+{% load static %}
+
+{% block title %}{% if material %}Редактирование материала{% else %}Новый материал{% endif %}{% endblock %}
+
+{# Перетаскивание файлов нужно только здесь — на остальных страницах плагин не грузим #}
+{% block plugins %}<script defer src="{% static 'core/vendor/alpine-sort.min.js' %}"></script>{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-2xl mx-auto">
+  <a href="{% if material %}{% url 'material_detail' material.pk %}{% else %}{% url 'material_list' %}{% endif %}"
+     class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+    <i class="fa-solid fa-arrow-left"></i>{% if material %}К материалу{% else %}Материалы{% endif %}
+  </a>
+  <h1 class="text-2xl font-bold mt-4 mb-6">{% if material %}Редактирование материала{% else %}Новый материал{% endif %}</h1>
+
+  {% include "materials/_material_form.html" %}
+
+  {% if material %}
+  <div x-data="{ confirming: false }" class="mt-8 pt-5 border-t border-slate-200 dark:border-slate-800">
+    <button type="button" x-show="!confirming" @click="confirming = true" class="btn btn-ghost text-rose-500">
+      <i class="fa-solid fa-trash"></i>Удалить материал
+    </button>
+    <div x-show="confirming" x-cloak class="flex flex-wrap items-center gap-3">
+      <span class="text-sm">Удалить материал вместе с файлами?</span>
+      <form method="post" action="{% url 'material_delete' material.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">Удалить</button>
+      </form>
+      <button type="button" @click="confirming = false" class="btn btn-ghost">Отмена</button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

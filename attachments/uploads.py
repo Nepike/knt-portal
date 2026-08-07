@@ -6,7 +6,8 @@ from django.conf import settings
 from django.core import signing
 from django.urls import reverse
 
-from .models import File, human_size
+from .media import media_url
+from .models import File, Image, human_size
 from .storage import file_storage
 
 # Через приложение файл держит воркер и место на диске — лимит скромный.
@@ -14,6 +15,8 @@ MAX_FILE_SIZE = 200 * 1024 * 1024
 # Прямо в R2 упирается только в потолок одиночного PUT (около 5 ГБ);
 # TODO: больше — только multipart, подписывать каждую часть отдельно.
 MAX_DIRECT_SIZE = 4 * 1024 * 1024 * 1024
+# Картинки галереи идут обычным multipart и держат воркер — им хватит и десятки.
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
 # Медиа отдаётся с домена сайта: html/svg/js в браузере выполнились бы как код сайта.
 # Второй рубеж — Content-Disposition: attachment на /media/ в nginx.
 FORBIDDEN_EXTENSIONS = {"html", "htm", "xhtml", "svg", "js", "mjs", "exe", "msi", "bat", "cmd", "sh"}
@@ -48,6 +51,22 @@ def saved_files(owner):
         [{"pk": f.pk, "name": f.name, "extension": f.extension.upper(), "size": f.human_size()} for f in files],
         ensure_ascii=False,
     )
+
+
+def saved_images(owner):
+    """Уже сохранённые картинки для Alpine-компонента gallery."""
+    images = owner.images.all() if owner else []
+    return json.dumps(
+        [{"pk": i.pk, "url": media_url(i.image), "name": i.name} for i in images], ensure_ascii=False,
+    )
+
+
+def check_images(uploads):
+    """Ошибки по картинкам галереи. Что это вообще картинка, проверит ImageField."""
+    return [
+        f"«{upload.name}» больше {human_size(MAX_IMAGE_SIZE)}"
+        for upload in uploads if upload.size > MAX_IMAGE_SIZE
+    ]
 
 
 def check_name(name):
@@ -142,6 +161,32 @@ def _adopt(token, owner, request, order, name=""):
         name=(name or payload["name"])[:150], file=payload["key"], size=size,
         uploader=request.user, order=order,
     )
+
+
+def sync_images(request, owner):
+    """Галерея: удаление помеченных, порядок и приём новых.
+
+    Проще файлов: картинки маленькие, поэтому идут обычным multipart через приложение,
+    без подписанных ссылок и прогресса. Поле — images, порядок — image-order.
+    """
+    for image in owner.images.all():
+        if request.POST.get(f"delete-image-{image.pk}"):
+            image.delete()  # post_delete снесёт и сам блоб
+
+    by_pk = {image.pk: image for image in owner.images.all()}
+    for index, pk in enumerate(request.POST.getlist("image-order")):
+        image = by_pk.get(int(pk)) if pk.isdigit() else None
+        if image and image.order != index:
+            image.order = index
+            image.save(update_fields=["order"])
+
+    order = len(by_pk)
+    for upload in request.FILES.getlist("images"):
+        Image.objects.create(
+            **{owner._meta.model_name: owner},
+            name=upload.name[:150], image=upload, uploader=request.user, order=order,
+        )
+        order += 1
 
 
 def sync_files(request, owner):

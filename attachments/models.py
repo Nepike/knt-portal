@@ -101,8 +101,7 @@ class Image(models.Model):
     # TODO (shop): product FK на shop.Product (картинка товара) — добавить при создании shop
 
     name = models.CharField("название", max_length=150, blank=True)
-    # TODO (M2): image -> Cloudflare R2 (django-storages), пока локально
-    image = models.ImageField("изображение", upload_to=image_upload_to)
+    image = models.ImageField("изображение", upload_to=image_upload_to, storage=media_storage)
     size = models.PositiveBigIntegerField("размер (байт)", null=True, blank=True)
     order = models.PositiveIntegerField("порядок", default=0)
 

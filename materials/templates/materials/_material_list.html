@@ -1,0 +1,75 @@
+{% load text_extras %}
+{% comment %}
+  Материалы сгруппированы по годам: год для материала — это когда он был актуален,
+  поэтому свежие сверху и год виден сразу. regroup собирает только ИДУЩИЕ ПОДРЯД
+  элементы, чего и надо — список уже отсортирован по году.
+{% endcomment %}
+{% if page.number == 1 and page.paginator.count %}
+<p class="-mb-1 text-sm text-slate-400">{{ page.paginator.count }} {{ page.paginator.count|plural:"материал,материала,материалов" }}</p>
+{% endif %}
+
+{% regroup materials by year as years %}
+{% for group in years %}
+{# заголовок года пропускаем, если порция начинается тем же годом, которым кончилась прошлая #}
+{% if not forloop.first or group.grouper != carry_year %}
+<div class="flex items-center gap-3 pt-2">
+  <h2 class="text-lg font-bold shrink-0">{{ group.grouper }}</h2>
+  <span class="h-px flex-1 bg-slate-200 dark:bg-slate-800"></span>
+</div>
+{% endif %}
+
+{% for material in group.list %}
+<article class="relative flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 transition hover:shadow-md">
+  <div class="flex items-start gap-3">
+    <span class="w-10 h-10 rounded-lg shrink-0 inline-flex items-center justify-center bg-accent/10 text-accent">
+      <i class="fa-solid fa-folder-open"></i>
+    </span>
+
+    <div class="min-w-0 flex-1">
+      <div class="flex items-start gap-2">
+        <h3 class="font-semibold leading-snug">
+          {# after:inset-0 растягивает ссылку на всю карточку #}
+          <a href="{% url 'material_detail' material.pk %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ material.title }}</a>
+        </h3>
+        {% include "moderation/_badge.html" with item=material %}
+      </div>
+
+      {% if material.synopsis %}
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{{ material.synopsis }}</p>
+      {% endif %}
+
+      <div class="flex flex-wrap gap-1.5 mt-2">
+        <span class="rounded-full bg-accent/10 text-accent text-xs px-2.5 py-0.5">{{ material.subject.name }}</span>
+        {% for teacher in material.teachers.all %}
+        <span class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-0.5">{{ teacher.short_name }}</span>
+        {% endfor %}
+        {% for term in material.terms.all %}
+        <span class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-0.5">{{ term }}</span>
+        {% endfor %}
+      </div>
+
+      {% if material.files_count %}
+      <p class="text-xs text-slate-400 mt-2">
+        <i class="fa-solid fa-paperclip"></i>
+        {{ material.files_count }} {{ material.files_count|plural:"файл,файла,файлов" }}
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</article>
+{% endfor %}
+{% endfor %}
+
+{% if not materials %}
+<p class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-400">
+  Ничего не нашлось
+</p>
+{% endif %}
+
+{% if page.has_next %}
+{# маячок: попал в зону видимости — подтянул следующую порцию (фильтры едут в querystring) #}
+<div class="py-4 text-center text-slate-400"
+     hx-get="{% querystring page=page.next_page_number %}" hx-trigger="intersect once" hx-swap="outerHTML">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</div>
+{% endif %}

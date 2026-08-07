@@ -5,8 +5,8 @@ from .models import Book
 
 @admin.register(Book)
 class BookAdmin(admin.ModelAdmin):
-    list_display = ("title", "authors", "year", "approved", "uploader")
-    list_filter = ("approved",)
+    list_display = ("title", "authors", "year", "status", "uploader")
+    list_filter = ("status",)
     search_fields = ("title", "authors")
     autocomplete_fields = ("uploader",)
     filter_horizontal = ("subjects", "terms")

@@ -5,7 +5,9 @@ from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
+from .media import MEDIA_CACHE, media_key
 from .models import File, human_size
+from .storage import file_storage
 from .uploads import MAX_DIRECT_SIZE, check_name, direct_upload, sign_upload
 
 
@@ -14,13 +16,25 @@ def download(request, pk):
     Работает одинаково для локального диска и для R2, меняется лишь url."""
     file = get_object_or_404(File.objects.select_related("book", "material"), pk=pk)
     owner = file.book or file.material
-    if owner and not owner.approved and owner.uploader_id != request.user.pk:
+    if owner and not owner.is_published and owner.uploader_id != request.user.pk:
         # Право берём по владельцу: library.change_book или materials.change_material.
         if not request.user.has_perm(f"{owner._meta.app_label}.change_{owner._meta.model_name}"):
             raise Http404
 
     File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
     return redirect(file.file.url)
+
+
+def media_image(request, token):
+    """Картинку отдаёт хранилище, мы только подставляем свежую подписанную ссылку.
+    Байты через приложение не идут — в галерее их было бы слишком много."""
+    key = media_key(token)
+    if key is None:
+        raise Http404
+
+    response = redirect(file_storage().url(key))
+    response["Cache-Control"] = f"private, max-age={MEDIA_CACHE}"
+    return response
 
 
 @require_POST

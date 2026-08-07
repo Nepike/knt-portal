@@ -1,0 +1,9 @@
+{% comment %}
+  Метка статуса. Общая для книг и будущих материалов, поэтому объект зовётся item:
+  {% include "moderation/_badge.html" with item=book %}
+{% endcomment %}
+{% if not item.is_published %}
+<span class="shrink-0 rounded-full text-[11px] font-medium px-2 py-0.5
+             {% if item.is_pending %}bg-amber-400/15 text-amber-600 dark:text-amber-400
+             {% else %}bg-rose-500/15 text-rose-600 dark:text-rose-400{% endif %}">{{ item.get_status_display }}</span>
+{% endif %}

@@ -1,0 +1,6 @@
+from django.apps import AppConfig
+
+
+class TelegramConfig(AppConfig):
+    name = "telegram"
+    verbose_name = "телеграм"

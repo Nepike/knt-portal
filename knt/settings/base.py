@@ -25,6 +25,8 @@ LOCAL_APPS = [
     "materials",
     "library",
     "attachments",
+    "telegram",
+    "moderation",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -118,11 +120,26 @@ LOGIN_REDIRECT_URL = "/demo/"  # TODO: сменить на главную, ко�
 LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"
+# Django отдаёт письмо в очередь, а настоящей отправкой занимается воркер —
+# бекендом из EMAIL_DELIVERY_BACKEND (в dev он переопределён на консоль).
+EMAIL_BACKEND = "core.mail.QueuedEmailBackend"
+EMAIL_DELIVERY_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
-# Шина событий чата (только prod, dev держит слой в памяти). socket_timeout ОБЯЗАТЕЛЕН:
-# в redis-py 8 у него впервые появилось значение по умолчанию — 5с, ровно столько же
-# channels_redis ждёт сообщение блокирующим чтением; таймеры гонятся и рвут сокет.
+# Шина событий чата (только prod, dev держит слой в памяти). socket_timeout задаём явно:
+# он должен быть заметно больше, чем channels_redis ждёт сообщение блокирующим чтением,
+# иначе таймеры гонятся и рвут сокет (ловили это на redis-py с дефолтом в 5с).
 REDIS_HOSTS = [{"address": "redis://redis:6379/0", "socket_timeout": 30}]  # redis — имя сервиса из compose
 
+# Фоновые задачи. Всё, что ходит в чужую сеть и может подвиснуть, — почта, телеграм —
+# уезжает сюда, чтобы запрос пользователя не ждал чужой сервер. Адрес брокера в dev/prod.
+CELERY_TASK_IGNORE_RESULT = True  # почти всё «выстрелил и забыл»; кому нужен ответ — ignore_result=False
+CELERY_RESULT_EXPIRES = 3600  # ответы редки и нужны недолго, копить их в Redis незачем
+CELERY_TASK_SOFT_TIME_LIMIT = 60  # задача получает исключение и успевает прибраться
+CELERY_TASK_TIME_LIMIT = 120  # не среагировала — воркер убивает процесс
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # Redis может подняться позже воркера
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # логирование настраивает Django (см. prod.LOGGING)
+CELERY_TIMEZONE = TIME_ZONE  # понадобится расписаниям beat: crontab считает по нему
+
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
+TELEGRAM_CONSOLE = False  # dev печатает сообщения вместо отправки, как и письма
 PROXY = env("PROXY", default="")  # общий прокси для заблокированных ресурсов

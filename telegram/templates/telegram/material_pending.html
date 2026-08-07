@@ -1,0 +1,9 @@
+{% if created %}📁 Новый материал{% else %}✏️ Материал отредактирован и вернулся на проверку{% endif %}: <a href="{{ url }}">{{ material.title }}</a>
+
+{% if material.synopsis %}{{ material.synopsis }}
+{% endif %}<b>Предмет:</b> {{ material.subject.name }}
+<b>Год:</b> {{ material.year }}
+<b>Файлов:</b> {{ material.files.count }}
+{% if material.teachers.all %}<b>Преподаватели:</b> {% for teacher in material.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}{% if material.terms.all %}<b>Семестры:</b> {% for term in material.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if material.hide_uploader %} (на сайте анонимно){% endif %}

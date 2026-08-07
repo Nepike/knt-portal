@@ -1,9 +1,14 @@
-{% load static %}
+{% load static moderation_extras %}
 <!DOCTYPE html>
 <html lang="ru" class="theme-{{ site_theme }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% comment %}
+    «Назад» перерисовываем с сервера. Снимок htmx — это innerHTML, а набранный текст
+    и состояние Alpine живут в свойствах узлов: из снимка поля вернулись бы пустыми.
+  {% endcomment %}
+  <meta name="htmx-config" content='{"refreshOnHistoryMiss": true}'>
   {% block meta %}{% endblock %}
   <title>{% block title %}{% endblock %} - КНТ МФТИ - Студенческий сайт</title>
   <link rel="icon" href="{% static 'core/img/favicon.ico' %}" type="image/x-icon">
@@ -25,6 +30,8 @@
   {# Плагины Alpine — сюда: они вешаются на alpine:init, значит грузиться должны ДО ядра #}
   {% block plugins %}{% endblock %}
   <script defer src="{% static 'core/vendor/alpine.min.js' %}"></script>
+  {# Скрипты, нужные не всем страницам (KaTeX и т.п.) — тоже defer, порядок сохранится #}
+  {% block js %}{% endblock %}
 
   <link href="{% static 'core/css/base.css' %}" rel="stylesheet">
   {% block css %}{% endblock %}
@@ -48,12 +55,27 @@
             <i class="fa-solid fa-comment"></i>Сообщения
             {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
           </a>
-          <a href="#" class="nav-link"><i class="fa-solid fa-folder"></i>Материалы</a>
+          <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
+
+          {% comment %}
+            None — не модератор, ссылки быть не должно; 0 — модератор, но очередь пуста.
+            Имя с приставкой не случайно: переменная, заведённая тут через as, видна
+            и внутри block content, а там уже живут свои (в форме книги — pending).
+          {% endcomment %}
+          {% review_pending as moderation_count %}
+          {% if moderation_count is not None %}
+          <a href="{% url 'review_queue' %}" class="nav-link {% if request.resolver_match.url_name == 'review_queue' %}nav-link-active{% endif %}">
+            <i class="fa-solid fa-clipboard-check text-lg"></i>Модерация
+            {% if moderation_count %}
+            <span class="ml-auto inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-amber-500 text-white dark:text-slate-950 text-xs font-bold">{{ moderation_count }}</span>
+            {% endif %}
+          </a>
+          {% endif %}
 
           <a href="#" class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>
           <a href="#" class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Закладки?</a>
