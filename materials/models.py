@@ -1,10 +1,9 @@
 from django.conf import settings
 from django.db import models
-from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
 
-from attachments.storage import media_storage
+from attachments.storage import media_storage, random_key
 from core.models import Moderated, Subject, Term
 from teachers.models import Teacher
 
@@ -13,11 +12,14 @@ def current_year():
     return timezone.now().year
 
 
+def comment_image_to(instance, filename):
+    return random_key("comments", filename)
+
+
 class Material(Moderated):
     title = models.CharField("заголовок", max_length=100)
     synopsis = models.TextField("описание", blank=True)
-    # TODO (frontend): редактор форматированного текста (формат хранения уточним позже)
-    text = models.TextField("текст", blank=True)
+    text = models.TextField("текст", blank=True)  # markdown, рисуется фильтром |markdown
 
     subject = models.ForeignKey(Subject, verbose_name="предмет", on_delete=models.PROTECT, related_name="materials")
     teachers = models.ManyToManyField(Teacher, verbose_name="преподаватели", related_name="materials", blank=True)
@@ -47,14 +49,6 @@ class Material(Moderated):
         return reverse("material_detail", args=[self.pk])
 
 
-class CommentQuerySet(models.QuerySet):
-    def with_like_counts(self):
-        return self.annotate(
-            likes_count=Count("liked_users", distinct=True),
-            dislikes_count=Count("disliked_users", distinct=True),
-        )
-
-
 class Comment(models.Model):
     material = models.ForeignKey(Material, verbose_name="материал", on_delete=models.CASCADE, related_name="comments")
     parent = models.ForeignKey(
@@ -66,15 +60,13 @@ class Comment(models.Model):
 
     text = models.TextField("текст", blank=True)
     image = models.ImageField(
-        "изображение", upload_to="comments/images", storage=media_storage, null=True, blank=True,
+        "изображение", upload_to=comment_image_to, storage=media_storage, null=True, blank=True,
     )
 
     liked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_comments", blank=True)
     disliked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="disliked_comments", blank=True)
 
     created = models.DateTimeField("создан", default=timezone.now)
-
-    objects = CommentQuerySet.as_manager()
 
     class Meta:
         verbose_name = "комментарий"

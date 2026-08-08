@@ -1,11 +1,10 @@
 {% load text_extras attachment_extras %}
 {% comment %}
   Галерея на странице: превью сеткой, по клику — просмотрщик. Ждёт images.
-  Адреса идут через фильтр media: подпись R2 живёт час и меняется на каждом рендере,
-  вклеивать её в разметку нельзя (см. attachments/media.py).
+  Адреса идут через фильтр media — см. attachments/media.py.
 {% endcomment %}
 <div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800"
-     x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media }}', name: '{{ image.name|escapejs }}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">
+     x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media|escapejs }}', name: '{{ image.name|escapejs }}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">
   <h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2">
     {{ images|length }} {{ images|length|plural:"изображение,изображения,изображений" }}
   </h2>
@@ -19,10 +18,7 @@
     {% endfor %}
   </div>
 
-  {% comment %}
-    Просмотрщик. Пока открыт, страницу под ним скроллить нельзя — иначе колесо,
-    которым здесь масштабируют, уезжало бы вместе с фоном.
-  {% endcomment %}
+  {# Пока просмотрщик открыт, фон не скроллим: колесо здесь масштабирует #}
   <div x-show="open" x-cloak x-effect="document.body.style.overflow = open ? 'hidden' : ''"
        @keydown.escape.window="close()"
        @keydown.arrow-left.window="open && step(-1)"
@@ -33,20 +29,22 @@
       <span class="text-sm" x-text="`${index + 1} / ${items.length}`"></span>
       <span class="text-sm truncate" x-text="current.name"></span>
       <div class="ml-auto flex items-center gap-1">
-        <button type="button" @click="zoom(-0.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Отдалить"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
-        <button type="button" @click="zoom(0.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Приблизить"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+        <button type="button" @click="zoomAt(1 / 1.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Отдалить"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+        <button type="button" @click="zoomAt(1.5)" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Приблизить"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
         <a :href="current.url" target="_blank" rel="noopener" class="w-9 h-9 rounded-lg hover:bg-white/10 inline-flex items-center justify-center" aria-label="Открыть отдельно"><i class="fa-solid fa-up-right-from-square"></i></a>
         <button type="button" @click="close()" class="w-9 h-9 rounded-lg hover:bg-white/10" aria-label="Закрыть"><i class="fa-solid fa-xmark text-lg"></i></button>
       </div>
     </div>
 
-    {# Клик по пустому месту закрывает, по самой картинке — нет: там таскают #}
-    <div class="relative flex-1 overflow-hidden" @click.self="close()">
-      <img :src="current.url" :alt="current.name" draggable="false"
-           @mousedown.prevent="grab($event)" @wheel.prevent="onWheel($event)"
-           @dblclick="scale === 1 ? zoom(1) : fit()"
+    {# Клик по пустому месту закрывает, по самой картинке — нет: там зумят и таскают #}
+    <div x-ref="frame" class="relative flex-1 overflow-hidden" @click.self="close()">
+      {# Плавность только когда НЕ тянем: иначе анимируется каждый сдвиг и граб дёргается #}
+      <img x-ref="picture" :src="current.url" :alt="current.name" draggable="false"
+           @mousedown.prevent="grab($event)" @click="onClick($event)" @wheel.prevent="onWheel($event)"
+           @touchstart.passive="grab($event)" @touchmove.prevent="move($event)" @touchend="drop()"
            :style="{ transform: transform, cursor: scale > 1 ? (drag ? 'grabbing' : 'grab') : 'zoom-in' }"
-           class="absolute inset-0 m-auto max-w-full max-h-full object-contain select-none transition-transform duration-75">
+           :class="drag ? '' : 'transition-transform duration-150'"
+           class="absolute inset-0 m-auto max-w-full max-h-full object-contain select-none will-change-transform">
 
       <template x-if="items.length > 1">
         <div>

@@ -62,6 +62,18 @@ class Moderated(models.Model):
         self.reviewed_by = None
         self.reviewed_at = None
 
+    def revise(self, editor, moderator):
+        """Что делает с решением сама правка. Зовётся ДО save: новое узнаём по пустому pk.
+
+        Не-модератор возвращает вещь в очередь — иначе одобренное можно было бы тихо
+        подменить. Модератор, правя своё новое или отклонённое, публикует: замечание он
+        и устраняет. «На проверке» не трогаем — решение остаётся отдельным шагом.
+        """
+        if not moderator:
+            self.send_to_review()
+        elif self.pk is None or self.status == self.Status.REJECTED:
+            self.approve(editor)
+
 
 class Subject(models.Model):
     name = models.CharField("название", max_length=50)

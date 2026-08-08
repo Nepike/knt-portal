@@ -448,6 +448,56 @@ class CommentTests(TestCase):
 
         self.assertTrue(Comment.objects.get().image)
 
+    def test_vote_keeps_the_replies_on_screen(self):
+        # Карточка возвращается из ленты, а не собирается заново: иначе у корня
+        # не оказывалось бы ответов и они пропадали от простого лайка.
+        self.add(text="корень")
+        root = Comment.objects.get()
+        self.add(text="ответ", parent=root.pk)
+
+        response = self.client.post(reverse("comment_like", args=[root.pk]))
+
+        self.assertContains(response, "ответ")
+
+    def test_huge_comment_image_is_refused(self):
+        with mock.patch("attachments.uploads.MAX_IMAGE_SIZE", 10):
+            response = self.add(image=make_image())
+
+        self.assertFalse(Comment.objects.exists())
+        self.assertContains(response, "больше")
+
+    def test_failed_reply_stays_in_its_own_branch(self):
+        self.add(text="корень")
+        root = Comment.objects.get()
+
+        response = self.add(text="   ", parent=root.pk)
+
+        # Ошибка приезжает прицепленной к своей ветке, а не в композер наверху —
+        # иначе тот же текст подставился бы во все формы ответа разом.
+        self.assertContains(response, "Пустой комментарий")
+        self.assertContains(response, "replying: true")
+
+    def test_comment_of_a_hidden_material_is_out_of_reach(self):
+        draft = Material.objects.create(
+            title="Черновик", subject=self.subject, year=2025,
+            status=Material.Status.PENDING, uploader=self.author,
+        )
+        comment = Comment.objects.create(material=draft, author=self.author, text="тайна")
+
+        self.assertEqual(self.client.post(reverse("comment_like", args=[comment.pk])).status_code, 404)
+
+    def test_vote_keeps_the_addressee_label(self):
+        self.add(text="корень")
+        root = Comment.objects.get()
+        self.add(text="ответ", parent=root.pk)
+        reply = Comment.objects.get(text="ответ")
+        self.add(text="глубокий", parent=reply.pk)
+        deep = Comment.objects.get(text="глубокий")
+
+        response = self.client.post(reverse("comment_like", args=[deep.pk]))
+
+        self.assertContains(response, f"#comment-{reply.pk}")
+
     def test_vote_toggles_and_switches(self):
         self.add(text="норм")
         comment = Comment.objects.get()

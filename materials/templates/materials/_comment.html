@@ -3,7 +3,8 @@
   Один комментарий. Ответы лежат внутри карточки, поэтому удаление корня уносит
   и их — и на экране, и в базе (каскад по parent).
 {% endcomment %}
-<article id="comment-{{ c.pk }}" x-data="{ replying: false }"
+{# reply_form приезжает только у той ветки, чей ответ не прошёл проверку — её и открываем #}
+<article id="comment-{{ c.pk }}" x-data="{ replying: {{ c.reply_form|yesno:'true,false' }} }"
          class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
   <div class="flex items-start gap-3">
     {% if c.hide_author %}
@@ -16,7 +17,7 @@
     {% else %}
     <a href="{% url 'profile' c.author_id %}" class="w-9 h-9 rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700 shrink-0 inline-flex">
       {% if c.author.photo %}
-      <img src="{{ c.author.photo.url }}" alt="" class="w-full h-full object-cover">
+      <img src="{{ c.author.photo|media }}" alt="" class="w-full h-full object-cover">
       {% else %}
       <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-medium">{{ c.author.surname|slice:":1" }}{{ c.author.name|slice:":1" }}</span>
       {% endif %}
@@ -44,11 +45,11 @@
 
   {% if c.text %}<div class="prose text-sm mt-3">{{ c.text|markdown }}</div>{% endif %}
 
-  {% if c.image %}
-  <a href="{{ c.image|media }}" target="_blank" rel="noopener" class="block mt-3 max-w-xs rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
-    <img src="{{ c.image|media }}" alt="" loading="lazy" class="w-full h-auto">
+  {% if c.image %}{% with url=c.image|media %}
+  <a href="{{ url }}" target="_blank" rel="noopener" class="block mt-3 max-w-xs rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
+    <img src="{{ url }}" alt="" loading="lazy" class="w-full h-auto">
   </a>
-  {% endif %}
+  {% endwith %}{% endif %}
 
   <div class="flex items-center justify-between gap-4 mt-3">
     <div class="flex gap-4 text-sm">
@@ -77,7 +78,7 @@
         hx-target="#comments" hx-swap="outerHTML" hx-encoding="multipart/form-data"
         class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
     <input type="hidden" name="parent" value="{{ c.pk }}">
-    {% include "materials/_comment_fields.html" with form=comment_form submit="Ответить" %}
+    {% include "materials/_comment_fields.html" with form=c.reply_form|default:comment_form submit="Ответить" %}
   </form>
 
   {% if c.answers %}

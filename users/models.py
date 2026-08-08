@@ -6,6 +6,12 @@ from django.contrib.auth.models import (
 from django.db import models
 from django.utils import timezone
 
+from attachments.storage import media_storage, random_key
+
+
+def photo_upload_to(instance, filename):
+    return random_key("avatars", filename)
+
 
 class UserManager(BaseUserManager):
     def create_user(self, email, name, surname, patronymic="", password=None, **extra):
@@ -39,8 +45,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField("модератор", default=False)
     must_change_password = models.BooleanField("сменить пароль при входе", default=True)
 
-    # TODO (M2): photo -> Cloudflare R2 (django-storages), пока локально
-    photo = models.ImageField("фото", upload_to="users/photos", null=True, blank=True)
+    photo = models.ImageField("фото", upload_to=photo_upload_to, storage=media_storage, null=True, blank=True)
     birthday = models.DateField("дата рождения", null=True, blank=True)
     phone = models.CharField("телефон", max_length=30, blank=True)
     vk_page = models.CharField("VK (без https://vk.com/)", max_length=50, blank=True)

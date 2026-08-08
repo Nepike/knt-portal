@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load text_extras %}
+{% load text_extras attachment_extras %}
 
 {% block title %}{{ teacher.surname }} {{ teacher.name }} {{ teacher.patronymic }}{% endblock %}
 
@@ -24,7 +24,7 @@
   <aside class="w-full max-w-sm mx-auto lg:max-w-none lg:col-start-1 lg:row-start-1 lg:row-span-2 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 text-center">
     <span class="w-36 h-36 rounded-full overflow-hidden inline-flex ring-4 ring-slate-200 dark:ring-slate-700">
       {% if teacher.photo %}
-        <img src="{{ teacher.photo.url }}" alt="" class="w-full h-full object-cover">
+        <img src="{{ teacher.photo|media }}" alt="" class="w-full h-full object-cover">
       {% else %}
         <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-3xl font-medium">{{ teacher.surname|slice:":1" }}{{ teacher.name|slice:":1" }}</span>
       {% endif %}

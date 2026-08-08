@@ -348,6 +348,7 @@ document.addEventListener("alpine:init", () => {
     x: 0,
     y: 0,
     drag: null, // { x, y } — точка захвата, пока тянем
+    moved: false, // тянули или просто щёлкнули: клик приходит уже после mouseup
 
     show(index) {
       this.index = index;
@@ -367,27 +368,66 @@ document.addEventListener("alpine:init", () => {
       this.x = 0;
       this.y = 0;
     },
-    zoom(delta) {
-      const next = Math.min(Math.max(this.scale + delta, 1), 6);
-      if (next === 1) return this.fit(); // вернулись к целой картинке — снимаем и сдвиг
+
+    // Масштабируем ВОКРУГ ТОЧКИ под курсором, а не вокруг центра: иначе то место,
+    // куда человек целился, уезжает из виду и приходится его догонять.
+    zoomAt(factor, event) {
+      const next = Math.min(Math.max(this.scale * factor, 1), 6);
+      if (next === this.scale) return;
+      if (next === 1) return this.fit();
+
+      const frame = this.$refs.frame.getBoundingClientRect();
+      const centerX = frame.left + frame.width / 2;
+      const centerY = frame.top + frame.height / 2;
+      const pointX = event ? event.clientX : centerX;
+      const pointY = event ? event.clientY : centerY;
+      // Точка картинки под курсором в её собственных координатах.
+      const ownX = (pointX - centerX - this.x) / this.scale;
+      const ownY = (pointY - centerY - this.y) / this.scale;
+      this.x += (this.scale - next) * ownX;
+      this.y += (this.scale - next) * ownY;
       this.scale = next;
+      this.hold();
     },
     // Колесо масштабирует, а не листает страницу за спиной у оверлея.
     onWheel(event) {
-      this.zoom(event.deltaY < 0 ? 0.3 : -0.3);
+      this.zoomAt(event.deltaY < 0 ? 1.25 : 1 / 1.25, event);
     },
+    // Один клик, а не двойной: курсор показывает лупу, значит клика и ждут.
+    onClick(event) {
+      if (this.moved) return; // это был конец перетаскивания
+      this.scale === 1 ? this.zoomAt(2.5, event) : this.fit();
+    },
+
     grab(event) {
+      this.moved = false;
       if (this.scale === 1) return; // нечего таскать, картинка и так целиком
-      this.drag = { x: event.clientX - this.x, y: event.clientY - this.y };
+      const point = event.touches ? event.touches[0] : event;
+      this.drag = { x: point.clientX - this.x, y: point.clientY - this.y };
     },
     move(event) {
       if (!this.drag) return;
-      this.x = event.clientX - this.drag.x;
-      this.y = event.clientY - this.drag.y;
+      const point = event.touches ? event.touches[0] : event;
+      this.x = point.clientX - this.drag.x;
+      this.y = point.clientY - this.drag.y;
+      this.moved = true;
+      this.hold();
     },
     drop() {
       this.drag = null;
     },
+    // Не даём утащить картинку за край: дальше начинается пустота, и обратно
+    // её ловить неприятно.
+    hold() {
+      const picture = this.$refs.picture;
+      const frame = this.$refs.frame;
+      if (!picture || !frame) return;
+      const spareX = Math.max(0, (picture.offsetWidth * this.scale - frame.clientWidth) / 2);
+      const spareY = Math.max(0, (picture.offsetHeight * this.scale - frame.clientHeight) / 2);
+      this.x = Math.min(Math.max(this.x, -spareX), spareX);
+      this.y = Math.min(Math.max(this.y, -spareY), spareY);
+    },
+
     get current() {
       return this.items[this.index] ?? {};
     },
@@ -398,13 +438,24 @@ document.addEventListener("alpine:init", () => {
 
   // Галерея материала. Проще fileForm: картинки маленькие и едут обычным multipart,
   // поэтому ни подписанных ссылок, ни прогресса — только выбор, порядок и удаление.
-  Alpine.data("gallery", (saved = []) => ({
+  Alpine.data("gallery", (saved = [], maxSize = 0) => ({
     saved: saved.map((image) => ({ ...image, marked: false })),
     picked: [], // { id, file, url } — url живёт до отправки формы, это objectURL
+    errors: [],
 
+    // Тот же отказ, что и на сервере, но до отправки: картинки едут обычным multipart,
+    // и отказ по размеру приходил бы уже после того, как всё уехало.
     add(files) {
+      this.errors = [];
       for (const file of files) {
-        if (!file.type.startsWith("image/")) continue;
+        if (!file.type.startsWith("image/")) {
+          this.errors.push(`«${file.name}» — это не картинка`);
+          continue;
+        }
+        if (maxSize && file.size > maxSize) {
+          this.errors.push(`«${file.name}» больше ${humanSize(maxSize)}`);
+          continue;
+        }
         if (this.picked.some((item) => item.file.name === file.name && item.file.size === file.size)) continue;
         this.picked.push({ id: ++pickedFiles, file, url: URL.createObjectURL(file) });
       }

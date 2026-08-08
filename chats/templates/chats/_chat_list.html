@@ -1,3 +1,4 @@
+{% load attachment_extras %}
 {% for item in items %}
 <a href="{% url 'chat_detail' item.chat_id %}"
    class="flex items-center gap-3 px-3 py-2.5 border-b border-slate-100 dark:border-slate-800 transition-colors
@@ -5,7 +6,7 @@
 
   <span class="w-11 h-11 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700">
     {% if item.other.photo %}
-      <img src="{{ item.other.photo.url }}" alt="" class="w-full h-full object-cover">
+      <img src="{{ item.other.photo|media }}" alt="" class="w-full h-full object-cover">
     {% elif item.other %}
       <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ item.other.surname|slice:":1" }}{{ item.other.name|slice:":1" }}</span>
     {% else %}

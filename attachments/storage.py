@@ -1,5 +1,15 @@
+from pathlib import Path
+from uuid import uuid4
+
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage
+
+
+def random_key(folder, filename):
+    """Ключ с непредсказуемым сегментом: по адресу вида materials/12/images/foto.jpg
+    библиотеку можно было бы перебрать, ни разу не зайдя на сайт. Имя файла оставляем
+    в конце — с ним понятнее и в бакете, и при сохранении."""
+    return f"{folder}/{uuid4().hex}/{Path(filename).name}"
 
 
 def media_storage():
@@ -26,3 +36,15 @@ def file_storage():
     from .models import File
 
     return File._meta.get_field("file").storage
+
+
+def media_fields():
+    """Все файловые поля проекта. Проходим по всем моделям, а не по списку: новое поле
+    однажды появится, а про команды и подмену хранилища в тестах забудут."""
+    from django.apps import apps
+    from django.db import models
+
+    for model in apps.get_models():
+        for field in model._meta.get_fields():
+            if isinstance(field, models.FileField):
+                yield model, field.name

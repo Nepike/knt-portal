@@ -3,8 +3,12 @@ from .base import env
 
 DEBUG = False
 SECRET_KEY = env("SECRET_KEY")
-ALLOWED_HOSTS = ["knt-mipt.ru", "inbicst.ru", "fnbic.ru", "test.inbicst.ru"]
+ALLOWED_HOSTS = ["knt-mipt.ru", "inbicst.ru", "fnbic.ru", "test.inbicst.ru", "files.inbicst.ru"]
+# files. в доверенных источниках не нужен: на него только ходят за файлами, форм там нет.
 CSRF_TRUSTED_ORIGINS = ["https://knt-mipt.ru", "https://inbicst.ru", "https://fnbic.ru", "https://test.inbicst.ru"]
+
+# Байты отдаёт nginx (см. nginx.conf), приложение возвращает только заголовок.
+MEDIA_ACCEL = True
 
 DATABASES = {"default": env.db("DATABASE_URL")}
 

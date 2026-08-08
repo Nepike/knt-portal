@@ -3,9 +3,10 @@
   Картинка одна — выбранную показываем сразу, иначе непонятно, прицепилась ли.
 {% endcomment %}
 {% csrf_token %}
-{% if form.non_field_errors %}
-<p class="mb-2 text-xs text-rose-500">{{ form.non_field_errors.0 }}</p>
-{% endif %}
+{# Все ошибки разом: полей всего три, и у каждого своя разметка — вешать сообщение на поле негде #}
+{% for error in form.errors.values %}
+<p class="mb-2 text-xs text-rose-500">{{ error.0 }}</p>
+{% endfor %}
 
 <textarea name="text" rows="3" maxlength="4000" placeholder="Написать комментарий"
           class="w-full rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none focus:border-2 focus:border-accent transition resize-y">{{ form.text.value|default:"" }}</textarea>

@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Count, Exists, OuterRef, Q
-from django.http import HttpResponseForbidden
+from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -137,24 +137,57 @@ def _thread(user, material):
     return roots
 
 
+def _comment(request, pk):
+    """Комментарий — только если сам материал этому человеку виден: иначе через прямой
+    адрес можно было бы лайкать и открывать обсуждение чужого черновика."""
+    return get_object_or_404(Comment.objects.filter(material__in=_visible(request.user)), pk=pk)
+
+
 def _may_touch(user, comment):
     return comment.author_id == user.pk or user.has_perm("materials.change_comment")
 
 
-def _card(request, comment):
+def _node(request, material, pk):
+    """Комментарий, взятый ИЗ ЛЕНТЫ — то есть с прицепленными ответами и подписью
+    адресата. Собирать карточку из голого объекта нельзя: у корня не оказалось бы
+    ответов, и они пропадали бы с экрана от простого лайка."""
+    for root in _thread(request.user, material):
+        if root.pk == pk:
+            return root
+        for answer in root.answers:
+            if answer.pk == pk:
+                return answer
+    return None
+
+
+def _card(request, material, pk):
+    comment = _node(request, material, pk)
+    if comment is None:
+        raise Http404
     # comment_form нужен форме ответа внутри карточки — она есть у каждого комментария.
     return render(request, "materials/_comment.html", {
-        "c": comment, "material": comment.material, "comment_form": CommentForm(),
+        "c": comment, "material": material, "comment_form": CommentForm(),
     })
 
 
-def _comments_block(request, material, form=None):
+def _comments_block(request, material, form=None, parent=None):
     """Вся лента целиком. Перерисовывать её на каждое действие дешевле, чем вставлять
-    ответ в нужную ветку точечно: комментариев десятки, а ошибиться местом — легко."""
+    ответ в нужную ветку точечно: комментариев десятки, а ошибиться местом — легко.
+
+    Форма с ошибкой возвращается ровно туда, откуда её отправили: у ветки она приезжает
+    прицепленной к своему комментарию (reply_form), иначе чужой текст оказался бы
+    подставлен во все формы ответа разом.
+    """
+    comments = _thread(request.user, material)
+    if form and parent:
+        for node in (node for root in comments for node in (root, *root.answers)):
+            if node.pk == parent:
+                node.reply_form = form
     return render(request, "materials/_comments.html", {
         "material": material,
-        "comments": _thread(request.user, material),
-        "comment_form": form or CommentForm(),
+        "comments": comments,
+        "total": sum(1 + len(root.answers) for root in comments),
+        "comment_form": CommentForm() if parent else (form or CommentForm()),
     })
 
 
@@ -162,26 +195,28 @@ def _comments_block(request, material, form=None):
 def comment_add(request, pk):
     material = get_object_or_404(_visible(request.user), pk=pk)
     form = CommentForm(request.POST, request.FILES)
-    if form.is_valid():
-        comment = form.save(commit=False)
-        comment.material = material
-        comment.author = request.user
-        # Храним настоящего адресата; плоской ветку делает уже _thread при выводе.
-        comment.parent = Comment.objects.filter(pk=request.POST.get("parent") or 0, material=material).first()
-        comment.save()
-        form = None
-    return _comments_block(request, material, form)
+    # Храним настоящего адресата; плоской ветку делает уже _thread при выводе.
+    parent = Comment.objects.filter(pk=request.POST.get("parent") or 0, material=material).first()
+    if not form.is_valid():
+        return _comments_block(request, material, form, parent.pk if parent else None)
+
+    comment = form.save(commit=False)
+    comment.material = material
+    comment.author = request.user
+    comment.parent = parent
+    comment.save()
+    return _comments_block(request, material)
 
 
 def comment_edit(request, pk):
-    comment = get_object_or_404(Comment, pk=pk)
+    comment = _comment(request, pk)
     if not _may_touch(request.user, comment):
         return HttpResponseForbidden("Это чужой комментарий.")
 
     form = CommentForm(request.POST or None, request.FILES or None, instance=comment)
     if request.method == "POST" and form.is_valid():
         form.save()
-        return _card(request, _comments(request.user).get(pk=pk))
+        return _card(request, comment.material, pk)
     return render(request, "materials/_comment_form.html", {
         "form": form, "c": comment, "material": comment.material,
     })
@@ -189,7 +224,7 @@ def comment_edit(request, pk):
 
 @require_POST
 def comment_delete(request, pk):
-    comment = get_object_or_404(Comment, pk=pk)
+    comment = _comment(request, pk)
     if not _may_touch(request.user, comment):
         return HttpResponseForbidden("Это чужой комментарий.")
     material = comment.material
@@ -201,7 +236,7 @@ def comment_delete(request, pk):
 
 @require_POST
 def comment_vote(request, pk, vote):
-    comment = get_object_or_404(Comment, pk=pk)
+    comment = _comment(request, pk)
     mine, other = (
         (comment.liked_users, comment.disliked_users) if vote == "like"
         else (comment.disliked_users, comment.liked_users)
@@ -211,7 +246,7 @@ def comment_vote(request, pk, vote):
     else:
         mine.add(request.user)
         other.remove(request.user)
-    return _card(request, _comments(request.user).get(pk=pk))
+    return _card(request, comment.material, pk)
 
 
 def material_edit(request, pk=None):
@@ -221,7 +256,7 @@ def material_edit(request, pk=None):
         return HttpResponseForbidden("Этот материал может редактировать только тот, кто его добавил.")
 
     form = MaterialForm(request.POST or None, instance=material)
-    file_errors = image_errors = []
+    file_errors, image_errors = [], []
     if request.method == "POST":
         # Файлов может не быть вовсе — в отличие от книги, у материала есть текст.
         file_errors = check_uploads(request.FILES.getlist("files")) + check_pending(request)
@@ -232,12 +267,7 @@ def material_edit(request, pk=None):
             moderator = _may_moderate(request.user)
             if new:
                 material.uploader = request.user
-
-            if not moderator:
-                material.send_to_review()
-            elif new or material.status == Material.Status.REJECTED:
-                material.approve(request.user)
-
+            material.revise(request.user, moderator)
             material.save()
             form.save_m2m()
             sync_files(request, material)
@@ -260,7 +290,7 @@ def material_edit(request, pk=None):
         "form": form, "material": material,
         "file_errors": file_errors, "image_errors": image_errors,
         "max_size_hint": human_size(max_upload_size()), "upload_limits": upload_limits(),
-        "max_image_hint": human_size(MAX_IMAGE_SIZE),
+        "max_image_size": MAX_IMAGE_SIZE, "max_image_hint": human_size(MAX_IMAGE_SIZE),
         "saved_files": saved_files(material), "saved_images": saved_images(material),
         "pending": pending_uploads(request) if request.method == "POST" else [],
     })

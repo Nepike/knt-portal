@@ -1,4 +1,4 @@
-{% load static moderation_extras %}
+{% load static moderation_extras attachment_extras %}
 <!DOCTYPE html>
 <html lang="ru" class="theme-{{ site_theme }}">
 <head>
@@ -88,7 +88,7 @@
             {# TODO (M5 profiles): рамка аватара — оверлей экипированной косметики (квадратный PNG); сейчас плейсхолдер-градиент #}
             <span class="w-9 h-9 rounded-[22%] p-0.5 bg-brand-gradient inline-flex shrink-0">
               {% if request.user.photo %}
-                <img src="{{ request.user.photo.url }}" alt="" class="w-full h-full rounded-[20%] object-cover">
+                <img src="{{ request.user.photo|media }}" alt="" class="w-full h-full rounded-[20%] object-cover">
               {% else %}
                 <span class="flex-1 rounded-[20%] bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-medium">{{ request.user.name|slice:":1" }}{{ request.user.surname|slice:":1" }}</span>
               {% endif %}

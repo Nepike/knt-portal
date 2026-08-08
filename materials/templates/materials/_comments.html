@@ -6,7 +6,7 @@
 <section id="comments" class="mt-8">
   <h2 class="text-lg font-bold mb-4">
     Обсуждение
-    {% if comments %}<span class="text-slate-400 font-normal">{{ material.comments.count }}</span>{% endif %}
+    {% if total %}<span class="text-slate-400 font-normal">{{ total }}</span>{% endif %}
   </h2>
 
   <form hx-post="{% url 'comment_add' material.pk %}" hx-target="#comments" hx-swap="outerHTML"

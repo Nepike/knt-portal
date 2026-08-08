@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load text_extras %}
+{% load text_extras attachment_extras %}
 
 {% block title %}Преподаватели{% endblock %}
 
@@ -20,7 +20,7 @@
     <span class="w-16 h-16 sm:w-28 sm:h-28 rounded-full overflow-hidden shrink-0 inline-flex ring-4
                  {% if forloop.counter == 1 %}ring-amber-400{% elif forloop.counter == 2 %}ring-slate-300 dark:ring-slate-600{% else %}ring-amber-700/60{% endif %}">
       {% if t.photo %}
-        <img src="{{ t.photo.url }}" alt="" class="w-full h-full object-cover">
+        <img src="{{ t.photo|media }}" alt="" class="w-full h-full object-cover">
       {% else %}
         <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xl font-medium">{{ t.surname|slice:":1" }}{{ t.name|slice:":1" }}</span>
       {% endif %}

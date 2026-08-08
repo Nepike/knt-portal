@@ -7,7 +7,7 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 
-from .storage import media_storage
+from .storage import media_storage, random_key
 
 # Расширение → вид значка в attachments/_file.html.
 FILE_KINDS = {
@@ -21,17 +21,11 @@ FILE_KINDS = {
 
 
 def file_upload_to(instance, filename):
-    if instance.material_id:
-        return f"materials/{instance.material_id}/files/{filename}"
-    if instance.book_id:
-        return f"books/{instance.book_id}/files/{filename}"
-    return f"files/{filename}"
+    return random_key("materials" if instance.material_id else "books", filename)
 
 
 def image_upload_to(instance, filename):
-    if instance.material_id:
-        return f"materials/{instance.material_id}/images/{filename}"
-    return f"images/{filename}"
+    return random_key("images", filename)
 
 
 def human_size(num_bytes):

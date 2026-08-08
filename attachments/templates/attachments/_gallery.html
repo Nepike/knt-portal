@@ -3,7 +3,7 @@
   ни токенов — они маленькие и едут обычным multipart. От вьюхи ждёт saved_images
   и image_errors.
 {% endcomment %}
-<div x-data="gallery({{ saved_images }})">
+<div x-data="gallery({{ saved_images }}, {{ max_image_size }})">
   {# Удаление отложенное: помеченная картинка тускнеет и уходит при сохранении #}
   <div x-sort="reorderSaved($item, $position)" class="grid grid-cols-3 sm:grid-cols-4 gap-2">
     <template x-for="image in saved" :key="image.pk">
@@ -43,6 +43,10 @@
       <span class="text-xs text-slate-400">до {{ max_image_hint }} на картинку</span>
     </label>
   </div>
+
+  <template x-for="error in errors" :key="error">
+    <p class="mt-2 text-xs text-rose-500" x-text="error"></p>
+  </template>
 
   {% for error in image_errors %}
   <p class="mt-2 text-xs text-rose-500">{{ error }}</p>

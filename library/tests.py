@@ -5,6 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from attachments.media import file_url
 from attachments.models import File
 from core.models import Subject, Term
 from users.models import User
@@ -232,22 +233,24 @@ class FileTests(TestCase):
             file=SimpleUploadedFile(stored, b"%PDF-1.4 test"),
         )
 
-    def test_download_counts_and_redirects_to_storage(self):
+    def test_download_counts_and_hands_the_file_to_storage(self):
         file = self.make_file()
         self.client.force_login(self.reader)
-        response = self.client.get(reverse("file_download", args=[file.pk]))
-        self.assertEqual(response.status_code, 302)
+        response = self.client.get(file_url(file))
+
+        self.assertEqual(response.status_code, 302)  # MEDIA_ACCEL выключен, значит редирект
         self.assertIn(file.file.url, response["Location"])
         file.refresh_from_db()
         self.assertEqual(file.downloads, 1)
 
-    def test_file_of_unapproved_book_is_hidden_from_strangers(self):
-        file = self.make_file(status=Book.Status.PENDING)
-        self.client.force_login(self.reader)
-        self.assertEqual(self.client.get(reverse("file_download", args=[file.pk])).status_code, 404)
+    def test_file_opens_without_a_session(self):
+        # Файлы раздаёт другой домен, куки сессии туда не приходят: разрешение даёт подпись.
+        self.assertEqual(self.client.get(file_url(self.make_file())).status_code, 302)
 
-        self.client.force_login(self.author)
-        self.assertEqual(self.client.get(reverse("file_download", args=[file.pk])).status_code, 302)
+    def test_only_our_signature_opens_a_file(self):
+        self.make_file()
+        bad = reverse("file_download", args=["подделка", "скан.pdf"])
+        self.assertEqual(self.client.get(bad).status_code, 404)
 
     def test_size_is_filled_on_save(self):
         file = self.make_file()

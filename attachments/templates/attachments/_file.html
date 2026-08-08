@@ -1,6 +1,6 @@
-{% load text_extras %}
+{% load text_extras attachment_extras %}
 {# Ссылка на файл: значок с расширением, название, размер и счётчик. Общая для книг и материалов. #}
-<a href="{% url 'file_download' file.pk %}"
+<a href="{{ file|download_url }}"
    class="relative flex items-center gap-3 -mx-1 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
   <span class="w-9 h-9 shrink-0 rounded-lg inline-flex items-center justify-center text-[10px] font-bold
                {% if file.kind == 'pdf' %}bg-rose-500/10 text-rose-500

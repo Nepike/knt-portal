@@ -1,3 +1,4 @@
+{% load attachment_extras %}
 {% extends "core/base.html" %}
 
 {% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
@@ -8,7 +9,7 @@
     {# TODO (M5 profiles): рамка-косметика, фон, уровень, значки, инвентарь #}
     <span class="w-32 h-32 rounded-[22%] p-1 bg-brand-gradient inline-flex">
       {% if person.photo %}
-        <img src="{{ person.photo.url }}" alt="" class="w-full h-full rounded-[20%] object-cover">
+        <img src="{{ person.photo|media }}" alt="" class="w-full h-full rounded-[20%] object-cover">
       {% else %}
         <span class="flex-1 rounded-[20%] bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-3xl font-medium">{{ person.name|slice:":1" }}{{ person.surname|slice:":1" }}</span>
       {% endif %}

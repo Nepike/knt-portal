@@ -6,25 +6,22 @@ import json
 import os
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import unquote
 
 from django.core import signing
 from django.core.files.base import ContentFile
+from django.core.files.storage import FileSystemStorage
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from library.models import Book
 from users.models import User
 
-from .media import media_url
+from .media import file_url, media_url, redirect_url
 from .models import File
-from .storage import file_storage
+from .storage import file_storage, random_key
 from .uploads import UPLOAD_SALT
-
-
-def media_url_for(key):
-    """media_url ждёт поле модели, а тут проверяется голый ключ хранилища."""
-    return media_url(SimpleNamespace(name=key))
 
 
 def make_user(email="u@t.local"):
@@ -84,23 +81,112 @@ class PresignTests(TestCase):
         self.assertEqual(self.ask().status_code, 409)
 
 
-class MediaImageTests(TestCase):
-    """Постоянный адрес картинки вместо подписанной на час ссылки хранилища."""
+class MediaUrlTests(SimpleTestCase):
+    """Какой адрес попадает в разметку."""
+
+    def field(self, storage=None):
+        return SimpleNamespace(
+            name="images/board.png", url="/media/images/board.png",
+            storage=storage or FileSystemStorage(),
+        )
+
+    def test_local_disk_in_development_goes_straight_to_the_file(self):
+        self.assertEqual(media_url(self.field()), "/media/images/board.png")
+
+    def test_signing_storage_goes_through_our_redirect(self):
+        self.assertTrue(media_url(self.field(storage=object())).startswith("/img/"))
+
+    @override_settings(FILES_BASE_URL="https://files.example")
+    def test_own_domain_takes_everything_including_local_disk(self):
+        # Адрес один и тот же в обоих режимах — переключение хранилища ссылок не меняет.
+        self.assertTrue(media_url(self.field()).startswith("https://files.example/img/"))
+
+    def test_empty_field_gives_empty_address(self):
+        self.assertEqual(media_url(None), "")
+
+
+class FileUrlTests(TestCase):
+    """Адрес файла: подпись вместо сессии, имя в хвосте — для браузера."""
+
+    def make(self, name="Зорич. Том 1.pdf"):
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=make_user())
+        return File.objects.create(book=book, name=name, file=ContentFile(b"pdf", name="z.pdf"))
+
+    def test_address_carries_the_name_and_survives_a_slash_in_it(self):
+        url = file_url(self.make(name="Лекции 1/2.pdf"))
+        self.assertIn("%D0%9B", url)  # имя доехало, косая заменена
+        self.assertNotIn("1/2", url)
+
+    def test_address_is_the_same_every_time(self):
+        file = self.make()
+        # Иначе кеш браузера был бы бесполезен: адрес ехал бы на каждом рендере.
+        self.assertEqual(file_url(file), file_url(file))
+
+    @override_settings(FILES_BASE_URL="https://files.example")
+    def test_own_domain_is_prepended(self):
+        self.assertTrue(file_url(self.make()).startswith("https://files.example/f/"))
+
+
+@override_settings(MEDIA_ACCEL=True)
+class AccelTests(TestCase):
+    """На сервере байты отдаёт nginx, приложение возвращает только заголовок."""
 
     def setUp(self):
-        self.client.force_login(make_user())
+        self.key = file_storage().save("images/board.png", ContentFile(b"png"))
+
+    def test_local_storage_points_nginx_at_the_media_folder(self):
+        response = self.client.get(redirect_url(self.key))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["X-Accel-Redirect"], "/__local/" + self.key)
+        self.assertEqual(response.content, b"")  # байты через приложение не идут
+
+    def test_redirect_is_kept_when_nginx_is_not_there(self):
+        with self.settings(MEDIA_ACCEL=False):
+            response = self.client.get(redirect_url(self.key))
+        self.assertEqual(response.status_code, 302)
+
+    def test_cyrillic_name_is_escaped_for_nginx(self):
+        key = file_storage().save("books/Зорич том 1.pdf", ContentFile(b"pdf"))
+        response = self.client.get(redirect_url(key))
+
+        target = response["X-Accel-Redirect"]
+        self.assertTrue(target.startswith("/__local/books/"))
+        self.assertNotIn(" ", target)  # заголовок обязан быть ASCII
+        self.assertEqual(unquote(target[len("/__local/"):]), key)
+
+
+class RandomKeyTests(SimpleTestCase):
+    def test_key_is_unguessable_but_keeps_the_file_name(self):
+        # Бакет публичный: по предсказуемому пути библиотеку перебрали бы снаружи.
+        first = random_key("books", "Зорич том 1.pdf")
+        second = random_key("books", "Зорич том 1.pdf")
+
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("books/"))
+        self.assertTrue(first.endswith("/Зорич том 1.pdf"))
+
+
+class MediaImageTests(TestCase):
+    """Отдача картинки без nginx — так работает разработка."""
+
+    def setUp(self):
         self.key = file_storage().save("images/board.png", ContentFile(b"png"))
 
     def test_redirect_leads_to_the_storage_and_may_be_cached(self):
-        response = self.client.get(media_url_for(self.key))
+        response = self.client.get(redirect_url(self.key))
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(self.key, response["Location"])
-        # Кеш чуть короче подписи R2: иначе браузер переиспользовал бы протухшую ссылку.
+        # Кеш короче подписи R2: иначе браузер переиспользовал бы протухшую ссылку.
         self.assertIn("max-age", response["Cache-Control"])
 
+    def test_picture_opens_without_a_session(self):
+        # Домен файлов другой, куки туда не приходят: разрешение даёт подпись в адресе.
+        self.assertEqual(self.client.get(redirect_url(self.key)).status_code, 302)
+
     def test_tampered_token_is_not_found(self):
-        self.assertEqual(self.client.get(media_url_for(self.key) + "x/").status_code, 404)
+        self.assertEqual(self.client.get(redirect_url(self.key) + "x/").status_code, 404)
 
 
 class AdoptUploadTests(TestCase):

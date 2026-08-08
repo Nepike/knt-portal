@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load chat_extras %}
+{% load chat_extras attachment_extras %}
 
 {% block title %}{% if chat %}{% if other %}{{ other.name }} {{ other.surname }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
 
@@ -178,7 +178,7 @@
           <a href="{% url 'profile' ms.user_id %}" class="flex items-center gap-3 min-w-0 flex-1">
             <span class="w-10 h-10 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700">
               {% if ms.user.photo %}
-                <img src="{{ ms.user.photo.url }}" alt="" class="w-full h-full object-cover">
+                <img src="{{ ms.user.photo|media }}" alt="" class="w-full h-full object-cover">
               {% else %}
                 <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ ms.user.surname|slice:":1" }}{{ ms.user.name|slice:":1" }}</span>
               {% endif %}

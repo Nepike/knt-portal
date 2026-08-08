@@ -6,7 +6,12 @@ from django.db import models
 from django.db.models import Avg, Count
 from django.utils import timezone
 
+from attachments.storage import media_storage, random_key
 from core.models import Subject
+
+
+def photo_upload_to(instance, filename):
+    return random_key("teachers", filename)
 
 SCORE_LABELS = {
     "score_knowledge": "Знания",
@@ -34,8 +39,7 @@ class Teacher(models.Model):
     patronymic = models.CharField("отчество", max_length=50, blank=True)
 
     bio = models.TextField("о преподавателе", blank=True)
-    # TODO (M2): photo -> Cloudflare R2 (django-storages), пока локально
-    photo = models.ImageField("фото", upload_to="teachers/photos", null=True, blank=True)
+    photo = models.ImageField("фото", upload_to=photo_upload_to, storage=media_storage, null=True, blank=True)
     birthday = models.DateField("дата рождения", null=True, blank=True)
 
     phone = models.CharField("телефон", max_length=50, blank=True)

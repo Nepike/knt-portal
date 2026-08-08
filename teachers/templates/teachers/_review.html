@@ -1,3 +1,4 @@
+{% load attachment_extras %}
 <div id="review-{{ r.pk }}" {% if not r.text and r.author_id != user.pk %}x-show="showAll" x-cloak {% endif %}class="rounded-btn bg-white dark:bg-slate-900 p-4 {% if r.author_id == user.pk %}border-2 border-accent/60{% else %}border border-slate-200 dark:border-slate-800{% endif %}">
   <div class="flex items-start gap-3">
     {% if r.hide_author %}
@@ -10,7 +11,7 @@
     {# TODO (M5 profiles): косметика — рамка аватара/фон карточки #}
     <a href="{% url 'profile' r.author_id %}" class="w-10 h-10 rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700 shrink-0 inline-flex">
       {% if r.author.photo %}
-        <img src="{{ r.author.photo.url }}" alt="" class="w-full h-full object-cover">
+        <img src="{{ r.author.photo|media }}" alt="" class="w-full h-full object-cover">
       {% else %}
         <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium">{{ r.author.surname|slice:":1" }}{{ r.author.name|slice:":1" }}</span>
       {% endif %}

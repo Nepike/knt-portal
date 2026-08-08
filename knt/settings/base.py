@@ -92,6 +92,13 @@ STORAGES = {
 # Cloudflare R2 для файлов книг и материалов (attachments.storage.media_storage).
 # Пусто — работаем с локальным диском, так живёт разработка.
 R2_BUCKET = env("R2_BUCKET", default="")
+# Домен, с которого раздаются пользовательские файлы. Это ДРУГОЙ origin: куки сайта
+# туда не уходят, и проскочивший мимо фильтра html не дотянется до страниц сайта.
+# Пусто — тем же доменом, что и сайт (так живёт разработка).
+FILES_BASE_URL = env("FILES_BASE_URL", default="")
+# nginx умеет X-Accel-Redirect: файл он забирает и кеширует сам, наш процесс
+# освобождается сразу. В разработке nginx нет — там остаётся обычный редирект.
+MEDIA_ACCEL = False
 R2_OPTIONS = {
     "bucket_name": R2_BUCKET,
     "endpoint_url": f"https://{env('R2_ACCOUNT_ID', default='')}.r2.cloudflarestorage.com",
@@ -102,11 +109,12 @@ R2_OPTIONS = {
     "region_name": "auto",  # у R2 один регион, размещение задаётся при создании бакета
     "signature_version": "s3v4",
     "addressing_style": "path",  # bucket в пути: у R2 нет DNS-имён на бакет
-    # Бакет закрытый, ссылку подписываем на час: сайт закрытый, файлы наружу не раздаём.
-    # Скачивание всё равно идёт через attachments.views.download — там и права, и счётчик.
-    "querystring_auth": True,
-    "querystring_expire": 3600,
+    # Подписью пользуется наш же nginx, и тут же, — но большой файл он тянет кусками,
+    # и на медленном канале это растягивается. Сутки с запасом.
+    "querystring_expire": 24 * 3600,
     "file_overwrite": False,  # S3-хранилище иначе молча затирает одноимённый файл
+    # Ключи уникальны и не переиспользуются, поэтому кешировать можно навсегда.
+    "object_parameters": {"CacheControl": "public, max-age=31536000, immutable"},
 }
 
 TEST_RUNNER = "core.test_runner.MediaIsolatedRunner"

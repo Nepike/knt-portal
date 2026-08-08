@@ -123,22 +123,10 @@ def book_edit(request, pk=None):
             file_errors.append("Добавь хотя бы один файл — без него книги не будет.")
         if form.is_valid() and not file_errors:
             book = form.save(commit=False)
-            new = not book.pk
             moderator = _may_moderate(request.user)
-            if new:
+            if not book.pk:
                 book.uploader = request.user
-
-            if not moderator:
-                # Правка обычным человеком отменяет прошлое решение: иначе одобренную
-                # книгу можно было бы тихо подменить чем угодно.
-                book.send_to_review()
-            elif new or book.status == Book.Status.REJECTED:
-                # Модератор публикует свою книгу сразу. Правя отклонённую, он сам
-                # устраняет замечание — держать её отклонённой больше не за что.
-                # Книгу «на проверке» не трогаем: решение остаётся отдельным шагом,
-                # модератор может поправить опечатку и продолжить проверку.
-                book.approve(request.user)
-
+            book.revise(request.user, moderator)
             book.save()
             form.save_m2m()
             sync_files(request, book)
