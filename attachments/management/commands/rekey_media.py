@@ -44,9 +44,7 @@ class Command(BaseCommand):
                     continue
 
                 with field.open("rb"):
-                    # Отдаём сам файловый объект, а не прочитанные байты: сканы бывают
-                    # на сотни мегабайт, и класть их целиком в память незачем.
-                    new = storage.save(new, field)
+                    new = storage.save(new, field)  # файловый объект, а не байты: сканы бывают на сотни МБ
                 setattr(row, name, new)
                 row.save(update_fields=[name])
                 storage.delete(old)  # только после того, как ссылка в базе уже новая

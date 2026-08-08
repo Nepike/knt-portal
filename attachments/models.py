@@ -3,8 +3,6 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models.signals import post_delete
-from django.dispatch import receiver
 from django.utils import timezone
 
 from .storage import media_storage, random_key
@@ -117,17 +115,3 @@ class Image(models.Model):
 
     def human_size(self):
         return human_size(self.size)
-
-
-# Удаляем сам файл из хранилища при удалении записи (иначе остаётся «сирота»).
-# Работает и для локального диска, и для R2 — storage.delete() одинаков.
-@receiver(post_delete, sender=File)
-def delete_file_blob(sender, instance, **kwargs):
-    if instance.file:
-        instance.file.delete(save=False)
-
-
-@receiver(post_delete, sender=Image)
-def delete_image_blob(sender, instance, **kwargs):
-    if instance.image:
-        instance.image.delete(save=False)

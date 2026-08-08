@@ -48,3 +48,29 @@ def media_fields():
         for field in model._meta.get_fields():
             if isinstance(field, models.FileField):
                 yield model, field.name
+
+
+_BLOB_FIELDS = {}
+
+
+def _drop_blobs(sender, instance, **kwargs):
+    for name in _BLOB_FIELDS[sender]:
+        blob = getattr(instance, name)
+        if blob:
+            blob.delete(save=False)
+
+
+def connect_blob_cleanup():
+    """Снимает блоб вместе с записью: иначе в бакете копятся сироты, на которые уже
+    ниоткуда не сослаться. Вешаем на все файловые поля разом — фото и картинки
+    комментариев живут в чужих приложениях, и про них тут забыли бы первыми.
+
+    Зовётся из AttachmentsConfig.ready(), когда все модели уже загружены.
+    """
+    from django.db.models.signals import post_delete
+
+    _BLOB_FIELDS.clear()
+    for model, name in media_fields():
+        _BLOB_FIELDS.setdefault(model, []).append(name)
+    for model in _BLOB_FIELDS:
+        post_delete.connect(_drop_blobs, sender=model, dispatch_uid="attachments.blobs")

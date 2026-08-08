@@ -21,7 +21,11 @@ class Command(BaseCommand):
         cutoff = timezone.now() - timedelta(days=options["days"])
         known = set(File.objects.filter(file__startswith=f"{PREFIX}/").values_list("file", flat=True))
 
-        folders, _ = storage.listdir(PREFIX)
+        try:
+            folders, _ = storage.listdir(PREFIX)
+        except FileNotFoundError:
+            folders = []  # локальный диск: каталога ещё нет, значит и сирот нет
+
         found = size = 0
         for folder in folders:
             for name in storage.listdir(f"{PREFIX}/{folder}")[1]:

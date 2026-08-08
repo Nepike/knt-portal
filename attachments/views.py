@@ -51,7 +51,10 @@ def download(request, token, name):
         raise Http404
 
     file = get_object_or_404(File, pk=pk)
-    File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
+    if "Range" not in request.headers:
+        # Просмотрщик pdf дочитывает книгу кусками по тому же адресу — считаем только
+        # первый запрос, иначе одно открытие давало бы десяток «скачиваний».
+        File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
     return _deliver(file.file.name)
 
 

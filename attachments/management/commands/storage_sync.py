@@ -79,9 +79,7 @@ class Command(BaseCommand):
             if not apply:
                 continue
             with source.open(name) as blob:
-                # Отдаём файловый объект, а не прочитанные байты: сканы бывают
-                # на сотни мегабайт, и класть их целиком в память незачем.
-                target.save(name, blob)
+                target.save(name, blob)  # файловый объект, а не байты: сканы бывают на сотни МБ
             moved += 1
 
         if lost:

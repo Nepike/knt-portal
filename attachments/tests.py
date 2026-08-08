@@ -323,3 +323,36 @@ class AdoptUploadTests(TestCase):
             "title": "Механика", "uploaded": self.token(second, name="Второй.pdf"),
         })
         self.assertEqual([f.order for f in book.files.all()], [0, 1])
+
+
+class BlobCleanupTests(TestCase):
+    """Блоб уходит из хранилища вместе с записью — во всех приложениях, а не только тут."""
+
+    def setUp(self):
+        self.storage = file_storage()
+        self.user = make_user()
+
+    def test_file_and_image_blobs_are_dropped(self):
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
+        file = File.objects.create(book=book, name="скан.pdf", file=ContentFile(b"pdf", name="скан.pdf"))
+        key = file.file.name
+
+        file.delete()
+        self.assertFalse(self.storage.exists(key))
+
+    def test_photo_of_a_user_is_dropped(self):
+        # Фото живёт в чужом приложении: раньше сигнал был только на File и Image,
+        # и такие блобы оставались в бакете навсегда.
+        self.user.photo = ContentFile(b"png", name="avatar.png")
+        self.user.save()
+        key = self.user.photo.name
+
+        self.user.delete()
+        self.assertFalse(self.storage.exists(key))
+
+    def test_cascade_drops_the_blob_too(self):
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
+        key = File.objects.create(book=book, name="скан.pdf", file=ContentFile(b"pdf", name="скан.pdf")).file.name
+
+        book.delete()  # файл уезжает каскадом, сигнал обязан сработать и на нём
+        self.assertFalse(self.storage.exists(key))

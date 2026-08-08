@@ -243,6 +243,15 @@ class FileTests(TestCase):
         file.refresh_from_db()
         self.assertEqual(file.downloads, 1)
 
+    def test_reading_a_pdf_in_pieces_counts_as_one_download(self):
+        # Просмотрщик pdf дочитывает книгу диапазонами по тому же адресу.
+        file = self.make_file()
+        self.client.get(file_url(file))
+        self.client.get(file_url(file), headers={"range": "bytes=1024-2047"})
+
+        file.refresh_from_db()
+        self.assertEqual(file.downloads, 1)
+
     def test_file_opens_without_a_session(self):
         # Файлы раздаёт другой домен, куки сессии туда не приходят: разрешение даёт подпись.
         self.assertEqual(self.client.get(file_url(self.make_file())).status_code, 302)
