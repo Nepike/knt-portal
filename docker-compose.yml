@@ -60,7 +60,9 @@ services:
       context: .
       args:
         PROXY: ${PROXY:-}
-    entrypoint: ["celery", "-A", "knt", "worker", "-l", "info", "--concurrency", "2"]
+    # Одного процесса хватает: задачи редкие и ждут чужую сеть, а не считают.
+    # prefork при concurrency=2 держит три процесса — на 1.8 ГБ это заметные ~60 МБ впустую.
+    entrypoint: ["celery", "-A", "knt", "worker", "-l", "info", "--concurrency", "1"]
     env_file: .env
     volumes:
       - ./media:/app/media   # задачам с файлами нужен тот же диск, что и сайту
