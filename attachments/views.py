@@ -1,4 +1,5 @@
 import json
+import mimetypes
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
@@ -34,7 +35,11 @@ def _deliver(name):
         # с boto3 на первом же необычном имени файла.
         parts = urlsplit(storage.url(name))
         target = f"{ACCEL_R2}{parts.path}?{parts.query}"
-    return HttpResponse(headers={"X-Accel-Redirect": target})
+
+    # Тип обязаны поставить мы: при X-Accel-Redirect заголовок приложения побеждает,
+    # и с дефолтным text/html браузер показал бы pdf текстом, а картинку — ничем.
+    content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return HttpResponse(content_type=content_type, headers={"X-Accel-Redirect": target})
 
 
 @login_not_required

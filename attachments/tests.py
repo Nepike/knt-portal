@@ -141,6 +141,20 @@ class AccelTests(TestCase):
         self.assertEqual(response["X-Accel-Redirect"], "/__local/" + self.key)
         self.assertEqual(response.content, b"")  # байты через приложение не идут
 
+    def test_content_type_comes_from_the_file_name(self):
+        # При X-Accel-Redirect побеждает заголовок приложения, а не mime-тип nginx:
+        # с дефолтным text/html браузер показал бы pdf текстом, а картинку — ничем.
+        self.assertEqual(self.client.get(redirect_url(self.key))["Content-Type"], "image/png")
+
+        key = file_storage().save("books/Зорич.pdf", ContentFile(b"%PDF"))
+        self.assertEqual(self.client.get(redirect_url(key))["Content-Type"], "application/pdf")
+
+    def test_unknown_extension_is_handed_over_as_bytes(self):
+        key = file_storage().save("books/конспект.djvu", ContentFile(b"x"))
+        self.assertEqual(
+            self.client.get(redirect_url(key))["Content-Type"], "application/octet-stream",
+        )
+
     def test_redirect_is_kept_when_nginx_is_not_there(self):
         with self.settings(MEDIA_ACCEL=False):
             response = self.client.get(redirect_url(self.key))
