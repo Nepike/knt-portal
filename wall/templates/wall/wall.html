@@ -1,0 +1,303 @@
+{% extends "core/base.html" %}
+{% load static %}
+
+{% block title %}Стена{% endblock %}
+
+{# Доска — не текст, а приложение на весь экран: страница не прокручивается вовсе. #}
+{# Иначе на телефоне жест по доске уводит страницу, и доску не сдвинуть. #}
+{% block wrapper_class %}h-dvh{% endblock %}
+{% block main_width %}{% endblock %}
+{% block main_class %}min-h-0 px-2 py-2 sm:px-4 sm:py-3{% endblock %}
+{% block footer %}{% endblock %}
+
+{# Не в block js: Alpine стартует в микрозадаче сразу после своего файла, и компонент, #}
+{# зарегистрированный позже, он уже не увидит. Здесь — до ядра, как и плагины. #}
+{% block plugins %}
+<script defer src="{% static 'wall/gif.js' %}"></script>
+<script defer src="{% static 'wall/wall.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="wall('wall-data')" class="w-full flex-1 min-h-0 flex flex-col gap-2"
+     @keydown.escape.window="escape"
+     @keydown.arrow-left.window="nudge(-1, 0, $event)"
+     @keydown.arrow-right.window="nudge(1, 0, $event)"
+     @keydown.arrow-up.window="nudge(0, -1, $event)"
+     @keydown.arrow-down.window="nudge(0, 1, $event)">
+  {% csrf_token %}
+
+  <div class="shrink-0 flex items-center gap-2 sm:gap-3">
+    <h1 class="font-bold text-lg sm:text-xl truncate">{{ board.title }}</h1>
+
+    {% if own_color %}
+    {# Цвет закреплён за аккаунтом: показываем свой и даём его сменить за монеты. #}
+    <span class="w-7 h-7 rounded-lg ring-1 ring-slate-300 dark:ring-slate-700 shrink-0"
+          style="background: {{ color.hex }}" :style="{ background: colorHex }"></span>
+    <span class="text-sm font-medium truncate" x-text="colorName">{{ color.name }}</span>
+    <button type="button" @click="reroll" :disabled="busy || balance < price"
+            class="btn btn-secondary ml-auto shrink-0"
+            :title="balance < price ? 'Не хватает монет' : 'Новый цвет выпадет случайно'">
+      <i class="fa-solid fa-dice"></i>
+      <span class="hidden sm:inline">Сменить</span>
+      <span>{{ price }}&nbsp;<i class="fa-solid fa-cent-sign"></i></span>
+    </button>
+    <span class="shrink-0 text-xs text-slate-400 whitespace-nowrap">
+      есть <b x-text="balance">{{ balance }}</b>
+    </span>
+    {% endif %}
+  </div>
+
+  {# ===== Доска ===== #}
+  {# На большом экране палитра стоит не под доской, а сбоку — в одной колонке с панелью. #}
+  {# Под доской она забирала высоту, которой доске как раз и не хватает; своей колонкой #}
+  {# забирала бы ширину второй раз, поверх панели. В общей колонке она бесплатна: пока #}
+  {# панель открыта, колонка всё равно шириной с панель. #}
+  <div class="flex-1 min-h-0 flex flex-col lg:flex-row gap-2 lg:gap-3">
+    <div class="relative flex-1 min-w-0 min-h-0 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900">
+      {# Указательные события, а не мышиные с касаниями по отдельности: один набор #}
+      {# обработчиков на мышь, палец и перо, и захват указателя работает только с ними. #}
+      {# touch-action прописан прямо в стиле: без него браузер считает жест по доске #}
+      {# прокруткой страницы и отбирает его у нас на первом же движении пальца. #}
+      {# :style ОБЪЕКТОМ, а не строкой: строка заменяет весь атрибут целиком и стирает #}
+      {# размеры холста, которые проставляет resize(). На экране с двойной плотностью #}
+      {# точек это раздувало доску вдвое при первом же нажатии. #}
+      <canvas x-ref="view" class="block select-none" style="touch-action: none; cursor: crosshair"
+              :style="{ cursor: grab || tplDrag || areaDrag ? 'grabbing'
+                                : (tplEdit || areaEdit ? 'move' : 'crosshair') }"
+              @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
+              @pointerleave="onLeave" @click="onClick" @wheel="onWheel"></canvas>
+      {# Прицел живёт отдельным слоем: движение мыши перерисовывает только его, #}
+      {# а не всю доску с сеткой. Событий он не ловит — они идут в холст под ним. #}
+      <canvas x-ref="aim" class="absolute pointer-events-none" style="left: 0; top: 0"></canvas>
+
+      <div class="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-lg px-1 text-xs text-white"
+           style="background: rgba(15, 23, 42, .72)">
+        <button type="button" @click="zoom(1 / 1.4)" class="px-2 py-1.5" aria-label="Отдалить">&minus;</button>
+        <span x-text="zoomLabel" class="w-10 text-center tabular-nums">×1.0</span>
+        <button type="button" @click="zoom(1.4)" class="px-2 py-1.5" aria-label="Приблизить">+</button>
+        <span class="opacity-40">|</span>
+        <span x-text="spot" class="w-14 text-center tabular-nums">{{ board.width }}×{{ board.height }}</span>
+        <button type="button" @click="fit()" x-show="zoomed" x-cloak class="px-2 py-1.5">вписать</button>
+      </div>
+
+      {# В таймлапсе доска историческая, а инструменты — сегодняшние: оставляем только #}
+      {# кнопку выхода из него, чтобы не рисовать по прошлому. #}
+      <div class="absolute right-2 top-2 z-10 flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1">
+        <button type="button" x-show="!film" @click="show('cell')" :class="panel === 'cell' && '!text-accent'"
+                class="btn btn-ghost !px-3" title="Кто поставил клетку"><i class="fa-solid fa-crosshairs"></i></button>
+        <button type="button" x-show="!film" @click="show('tpl')" :class="panel === 'tpl' && '!text-accent'"
+                class="btn btn-ghost !px-3" title="Подложка"><i class="fa-solid fa-image"></i></button>
+        {% if perms.wall.moderate_wall %}
+        <button type="button" x-show="!film" @click="show('tools')" :class="panel === 'tools' && '!text-accent'"
+                class="btn btn-ghost !px-3" title="Инструменты модератора"><i class="fa-solid fa-screwdriver-wrench"></i></button>
+        {% endif %}
+        <button type="button" @click="reel" :disabled="reeling" :class="film && '!text-accent'"
+                class="btn btn-ghost !px-3" title="Таймлапс: как доска дошла до нынешнего вида">
+          <i class="fa-solid" :class="reeling ? 'fa-hourglass' : 'fa-film'"></i>
+        </button>
+      </div>
+    </div>
+
+    {# Правая колонка: палитра и панель одна под другой. #}
+    <div class="shrink-0 min-h-0 flex flex-col gap-2 lg:gap-3">
+      <div x-show="!film" class="shrink-0 flex lg:flex-col items-start gap-1.5">
+        {# Один тон — одна лесенка из восьми светлот: ими и рисуют (тень, основной, блик), #}
+        {# поэтому лесенка всегда идёт одной линией, а не собирается глазами по куче. #}
+        <div :style="paletteGrid">
+          <template x-for="shade in tones" :key="shade.code">
+            <button type="button" @click="pick(shade.code)" :title="shade.name"
+                    :style="{ background: shade.hex, borderRadius: '4px',
+                              boxShadow: brushCode === shade.code ? '0 0 0 2px var(--color-accent)' : '' }"></button>
+          </template>
+        </div>
+        {# Нейтральные держатся особняком: это контур, тень и блик, ими работают отдельно #}
+        {# от цвета. Тушь и мел по краям сливаются с темой, поэтому у них тонкая обводка. #}
+        <div :style="greyGrid">
+          <template x-for="shade in greys" :key="shade.code">
+            <button type="button" @click="pick(shade.code)" :title="shade.name"
+                    :style="{ background: shade.hex, borderRadius: '4px',
+                              boxShadow: brushCode === shade.code
+                                         ? '0 0 0 2px var(--color-accent)' : '0 0 0 1px rgba(128,132,140,.5)' }"></button>
+          </template>
+        </div>
+      </div>
+
+      {# Панель: на большом экране сосед холста — доска и так не резиновая, закрывать её #}
+      {# собственными инструментами незачем. Уже — места нет, поэтому шторка снизу. #}
+      <div x-show="panel" x-cloak @click="panel = null" class="fixed inset-0 z-30 bg-black/40 lg:hidden"></div>
+
+      <aside x-show="panel" x-cloak
+             class="fixed inset-x-0 bottom-0 z-40 max-h-[70dvh] rounded-t-2xl border-t shadow-xl
+                    lg:static lg:z-auto lg:w-72 xl:w-80 lg:min-h-0 lg:max-h-none lg:rounded-2xl lg:border lg:shadow-none
+                    flex flex-col border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+
+        <div class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-slate-200 dark:border-slate-800">
+          <h2 class="font-semibold text-sm" x-text="panelTitle"></h2>
+          <button type="button" @click="panel = null" class="btn btn-ghost !px-2 ml-auto" aria-label="Закрыть">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto p-3 text-sm">
+          <div x-show="panel === 'cell'" x-ref="card">
+            <p class="text-slate-400">Выбери клетку, чтобы узнать, кто её поставил.</p>
+          </div>
+
+          <div x-show="panel === 'tpl'" class="space-y-3">
+            <p class="text-slate-400">
+              Эскиз поверх доски. Остаётся в этом браузере: на сервер не уходит и другим не виден —
+              чтобы рисовать вместе, передайте файл друг другу в чате.
+            </p>
+            <input type="file" accept="image/*" @change="pickTemplate" class="w-full">
+
+            <template x-if="tpl">
+              <div class="space-y-3">
+                <label class="checkbox"><input type="checkbox" x-model="tplEdit">двигать и растягивать мышью</label>
+                <p x-show="tplEdit" class="text-slate-400">Тяни картинку, чтобы двигать, зелёный уголок — чтобы менять размер.</p>
+                <label class="checkbox"><input type="checkbox" x-model="tpl.on" @change="saveTemplate(); invalidate()">показывать</label>
+                <label class="flex items-center gap-2">
+                  прозр.
+                  <input type="range" min="0.1" max="1" step="0.05" x-model.number="tpl.alpha"
+                         @input="invalidate()" @change="saveTemplate()" class="flex-1">
+                </label>
+                <label class="flex items-center gap-2">
+                  ширина
+                  <input type="number" min="1" :max="width" :value="tpl.w" @change="sizeTemplate(+$event.target.value)"
+                         class="w-20 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+                  кл.
+                </label>
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-400" x-text="`${tpl.w}×${tpl.h} на ${tpl.x}, ${tpl.y}`"></span>
+                  <button type="button" @click="sizeTemplate(tpl.iw)" class="btn btn-ghost">1:1</button>
+                  <button type="button" @click="dropTemplate" class="btn btn-ghost ml-auto">Убрать</button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          {% if perms.wall.moderate_wall %}
+          <div x-show="panel === 'tools'" x-data="{ hours: 3, note: '', title: '' }" class="space-y-4">
+            <div>
+              <label class="checkbox"><input type="checkbox" x-model="artist">режим художника</label>
+              <p class="text-slate-400 mt-1">Без зарядов и без подтверждения: клик по доске сразу красит.</p>
+            </div>
+
+            <div class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+              <label class="checkbox"><input type="checkbox" x-model="areaEdit">выделять область мышью</label>
+              <div class="flex items-center gap-2">
+                <span :class="rectTooBig && 'text-rose-500'" x-text="rectSize"></span>
+                <button type="button" @click="dropRect" x-show="rectReady" x-cloak class="btn btn-ghost ml-auto">Сбросить</button>
+              </div>
+              <p x-show="rectTooBig" x-cloak class="text-rose-500">За раз можно взять не больше <span x-text="max_area"></span> клеток.</p>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" @click="area('fill', { color: brushCode })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-primary">Залить</button>
+                <button type="button" @click="area('fill', { color: 0 })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost">Очистить</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="number" min="1" max="720" x-model.number="hours"
+                       class="w-14 shrink-0 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+                <span class="text-slate-400">ч назад</span>
+                <button type="button" @click="area('rollback', { hours })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost ml-auto">Откатить</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="text" x-model="note" maxlength="100" placeholder="что за рисунок"
+                       class="flex-1 min-w-0 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+                <button type="button" @click="area('protect', { note }); note = ''" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost">Заморозить</button>
+              </div>
+            </div>
+
+            <div x-show="areas.length" x-cloak class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-1">
+              <template x-for="frozen in areas" :key="frozen.pk">
+                <div class="flex items-center gap-2">
+                  <span class="shrink-0" x-text="`${frozen.x1}, ${frozen.y1} — ${frozen.x2}, ${frozen.y2}`"></span>
+                  <span class="text-slate-400 truncate" x-text="frozen.note"></span>
+                  <button type="button" @click="dropArea(frozen.pk)" class="ml-auto shrink-0 text-rose-500">снять</button>
+                </div>
+              </template>
+            </div>
+
+            <div x-show="owner" x-cloak class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+              <p>Автор клетки: <b x-text="ownerName"></b></p>
+              <div class="flex items-center gap-2">
+                <button type="button" @click="banOwner(7)" class="btn btn-ghost">Закрыть на неделю</button>
+                <button type="button" @click="banOwner(0)" class="btn btn-ghost">Снять</button>
+              </div>
+            </div>
+
+            {% if request.user.is_staff %}
+            {# Новый сезон. Прошлая доска не стирается — уходит в архив вместе с журналом, #}
+            {# но со страницы её сменяет чистая, и таймлапс начинается заново. #}
+            <div class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+              <p class="font-medium">Новая доска</p>
+              <p class="text-slate-400">Нынешняя закроется и уйдёт в архив: рисунок и история останутся в базе, но на странице будет пустое полотно.</p>
+              <div class="flex items-center gap-2">
+                <input type="text" x-model="title" maxlength="100" placeholder="название"
+                       class="flex-1 min-w-0 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+                <button type="button" @click="newBoard(title)" :disabled="!title.trim() || busy" class="btn btn-danger">Открыть</button>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  {# ===== Кисть и заряды: строкой под доской. Палитра стоит выше, рядом с холстом. ===== #}
+  <div x-show="!film" class="shrink-0 flex items-center gap-2 sm:gap-3">
+    <span class="w-7 h-7 rounded-lg ring-1 ring-slate-300 dark:ring-slate-700 shrink-0"
+          :style="{ background: colors[brushCode].hex }" :title="`Цвет кисти: ${colors[brushCode].name}`"></span>
+    <span class="hidden lg:inline text-xs text-slate-400 truncate" x-text="colors[brushCode].name"></span>
+
+    {# Заряды точками: сколько мазков осталось, видно не считая. #}
+    <span class="flex items-center gap-1 shrink-0" :title="`${charges} из {{ max_charges }}`">
+      <template x-for="n in max_charges" :key="n">
+        <span class="w-2 h-2 rounded-full"
+              :style="{ background: n <= charges ? 'var(--color-accent)' : 'rgba(120,120,130,.35)' }"></span>
+      </template>
+    </span>
+    <span x-show="timer" x-cloak class="text-xs text-slate-400 tabular-nums shrink-0" x-text="timer"></span>
+
+    {# На узком экране координаты и так висят на самой доске — здесь для них места нет. #}
+    <span class="hidden sm:inline text-xs text-slate-400 truncate"
+          x-text="sel ? `клетка ${sel.x}, ${sel.y}` : 'выбери клетку'"></span>
+
+    <button type="button" @click="act('erase')" :disabled="!mine || busy" class="btn btn-ghost !px-3 shrink-0 ml-auto"
+            title="Стереть можно только свой пиксель — чужой закрашивают">
+      <i class="fa-solid fa-eraser"></i>
+    </button>
+    <button type="button" x-show="!artist" @click="act('paint')" :disabled="!sel || !charges || busy"
+            class="btn btn-primary shrink-0">
+      <i class="fa-solid fa-paintbrush"></i>Закрасить
+    </button>
+    <span x-show="artist" x-cloak class="text-xs text-slate-400 shrink-0">клик по доске красит сразу</span>
+  </div>
+
+  {# Таймлапс занимает то же место, что кисть с зарядами. #}
+  <div x-show="film" x-cloak class="shrink-0 flex items-center gap-2">
+    <button type="button" @click="playing ? pause() : play()" class="btn btn-ghost !px-3 shrink-0"
+            :aria-label="playing ? 'Пауза' : 'Играть'">
+      <i class="fa-solid" :class="playing ? 'fa-pause' : 'fa-play'"></i>
+    </button>
+    <input type="range" min="0" :max="film ? film.total : 1" :value="at"
+           @input="pause(); seek($event.target.value)" class="flex-1 min-w-0 accent-accent" aria-label="Перемотка">
+    <span class="shrink-0 text-xs text-slate-400 tabular-nums whitespace-nowrap" x-text="filmTime"></span>
+    <button type="button" @click="faster" class="btn btn-ghost !px-2 shrink-0 text-xs tabular-nums"
+            title="Скорость" x-text="'×' + speed"></button>
+    {# Сравнение, а не само число: Alpine снимает булев атрибут только с null, undefined #}
+    {# и false, а ноль для него — обычное значение, и кнопка так и осталась бы серой. #}
+    <button type="button" @click="saveGif" :disabled="saving > 0" class="btn btn-ghost !px-2 shrink-0"
+            title="Сохранить запись гифкой">
+      <span x-show="!saving"><i class="fa-solid fa-download"></i></span>
+      <span x-show="saving" x-cloak class="text-xs tabular-nums" x-text="saving + '%'"></span>
+    </button>
+    <button type="button" @click="stopFilm" class="btn btn-ghost !px-2 shrink-0" aria-label="Выйти из таймлапса">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+  </div>
+</div>
+
+{{ data|json_script:"wall-data" }}
+{% endblock %}

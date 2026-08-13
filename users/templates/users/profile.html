@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load attachment_extras %}
+{% load attachment_extras wall_extras %}
 
 {% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
 
@@ -19,6 +19,7 @@
     {% if person.team %}
     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ person.team.get_grade_str }} · {{ person.team.number }}</p>
     {% endif %}
+    <a href="{% url 'wall' %}" class="inline-flex mt-2 text-sm hover:text-accent transition-colors">{% wall_dot person True %}</a>
 
     {% if person.vk_page or person.tg_page or person.email %}
     <div class="flex flex-wrap justify-center gap-x-5 gap-y-2 mt-4 text-sm">

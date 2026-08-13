@@ -106,6 +106,9 @@ class Team(models.Model):
         ("bachelor", "Бакалавриат"),
         ("master", "Магистратура"),
     )
+    # Служебная группа выпускников (номер 000000). Потока у них уже нет, но числиться
+    # где-то надо: без группы человек не попадает ни в один чат и остаётся без подписи.
+    ALUMNI_YEAR = 0
 
     number = models.CharField("номер", max_length=7, unique=True)
     profile = models.CharField("профиль", max_length=255)
@@ -132,6 +135,9 @@ class Team(models.Model):
         return self.year_of_admission + (2 if self.stage == "master" else 6)
 
     def get_grade_str(self):
+        # У служебной группы год нулевой, и обычный расчёт дал бы «Выпускник 6 года».
+        if self.year_of_admission == self.ALUMNI_YEAR:
+            return "Выпускник"
         if date.today().year > self.graduation_year():
             return f"Выпускник {self.graduation_year()} года"
         return f"Студент {self.get_grade_level()} курса"

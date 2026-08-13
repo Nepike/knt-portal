@@ -356,3 +356,15 @@ class BlobCleanupTests(TestCase):
 
         book.delete()  # файл уезжает каскадом, сигнал обязан сработать и на нём
         self.assertFalse(self.storage.exists(key))
+
+    def test_key_fits_the_database_field(self):
+        # Ключ длиннее поля не сохранился бы вовсе: DataError на вставке.
+        long_name = "Лекции по математическому анализу за третий семестр, поток Иванова.pdf"
+        for folder in ("materials", "books", "images", "avatars", "teachers"):
+            key = random_key(folder, long_name)
+            self.assertLessEqual(len(key), 100, folder)
+            self.assertTrue(key.endswith(".pdf"), key)
+
+    def test_name_without_extension_survives(self):
+        key = random_key("books", "конспект")
+        self.assertTrue(key.endswith("/конспект"), key)

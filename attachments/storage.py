@@ -5,11 +5,24 @@ from django.conf import settings
 from django.core.files.storage import FileSystemStorage
 
 
+# Длина FileField по умолчанию. Ключ обязан влезать: иначе запись не сохранится вовсе,
+# а хранилище молча урезало бы имя и разошлось с тем, что записано в базе.
+KEY_MAX = 100
+
+
 def random_key(folder, filename):
     """Ключ с непредсказуемым сегментом: по адресу вида materials/12/images/foto.jpg
     библиотеку можно было бы перебрать, ни разу не зайдя на сайт. Имя файла оставляем
-    в конце — с ним понятнее и в бакете, и при сохранении."""
-    return f"{folder}/{uuid4().hex}/{Path(filename).name}"
+    в конце — с ним понятнее и в бакете, и при сохранении.
+
+    Длинное имя подрезаем: под скачивание идёт File.name, а не хвост ключа (см. media._pretty),
+    так что теряется только читаемость в бакете.
+    """
+    prefix = f"{folder}/{uuid4().hex}/"
+    name = Path(filename).name
+    suffix = Path(name).suffix[:20]  # расширение бережём целиком, по нему выбирается значок
+    stem = name[: len(name) - len(suffix)][: max(KEY_MAX - len(prefix) - len(suffix), 1)]
+    return f"{prefix}{stem or 'file'}{suffix}"
 
 
 def media_storage():

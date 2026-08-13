@@ -83,6 +83,8 @@ class Chat(models.Model):
 
     @staticmethod
     def course_title(stage, year):
+        if year == Team.ALUMNI_YEAR:
+            return "Выпускники"  # служебная группа, никакого потока за ней нет
         return f"{dict(Team.STAGE_CHOICES).get(stage, stage)} {year}"
 
     @classmethod

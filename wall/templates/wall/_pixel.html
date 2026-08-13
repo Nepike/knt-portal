@@ -1,0 +1,22 @@
+<div data-mine="{{ mine|yesno:'1,0' }}" data-owner="{{ owner.pk|default:'' }}"
+     data-owner-name="{% if owner %}{{ owner.name }} {{ owner.surname }}{% endif %}" class="space-y-3">
+  <p class="text-sm text-slate-400">Клетка {{ x }}, {{ y }}</p>
+
+  {% for event in events %}
+  <div class="flex items-center gap-3 text-sm">
+    <span class="w-5 h-5 rounded shrink-0 ring-1 ring-slate-300 dark:ring-slate-700"
+          style="background: {{ event.shade.hex }}"></span>
+    <div class="min-w-0 flex-1 truncate">
+      {% if event.user %}
+        <a href="{% url 'profile' event.user.pk %}" class="font-medium hover:text-accent">{{ event.user.name }} {{ event.user.surname }}</a>
+      {% else %}
+        <span class="text-slate-400">кто-то, кого уже нет</span>
+      {% endif %}
+      <span class="text-slate-400">{% if event.color %}закрасил{% else %}стёр{% endif %}</span>
+    </div>
+    <time class="shrink-0 text-slate-400">{{ event.created|date:"d.m.y H:i" }}</time>
+  </div>
+  {% empty %}
+  <p class="text-sm text-slate-400">Клетку ещё никто не трогал.</p>
+  {% endfor %}
+</div>

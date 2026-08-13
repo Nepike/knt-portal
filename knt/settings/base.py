@@ -27,6 +27,8 @@ LOCAL_APPS = [
     "attachments",
     "telegram",
     "moderation",
+    "economy",
+    "wall",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -81,7 +83,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# Путь машинно-зависимый, как и адрес базы: на время переноса старого сайта медиа
+# уезжает на другой диск, где хватает места под 50+ ГБ.
+# Пустая строка тоже значит «по умолчанию»: в .env переменная обычно объявлена без значения.
+MEDIA_ROOT = Path(env("MEDIA_ROOT", default="") or BASE_DIR / "media")
 
 # Прод переопределяет staticfiles на whitenoise (см. prod.py).
 STORAGES = {

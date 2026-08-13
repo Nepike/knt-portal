@@ -1,4 +1,4 @@
-{% load static moderation_extras attachment_extras %}
+{% load static moderation_extras attachment_extras economy_extras %}
 <!DOCTYPE html>
 <html lang="ru" class="theme-{{ site_theme }}">
 <head>
@@ -60,6 +60,7 @@
           <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
+          <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
@@ -95,9 +96,9 @@
             </span>
             <span class="min-w-0 flex-1 text-left">
               <span class="block text-sm font-medium truncate">{{ request.user.name }} {{ request.user.surname }}</span>
-              {# TODO (M5 economy/profiles): реальные уровень и баланс #}
+              {# TODO (M5 profiles): реальный уровень #}
               {# TODO: своя SVG-иконка валюты вместо fa-cent-sign #}
-              <span class="block text-xs text-slate-500">ур. 1 · 100 <i class="fa-solid fa-cent-sign"></i></span>
+              <span class="block text-xs text-slate-500">ур. 1 · {% coins request.user %} <i class="fa-solid fa-cent-sign"></i></span>
             </span>
             <i class="fa-solid fa-chevron-down text-slate-400 transition" :class="open && 'rotate-180'"></i>
           </button>
@@ -134,7 +135,8 @@
       </div>
     </header>
 
-    <main class="flex-1 flex flex-col w-full max-w-5xl mx-auto {% block main_class %}px-4 sm:px-6 py-6{% endblock %}">
+    {# Ширину переопределяют страницы, которым узкая колонка мешает — например Стена #}
+    <main class="flex-1 flex flex-col w-full {% block main_width %}max-w-5xl{% endblock %} mx-auto {% block main_class %}px-4 sm:px-6 py-6{% endblock %}">
       {% block content %}{% endblock %}
     </main>
 
