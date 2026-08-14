@@ -50,17 +50,21 @@
           </span>
         </a>
 
+        {% comment %}
+          В бете закрытые разделы гасим, а не прячем: пусть видно, что они есть и никуда
+          не делись. Ссылка при этом снимается — вести на страницу «закрыто» незачем.
+        {% endcomment %}
         <nav class="flex flex-col gap-1">
-          <a href="{% url 'chat_list' %}" class="nav-link {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
+          <a {% if not beta_locked %}href="{% url 'chat_list' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
             <i class="fa-solid fa-comment"></i>Сообщения
-            {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
+            {% if request.user.is_authenticated and not beta_locked %}{% include "chats/_unread_badge.html" %}{% endif %}
           </a>
           <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
-          <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
+          <a {% if not beta_locked %}href="{% url 'teacher_list' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
-          <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
+          <a {% if not beta_locked %}href="{% url 'wall' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
@@ -122,6 +126,16 @@
 
   {# h-dvh вместо min-h-screen (чат) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
   <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-screen{% endblock %}">
+    {# Страницы, которые сами про бету и рассказывают, блок гасят — см. core/support.html #}
+    {% block beta_banner %}
+    {% if beta %}
+    <div class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-2 text-center text-sm
+                bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      <span><i class="fa-solid fa-flask"></i> Сайт переехал недавно и работает в бета-версии — что-то может не работать.</span>
+      <a href="{% url 'support' %}" class="font-semibold underline underline-offset-2 hover:no-underline">Сообщить о проблеме</a>
+    </div>
+    {% endif %}
+    {% endblock %}
     <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
@@ -146,7 +160,7 @@
       <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
         <a href="#" class="hover:text-slate-700 dark:hover:text-slate-300">О факультете</a>
         <a href="#" class="hover:text-slate-700 dark:hover:text-slate-300">Контакты</a>
-        <a href="#" class="hover:text-slate-700 dark:hover:text-slate-300">Поддержка</a>
+        <a href="{% url 'support' %}" class="hover:text-slate-700 dark:hover:text-slate-300">Поддержка</a>
         <a href="https://vk.com/knt_mipt" target="_blank" rel="noopener" class="hover:text-slate-700 dark:hover:text-slate-300">ВКонтакте</a>
       </div>
     </footer>

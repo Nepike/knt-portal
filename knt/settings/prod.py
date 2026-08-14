@@ -3,11 +3,13 @@ from .base import env
 
 DEBUG = False
 SECRET_KEY = env("SECRET_KEY")
-ALLOWED_HOSTS = ["knt-mipt.ru", "inbicst.ru", "fnbic.ru", "test.inbicst.ru", "files.inbicst.ru"]
+# inbicst.ru и fnbic.ru nginx разворачивает на knt-mipt.ru, до приложения они не доходят —
+# держим их в списке на случай, если однажды перестанет.
+ALLOWED_HOSTS = ["knt-mipt.ru", "inbicst.ru", "fnbic.ru", "files.inbicst.ru"]
 # files. в доверенных источниках не нужен: на него только ходят за файлами, форм там нет.
-CSRF_TRUSTED_ORIGINS = ["https://knt-mipt.ru", "https://inbicst.ru", "https://fnbic.ru", "https://test.inbicst.ru"]
+CSRF_TRUSTED_ORIGINS = ["https://knt-mipt.ru", "https://inbicst.ru", "https://fnbic.ru"]
 
-# Байты отдаёт nginx (см. nginx.conf), приложение возвращает только заголовок.
+# Байты отдаёт nginx (см. nginx-files.conf), приложение возвращает только заголовок.
 MEDIA_ACCEL = True
 
 DATABASES = {"default": env.db("DATABASE_URL")}

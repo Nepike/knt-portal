@@ -1,5 +1,11 @@
 {% load form_extras %}
 {% with wt=field|widget_type %}
+{% comment %}
+  Поле и подпись под ним — ОДИН узел. Формы раскладываются флексом с промежутком (gap-5),
+  и двумя соседями подпись получала бы такой же отступ сверху, как и снизу: висела бы
+  между полями и читалась как заголовок следующего.
+{% endcomment %}
+<div>
 
 {% if wt == "AccentSelect" or wt == "AccentSelectMultiple" %}
   {% with mult=field.field.widget.allow_multiple_selected search=field.field.widget.search d=field|select_json %}
@@ -80,9 +86,10 @@
   </div>
 {% endif %}
 
-{% if field.errors %}<p class="mt-1 text-xs text-rose-500">{{ field.errors.0 }}</p>
-{% elif field.help_text %}<div class="mt-1 text-xs text-slate-400">{{ field.help_text }}</div>{% endif %}
+{% if field.errors %}<p class="mt-1.5 text-xs text-rose-500">{{ field.errors.0 }}</p>
+{% elif field.help_text %}<div class="mt-1.5 text-xs text-slate-400">{{ field.help_text }}</div>{% endif %}
 
+</div>
 {% endwith %}
 
 

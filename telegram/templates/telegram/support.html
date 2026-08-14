@@ -1,0 +1,8 @@
+🛟 <b>Поддержка</b> · {{ topic }}
+
+{{ text }}
+{% if page %}
+<b>Страница:</b> {{ page }}{% endif %}
+{% if author %}<b>От:</b> {{ author.name }} {{ author.surname }} · {{ author.email }} · id {{ author.pk }}
+{% if contact and contact != author.email %}<b>Ответить:</b> {{ contact }}{% endif %}
+{% else %}<b>От:</b> не вошёл на сайт · {{ contact }}{% endif %}

@@ -5,7 +5,7 @@
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
   <h1 class="text-2xl font-bold">Материалы</h1>
-  <a href="{% url 'material_new' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i>Добавить материал</a>
+  {% if not beta_locked %}<a href="{% url 'material_new' %}" class="btn btn-primary"><i class="fa-solid fa-plus"></i>Добавить материал</a>{% endif %}
 </div>
 
 {% comment %}

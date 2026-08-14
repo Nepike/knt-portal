@@ -7,7 +7,10 @@ from .tasks import send_message
 
 logger = logging.getLogger(__name__)
 
-MODERATION = "moderation"  # имя чата в TelegramChat; дальше добавятся support, orders
+# Имена чатов в TelegramChat. Сам чат заводится в админке — chat_id узнаётся только
+# у живого чата (команда /get_chat_id, см. management/commands/bot.py).
+MODERATION = "moderation"
+SUPPORT = "support"
 
 
 def notify(chat_name, template, context=None):

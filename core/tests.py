@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from django.core import mail
+from django.core.cache import cache
+from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -165,6 +168,150 @@ class AlumniTeamTests(TestCase):
         alumni = self.team()
         call_command("cleanup_legacy", "--apply", verbosity=0)
         self.assertTrue(Team.objects.filter(pk=alumni.pk).exists())
+
+
+def make_user(email, **extra):
+    extra.setdefault("name", "Иван")
+    extra.setdefault("surname", "Иванов")
+    return User.objects.create_user(email=email, password="pass12345", must_change_password=False, **extra)
+
+
+@override_settings(BETA=True)
+class BetaLockTests(TestCase):
+    """Пока идёт бета, наружу открыты только материалы, библиотека и поддержка."""
+
+    def setUp(self):
+        self.reader = make_user("reader@x.ru")
+        self.staff = make_user("staff@x.ru", is_staff=True)
+
+    def test_open_sections_are_reachable(self):
+        self.client.force_login(self.reader)
+        for name in ("material_list", "book_list", "support"):
+            self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
+
+    def test_closed_sections_explain_themselves_instead_of_pretending_to_be_missing(self):
+        # 403 со страницей, а не 404: раздел существует, просто ещё закрыт.
+        self.client.force_login(self.reader)
+        for name in ("teacher_list", "chat_list", "wall", "material_new", "book_new"):
+            response = self.client.get(reverse(name))
+            self.assertEqual(response.status_code, 403, name)
+            self.assertContains(response, "Раздел ещё закрыт", status_code=403)
+
+    def test_staff_walks_everywhere(self):
+        self.client.force_login(self.staff)
+        for name in ("teacher_list", "chat_list", "material_new", "book_new"):
+            self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
+
+    def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
+        response = self.client.get(reverse("teacher_list"))
+        self.assertRedirects(response, f"{reverse('login')}?next={reverse('teacher_list')}")
+
+    def test_the_root_leads_to_materials(self):
+        self.client.force_login(self.reader)
+        self.assertRedirects(self.client.get("/"), reverse("material_list"))
+
+    @override_settings(BETA=False)
+    def test_switching_beta_off_opens_everything(self):
+        self.client.force_login(self.reader)
+        self.assertEqual(self.client.get(reverse("teacher_list")).status_code, 200)
+
+
+@override_settings(BETA=True)
+class SupportFormTests(TestCase):
+    def setUp(self):
+        self.user = make_user("reader@x.ru", name="Иван", surname="Петров")
+        self.client.force_login(self.user)
+
+    def test_a_report_reaches_the_support_chat(self):
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("support"), {
+                "topic": "broken", "text": "Не открывается книга", "page": "/library/12/",
+            })
+        self.assertRedirects(response, reverse("support"))
+        chat, template, context = sent.call_args.args
+        self.assertEqual(chat, "support")
+        self.assertEqual(template, "telegram/support.html")
+        self.assertEqual(context["author"], self.user)
+        self.assertEqual(context["topic"], "Что-то не работает")
+
+    def test_an_empty_report_is_not_sent(self):
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("support"), {"topic": "broken", "text": ""})
+        self.assertEqual(response.status_code, 200)
+        sent.assert_not_called()
+
+    def test_the_page_says_nothing_about_the_beta(self):
+        # Страница переживёт бету — плашка на ней была бы мусором уже через месяц.
+        page = self.client.get(reverse("support")).content.decode()
+        self.assertNotIn("бета-версии", page)
+
+    def test_the_contact_is_prefilled_for_those_we_already_know(self):
+        form = self.client.get(reverse("support")).context["form"]
+        self.assertEqual(form.fields["contact"].initial, self.user.email)
+        self.assertFalse(form.fields["contact"].required)
+
+    def test_the_page_field_is_prefilled_from_where_the_person_came_from(self):
+        response = self.client.get(reverse("support"), headers={"referer": "https://knt-mipt.ru/library/12/"})
+        self.assertEqual(response.context["form"].initial["page"], "https://knt-mipt.ru/library/12/")
+
+    def test_the_support_page_itself_is_not_offered_as_the_broken_one(self):
+        # После отправки браузер шлёт referer со страницы поддержки — подставлять его нельзя.
+        response = self.client.get(reverse("support"), headers={"referer": "https://knt-mipt.ru/support/"})
+        self.assertEqual(response.context["form"].initial["page"], "")
+
+    def test_the_message_carries_who_wrote_and_how_to_answer(self):
+        text = render_to_string("telegram/support.html", {
+            "author": self.user, "topic": "Предложение", "text": "Добавьте тёмную тему", "page": "", "contact": "@ivan",
+        })
+        self.assertIn("Добавьте тёмную тему", text)
+        self.assertIn("Иван Петров", text)
+        self.assertIn(self.user.email, text)
+        self.assertIn("@ivan", text)
+        self.assertNotIn("Страница:", text)
+
+
+@override_settings(BETA=True)
+class SupportWithoutLoginTests(TestCase):
+    """Кто не может войти — как раз тот, кому поддержка нужнее всего."""
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+
+    def test_the_page_opens_to_a_visitor_who_is_not_logged_in(self):
+        self.assertEqual(self.client.get(reverse("support")).status_code, 200)
+
+    def test_without_a_contact_there_would_be_nowhere_to_answer(self):
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("support"), {"topic": "account", "text": "Не приходит письмо"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "contact", "Обязательное поле.")
+        sent.assert_not_called()
+
+    def test_a_visitor_with_a_contact_gets_through(self):
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("support"), {
+                "topic": "account", "text": "Не приходит письмо", "contact": "ivan@mipt.ru",
+            })
+        self.assertRedirects(response, reverse("support"))
+        context = sent.call_args.args[2]
+        self.assertIsNone(context["author"])
+        self.assertEqual(context["contact"], "ivan@mipt.ru")
+
+    def test_the_message_shows_that_nobody_stands_behind_the_report(self):
+        text = render_to_string("telegram/support.html", {
+            "author": None, "topic": "Аккаунт и доступ", "text": "Не приходит письмо",
+            "page": "", "contact": "ivan@mipt.ru",
+        })
+        self.assertIn("не вошёл на сайт", text)
+        self.assertIn("ivan@mipt.ru", text)
+
+    def test_a_flood_stops_reaching_the_chat(self):
+        # Форма открыта всему интернету: без ограничителя чат завалило бы за вечер.
+        payload = {"topic": "other", "text": "спам", "contact": "spam@x.ru"}
+        with patch("core.views.notify") as sent:
+            for _ in range(14):
+                self.client.post(reverse("support"), payload)
+        self.assertEqual(sent.call_count, 10)
 
 
 class LegacyFileKeyTests(SimpleTestCase):

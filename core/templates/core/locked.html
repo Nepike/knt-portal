@@ -1,0 +1,21 @@
+{% extends "core/base.html" %}
+
+{% block title %}Раздел ещё закрыт{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-lg mx-auto text-center py-16">
+  <i class="fa-solid fa-screwdriver-wrench text-4xl text-slate-300 dark:text-slate-700"></i>
+  <h1 class="text-2xl font-bold mt-4">Раздел ещё закрыт</h1>
+  <p class="mt-2 text-slate-500">
+    Сайт работает в бета-версии, и разделы мы открываем по одному — по мере того как
+    проверяем каждый. Сейчас доступны материалы и библиотека, остальное на подходе.
+  </p>
+  <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+    <a href="{% url 'material_list' %}" class="btn btn-primary">К материалам</a>
+    <a href="{% url 'book_list' %}" class="btn btn-ghost">В библиотеку</a>
+  </div>
+  <p class="mt-8 text-sm text-slate-400">
+    Нужен закрытый раздел прямо сейчас — <a href="{% url 'support' %}" class="underline underline-offset-2 hover:no-underline">напиши в поддержку</a>.
+  </p>
+</div>
+{% endblock %}

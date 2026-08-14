@@ -9,9 +9,10 @@ from django.contrib.auth.views import (
     PasswordResetConfirmView as BasePasswordResetConfirmView,
     PasswordResetView as BasePasswordResetView,
 )
-from django.core.cache import cache
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
+
+from core.throttle import client_ip, throttled
 
 from .forms import RegisterUserForm
 from .models import User
@@ -27,22 +28,6 @@ def _clear_must_change_password(user):
     if user.must_change_password:
         user.must_change_password = False
         user.save(update_fields=["must_change_password"])
-
-
-def _throttled(key, limit, window=3600):
-    """Фиксированное окно на кэше: True — лимит исчерпан."""
-    if cache.add(key, 1, window):
-        return False
-    try:
-        return cache.incr(key) > limit
-    except ValueError:
-        cache.set(key, 1, window)
-        return False
-
-
-def _client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR", "")
 
 
 class PasswordChangeView(BasePasswordChangeView):
@@ -63,9 +48,9 @@ class PasswordResetView(BasePasswordResetView):
 
     def form_valid(self, form):
         # Защита от спама письмами: при превышении лимита молча уходим на done-страницу.
-        ip = _client_ip(self.request)
+        ip = client_ip(self.request)
         email = form.cleaned_data["email"].lower()
-        if _throttled(f"pwreset:ip:{ip}", 5) or _throttled(f"pwreset:email:{email}", 3):
+        if throttled(f"pwreset:ip:{ip}", 5) or throttled(f"pwreset:email:{email}", 3):
             return HttpResponseRedirect(self.get_success_url())
         return super().form_valid(form)
 

@@ -1,4 +1,29 @@
 from django.http import HttpResponse
+from django.shortcuts import render
+
+from .beta import locked
+
+
+class BetaLockMiddleware:
+    """Закрытые на время беты разделы (список — core/beta.py).
+
+    Проверяем в process_view, а не в __call__: имя урла появляется только после того,
+    как Django разобрал адрес, а до этого знать, куда человек идёт, неоткуда.
+
+    Отвечаем страницей с объяснением и 403, а не редиректом на материалы: молча увести
+    в другой раздел — значит оставить человека гадать, почему ссылка «не работает».
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        return self.get_response(request)
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        if locked(request):
+            return render(request, "core/locked.html", status=403)
+        return None
 
 
 class HtmxRedirectMiddleware:

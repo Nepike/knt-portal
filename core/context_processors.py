@@ -1,5 +1,19 @@
 from datetime import date
 
+from django.conf import settings
+
+
+def beta(request):
+    """Плашка «бета» в шапке и спрятанные кнопки загрузки.
+
+    `beta_locked` считаем не для текущего адреса (он-то открыт, раз страница рисуется),
+    а для того, что на ней нарисовано: кнопку «Добавить материал» показывать нельзя,
+    хотя сам список материалов открыт.
+    """
+    user = getattr(request, "user", None)
+    staff = bool(user and user.is_authenticated and user.is_staff)
+    return {"beta": settings.BETA, "beta_locked": settings.BETA and not staff}
+
 
 def site_theme(request):
     today = date.today()

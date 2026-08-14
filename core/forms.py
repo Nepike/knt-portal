@@ -17,6 +17,38 @@ TEACHERS = [
 PLANS = [("free", "Бесплатно"), ("pro", "Про"), ("team", "Командный")]
 
 
+class SupportForm(forms.Form):
+    """Обращение в поддержку. Ничего не хранит: уходит сообщением в телеграм.
+
+    Базы под обращения нет намеренно — отвечает на них живой человек в чате, и запись
+    в таблице, куда никто не заглядывает, только создавала бы вид работающей очереди.
+
+    Темы общие и от разделов не зависят: страница переживёт бету, а список разделов
+    к тому времени сменится не раз.
+    """
+
+    TOPICS = [
+        ("broken", "Что-то не работает"),
+        ("content", "Ошибка в содержимом"),
+        ("account", "Аккаунт и доступ"),
+        ("idea", "Предложение"),
+        ("other", "Другое"),
+    ]
+
+    topic = forms.ChoiceField(label="Тема", choices=TOPICS, initial="broken", widget=AccentSelect)
+    text = forms.CharField(label="Сообщение", max_length=2000, widget=forms.Textarea(attrs={"rows": 8}))
+    contact = forms.CharField(label="Почта или телеграм для ответа", max_length=100)
+    page = forms.CharField(label="Ссылка на страницу", required=False, max_length=200)
+
+    def __init__(self, *args, known=None, **kwargs):
+        """`known` — почта вошедшего. Есть она — контакт необязателен и подставлен;
+        нет (человек пишет со страницы входа) — без контакта ответить будет некуда."""
+        super().__init__(*args, **kwargs)
+        if known:
+            self.fields["contact"].required = False
+            self.fields["contact"].initial = known
+
+
 class DemoForm(forms.Form):
     subject_plain = forms.ChoiceField(label="Предмет", choices=SUBJECTS, required=False, widget=AccentSelect)
     subject_search = forms.ChoiceField(label="Предмет", choices=SUBJECTS, required=False, widget=AccentSelect(search=True))

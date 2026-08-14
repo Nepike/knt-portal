@@ -46,7 +46,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
           script: |
-            cd /srv/test-knt
+            cd /srv/knt
             git pull --ff-only
             docker compose up -d --build
             docker image prune -f
@@ -57,7 +57,7 @@ jobs:
         run: |
           D=$(( $(date +%s) - ${STARTED:-$(date +%s)} ))
           [ "$D" -ge 60 ] && T="$((D / 60)) мин $((D % 60)) с" || T="$D с"
-          TEXT=$(printf '✅ <b>Деплой завершён</b> · %s\n\n<a href="https://test.inbicst.ru">test.inbicst.ru</a>' "$T")
+          TEXT=$(printf '✅ <b>Деплой завершён</b> · %s\n\n<a href="https://knt-mipt.ru">knt-mipt.ru</a>' "$T")
           curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
             -d parse_mode=HTML -d disable_web_page_preview=true \

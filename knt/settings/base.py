@@ -33,6 +33,9 @@ LOCAL_APPS = [
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
+# Бета: наружу открыта только часть разделов, список в core/beta.py. Снять — поставить False.
+BETA = True
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "core.middleware.HtmxRedirectMiddleware",
@@ -43,6 +46,8 @@ MIDDLEWARE = [
     # Сайт закрытый: всё требует логина, кроме auth-страниц и явных @login_not_required.
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
     "users.middleware.MustChangePasswordMiddleware",
+    # После логина: анонимного сначала отправляем входить, а не объясняем ему про бету.
+    "core.middleware.BetaLockMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -61,6 +66,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "core.context_processors.beta",
                 "core.context_processors.site_theme",
                 "chats.context_processors.unread_messages",
             ],
@@ -129,7 +135,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "/demo/"  # TODO: сменить на главную, когда появится
+LOGIN_REDIRECT_URL = "/"  # корень ведёт в материалы; TODO: сменить на главную, когда появится
 LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"

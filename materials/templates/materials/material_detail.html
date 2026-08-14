@@ -70,7 +70,7 @@
     </div>
     {% endif %}
 
-    {% if may_edit %}
+    {% if may_edit and not beta_locked %}
     <a href="{% url 'material_edit' material.pk %}" class="btn btn-secondary mt-5"><i class="fa-solid fa-pen"></i>Редактировать</a>
     {% endif %}
 
