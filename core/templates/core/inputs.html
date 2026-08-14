@@ -42,24 +42,25 @@
     <span class="field-label" :class="active ? 'fl-accent' : ({% if mult %}selected.length{% else %}selectedValue{% endif %} ? 'fl-up' : 'fl-down')">{{ field.label }}{% if not field.field.required and not hide_optional %}<span class="opt"> · необязательно</span>{% endif %}</span>
     {% endif %}
 
-    {% comment %}
-      up=True — меню раскрывается вверх (селект у нижнего края модалки/экрана).
-
-      Без overflow-hidden на этой коробке, хотя углы у неё скруглены: Safari на iPhone
-      не отдаёт жест внутреннему списку, если тот лежит под скруглённым обрезающим
-      слоем, — список просто не листался с телефона. Обрезать тут и нечего: строки
-      идут с отступом (p-1) и в углы не заходят.
-      overscroll-contain — чтобы жест по списку не утекал в прокрутку самой страницы.
-    {% endcomment %}
-    <div x-show="open" x-cloak {% if up %}x-transition.origin.bottom{% else %}x-transition.origin.top{% endif %} class="absolute z-30 {% if up %}bottom-full mb-1{% else %}mt-1{% endif %} w-full rounded-btn border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
+    {# up=True — меню раскрывается вверх (селект у нижнего края модалки/экрана) #}
+    <div x-show="open" x-cloak {% if up %}x-transition.origin.bottom{% else %}x-transition.origin.top{% endif %} class="absolute z-30 {% if up %}bottom-full mb-1{% else %}mt-1{% endif %} w-full rounded-btn border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
       {% if search %}
+      {% comment %}
+        Фокус сюда ставит focusSearch() — и только там, где есть мышь: на телефоне
+        клавиатура закрыла бы собой список. Нажали на поле пальцем сами — высоту подгонит fit().
+      {% endcomment %}
       <div class="p-2 border-b border-slate-100 dark:border-slate-800">
-        <input x-ref="search" x-model="query" @input="activeIndex = 0" type="text" placeholder="Поиск…" class="w-full h-9 rounded-md bg-slate-100 dark:bg-slate-800 px-3 text-sm outline-none">
+        <input x-ref="search" x-model="query" @input="activeIndex = 0" @focus="fit()" type="text" placeholder="Поиск…" class="w-full h-9 rounded-md bg-slate-100 dark:bg-slate-800 px-3 text-sm outline-none">
       </div>
       {% endif %}
-      {# Палец, поехавший по списку, — это прокрутка, а не выбор: без этой пометки #}
-      {# пролистывание заканчивалось кликом по строке, на которой его начали. #}
-      <div class="max-h-56 overflow-y-auto overscroll-contain p-1"
+      {% comment %}
+        overscroll-contain — чтобы жест по списку не утекал в прокрутку самой страницы.
+        Пометка scrolling: палец, поехавший по списку, — это прокрутка, а не выбор; без неё
+        пролистывание заканчивалось кликом по строке, на которой его начали.
+        :style объектом, а не строкой (строка затирает весь атрибут).
+      {% endcomment %}
+      <div x-ref="list" class="max-h-56 overflow-y-auto overscroll-contain p-1"
+           :style="room ? { maxHeight: room + 'px' } : {}"
            @touchstart.passive="scrolling = false" @touchmove.passive="scrolling = true">
         <template x-for="(opt, idx) in filtered" :key="opt.value">
           <div :data-opt="idx" @mousedown.prevent @click="scrolling || pick(opt)" @mouseenter="activeIndex = idx"

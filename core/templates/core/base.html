@@ -59,20 +59,20 @@
         </a>
 
         {% comment %}
-          В бете закрытые разделы гасим, а не прячем: пусть видно, что они есть и никуда
+          Неготовые разделы гасим, а не прячем: пусть видно, что они есть и никуда
           не делись. Ссылка при этом снимается — вести на страницу «закрыто» незачем.
         {% endcomment %}
         <nav class="flex flex-col gap-1">
-          <a {% if not beta_locked %}href="{% url 'chat_list' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
+          <a href="{% url 'chat_list' %}" class="nav-link {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
             <i class="fa-solid fa-comment"></i>Сообщения
-            {% if request.user.is_authenticated and not beta_locked %}{% include "chats/_unread_badge.html" %}{% endif %}
+            {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
           </a>
           <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
-          <a {% if not beta_locked %}href="{% url 'wall' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
+          <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
@@ -121,7 +121,9 @@
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
             {# TODO: реальные URL инвентаря/настроек #}
-            <a href="{% url 'profile' request.user.pk %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user"></i>Профиль</a>
+            {# Профиль ещё не сделан (core/beta.py) — пункт гасим по тому же правилу, что и разделы меню #}
+            <a {% if not beta_locked %}href="{% url 'profile' request.user.pk %}"{% endif %}
+               class="flex items-center gap-1 px-3 py-2 rounded {% if beta_locked %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
             {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
             <form method="post" action="{% url 'logout' %}">

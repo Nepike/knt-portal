@@ -125,9 +125,45 @@ document.addEventListener("alpine:init", () => {
   const base = ({ options, search = false }) => ({
     open: false, focused: false, query: "", activeIndex: 0, options, search,
     scrolling: false, // по списку ведут пальцем — клик в конце жеста выбором не считаем
+    room: 0, // чем ограничить высоту списка, когда снизу вылезла клавиатура; 0 — не мешаем
+
+    init() {
+      // Клавиатура телефона НЕ двигает раскладку — она просто закрывает нижнюю часть
+      // экрана. Обычные размеры окна об этом ничего не знают, знает только visualViewport.
+      if (!window.visualViewport) return;
+      const refit = () => this.open && this.fit();
+      visualViewport.addEventListener("resize", refit);
+      visualViewport.addEventListener("scroll", refit);
+    },
+
     toggle() { this.open ? this.close() : this.openMenu(); },
-    openMenu() { this.open = true; this.activeIndex = 0; if (this.search) this.$nextTick(() => this.$refs.search.focus()); },
-    close() { this.open = false; this.query = ""; },
+    openMenu() {
+      this.open = true;
+      this.activeIndex = 0;
+      this.$nextTick(() => this.focusSearch());
+    },
+    close() { this.open = false; this.query = ""; this.room = 0; },
+
+    // Фокус в поиск ставим только там, где есть мышь. На телефоне он поднимает клавиатуру,
+    // а она закрывает собой тот самый список, который человек и пришёл листать: замерено
+    // на экране 375×812 — из 224px списка над клавиатурой остаётся 34, меньше одной строки.
+    // Кому нужен поиск, тот нажмёт на поле сам — и тогда за высотой следит fit().
+    focusSearch() {
+      if (this.search && matchMedia("(pointer: fine)").matches) this.$refs.search.focus();
+    },
+
+    // Список не должен уезжать под клавиатуру: ужимаем его до того, что реально видно.
+    fit() {
+      const view = window.visualViewport;
+      // Ограничиваем ТОЛЬКО когда поверх страницы снизу что-то появилось. В обычном
+      // состоянии высота задана в разметке, и лезть в неё незачем.
+      if (!view || !this.$refs.list || view.height >= innerHeight - 1) {
+        this.room = 0;
+        return;
+      }
+      const top = this.$refs.list.getBoundingClientRect().top - view.offsetTop;
+      this.room = Math.max(96, Math.round(view.height - top - 8));
+    },
     onArrow(dir) {
       if (!this.open) { this.openMenu(); return; }
       const n = this.filtered.length;
@@ -614,7 +650,7 @@ document.addEventListener("alpine:init", () => {
     get active() { return this.open || this.focused; },
     get selectedOptions() { return this.options.filter((o) => this.selected.includes(o.value)); },
     get filtered() { const q = this.query.trim().toLowerCase(); return this.options.filter((o) => !this.selected.includes(o.value) && (!q || o.label.toLowerCase().includes(q))); },
-    pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; this.changed(); if (this.search) this.$refs.search.focus(); },
+    pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; this.changed(); this.focusSearch(); },
     remove(v) { this.selected = this.selected.filter((x) => x !== v); this.changed(); },
   }));
 });

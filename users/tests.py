@@ -1,8 +1,16 @@
-from io import BytesIO
+import logging
+import re
+from datetime import timedelta
+from io import BytesIO, StringIO
 
+from django.conf import settings
+from django.contrib.sessions.models import Session
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from PIL import Image as PilImage
 
@@ -61,3 +69,66 @@ class ProfileTests(TestCase):
     def test_own_profile_has_no_write_button(self):
         response = self.client.get(self.url(self.viewer))
         self.assertNotContains(response, "Написать сообщение")
+
+
+class SessionForCommandTests(TestCase):
+    """Ключ сессии из консоли: им и правда можно смотреть сайт чужими глазами."""
+
+    LOGGER = "users.management.commands.session_for"
+
+    def setUp(self):
+        self.person = make_user("student@t.local")
+        # Команда пишет предупреждение в лог — в выводе сьюта оно только шумит.
+        # Что запись действительно появляется, проверяет отдельный тест ниже.
+        logger = logging.getLogger(self.LOGGER)
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.CRITICAL)
+
+    def run_command(self, *args):
+        out = StringIO()
+        call_command("session_for", *args, stdout=out)
+        return out.getvalue()
+
+    def key_from(self, text):
+        return re.search(rf"{settings.SESSION_COOKIE_NAME} = (\S+)", text).group(1)
+
+    def test_the_key_actually_opens_the_site_as_that_person(self):
+        key = self.key_from(self.run_command(self.person.email))
+        self.client.cookies[settings.SESSION_COOKIE_NAME] = key
+        response = self.client.get(reverse("profile", args=[self.person.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["user"], self.person)
+
+    def test_it_expires_soon_rather_than_living_for_weeks(self):
+        """Ключ — пароль на предъявителя: попал на скриншот, значит действует до истечения."""
+        self.run_command(self.person.email)
+        session = Session.objects.get()
+        self.assertLess(session.expire_date, timezone.now() + timedelta(hours=1))
+
+    def test_a_shorter_life_can_be_asked_for(self):
+        self.run_command(self.person.email, "--minutes", "5")
+        self.assertLess(Session.objects.get().expire_date, timezone.now() + timedelta(minutes=6))
+
+    def test_it_takes_an_id_as_well_as_an_email(self):
+        self.assertIn(self.person.email, self.run_command(str(self.person.pk)))
+
+    def test_end_closes_what_was_handed_out(self):
+        self.run_command(self.person.email)
+        self.run_command(self.person.email)
+        self.assertEqual(Session.objects.count(), 2)
+        self.run_command(self.person.email, "--end")
+        self.assertEqual(Session.objects.count(), 0)
+
+    def test_it_refuses_instead_of_guessing(self):
+        with self.assertRaises(CommandError):
+            self.run_command("nobody@t.local")
+        gone = make_user("gone@t.local", is_active=False)
+        with self.assertRaises(CommandError):
+            self.run_command(gone.email)
+
+    def test_handing_out_a_session_leaves_a_trace_in_the_log(self):
+        """Единственная запись о том, что под этим человеком кто-то ходил: на самих
+        действиях следа не остаётся, они выглядят как его собственные."""
+        with self.assertLogs(self.LOGGER, "WARNING") as log:
+            self.run_command(self.person.email)
+        self.assertIn(self.person.email, log.output[0])

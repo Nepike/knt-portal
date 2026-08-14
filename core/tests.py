@@ -180,33 +180,33 @@ def make_user(email, **extra):
 
 @override_settings(BETA=True)
 class BetaLockTests(TestCase):
-    """Пока идёт бета, наружу открыты материалы, библиотека, преподаватели и поддержка."""
+    """К 14 авг 2026 закрыт ровно один адрес — профиль. Всё остальное открыто."""
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
         self.staff = make_user("staff@x.ru", is_staff=True)
 
-    def test_open_sections_are_reachable(self):
+    def test_everything_but_the_profile_is_reachable(self):
         self.client.force_login(self.reader)
-        for name in ("material_list", "book_list", "teacher_list", "support"):
+        # Загрузка и правка тоже: «только чтение» кончилось вместе с проверкой разделов.
+        for name in ("material_list", "book_list", "teacher_list", "support",
+                     "chat_list", "material_new", "book_new"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
-    def test_closed_sections_explain_themselves_instead_of_pretending_to_be_missing(self):
-        # 403 со страницей, а не 404: раздел существует, просто ещё закрыт.
+    def test_the_unfinished_profile_explains_itself_instead_of_pretending_to_be_missing(self):
+        # 403 со страницей, а не 404: страница существует, просто ещё не сделана.
         self.client.force_login(self.reader)
-        for name in ("chat_list", "wall", "material_new", "book_new"):
-            response = self.client.get(reverse(name))
-            self.assertEqual(response.status_code, 403, name)
-            self.assertContains(response, "Раздел ещё закрыт", status_code=403)
+        response = self.client.get(reverse("profile", args=[self.reader.pk]))
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(response, "Страница ещё не готова", status_code=403)
 
     def test_staff_walks_everywhere(self):
         self.client.force_login(self.staff)
-        for name in ("teacher_list", "chat_list", "material_new", "book_new"):
-            self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
+        self.assertEqual(self.client.get(reverse("profile", args=[self.staff.pk])).status_code, 200)
 
     def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
-        response = self.client.get(reverse("chat_list"))
-        self.assertRedirects(response, f"{reverse('login')}?next={reverse('chat_list')}")
+        target = reverse("profile", args=[self.reader.pk])
+        self.assertRedirects(self.client.get(target), f"{reverse('login')}?next={target}")
 
     def test_the_root_leads_to_materials(self):
         self.client.force_login(self.reader)
@@ -215,7 +215,14 @@ class BetaLockTests(TestCase):
     @override_settings(BETA=False)
     def test_switching_beta_off_opens_everything(self):
         self.client.force_login(self.reader)
-        self.assertEqual(self.client.get(reverse("chat_list")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("profile", args=[self.reader.pk])).status_code, 200)
+
+    def test_the_account_menu_does_not_offer_a_page_that_is_closed(self):
+        """Пункт «Профиль» гасим, а не прячем — как и разделы в меню слева."""
+        self.client.force_login(self.reader)
+        page = self.client.get(reverse("material_list")).content.decode()
+        self.assertIn("Профиль", page)
+        self.assertNotIn(reverse("profile", args=[self.reader.pk]), page)
 
 
 @override_settings(BETA=True)
