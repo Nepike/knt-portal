@@ -12,6 +12,7 @@ from django.urls import reverse
 
 from knt.celery import app as celery_app
 from core.models import Team
+from teachers.models import Review, Teacher
 from users.models import User
 
 from chats.models import Chat
@@ -179,7 +180,7 @@ def make_user(email, **extra):
 
 @override_settings(BETA=True)
 class BetaLockTests(TestCase):
-    """Пока идёт бета, наружу открыты только материалы, библиотека и поддержка."""
+    """Пока идёт бета, наружу открыты материалы, библиотека, преподаватели и поддержка."""
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
@@ -187,13 +188,13 @@ class BetaLockTests(TestCase):
 
     def test_open_sections_are_reachable(self):
         self.client.force_login(self.reader)
-        for name in ("material_list", "book_list", "support"):
+        for name in ("material_list", "book_list", "teacher_list", "support"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
     def test_closed_sections_explain_themselves_instead_of_pretending_to_be_missing(self):
         # 403 со страницей, а не 404: раздел существует, просто ещё закрыт.
         self.client.force_login(self.reader)
-        for name in ("teacher_list", "chat_list", "wall", "material_new", "book_new"):
+        for name in ("chat_list", "wall", "material_new", "book_new"):
             response = self.client.get(reverse(name))
             self.assertEqual(response.status_code, 403, name)
             self.assertContains(response, "Раздел ещё закрыт", status_code=403)
@@ -204,8 +205,8 @@ class BetaLockTests(TestCase):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
     def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
-        response = self.client.get(reverse("teacher_list"))
-        self.assertRedirects(response, f"{reverse('login')}?next={reverse('teacher_list')}")
+        response = self.client.get(reverse("chat_list"))
+        self.assertRedirects(response, f"{reverse('login')}?next={reverse('chat_list')}")
 
     def test_the_root_leads_to_materials(self):
         self.client.force_login(self.reader)
@@ -214,7 +215,32 @@ class BetaLockTests(TestCase):
     @override_settings(BETA=False)
     def test_switching_beta_off_opens_everything(self):
         self.client.force_login(self.reader)
-        self.assertEqual(self.client.get(reverse("teacher_list")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("chat_list")).status_code, 200)
+
+
+@override_settings(BETA=True)
+class BetaTeachersTests(TestCase):
+    """Раздел преподавателей открыт ЦЕЛИКОМ — не только чтение, но и отзывы."""
+
+    def setUp(self):
+        self.reader = make_user("reader@x.ru")
+        self.client.force_login(self.reader)
+        self.teacher = Teacher.objects.create(name="Пётр", surname="Сорокоумов")
+
+    def test_a_student_reads_the_card(self):
+        self.assertEqual(self.client.get(reverse("teacher_detail", args=[self.teacher.pk])).status_code, 200)
+
+    def test_a_student_leaves_a_review_and_can_take_it_back(self):
+        url = reverse("teacher_detail", args=[self.teacher.pk])
+        self.client.post(url, {"score_knowledge": 5, "text": "Объясняет понятно"})
+        review = Review.objects.get(teacher=self.teacher, author=self.reader)
+        self.assertEqual(review.text, "Объясняет понятно")
+
+        self.assertEqual(self.client.post(reverse("review_like", args=[review.pk])).status_code, 200)
+        self.assertEqual(review.liked_users.count(), 1)
+
+        self.client.post(reverse("review_delete", args=[review.pk]))
+        self.assertFalse(Review.objects.filter(pk=review.pk).exists())
 
 
 @override_settings(BETA=True)
