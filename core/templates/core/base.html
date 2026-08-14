@@ -50,7 +50,7 @@
   <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
 
-         <a href="#" class="flex items-center gap-2.5 px-2 pb-4">
+         <a href="{% url 'home' %}" class="flex items-center gap-2.5 px-2 pb-4">
           <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-11 h-11 shrink-0 dark:brightness-0 dark:invert">
           <span>
             <span class="block font-bold text-2xl leading-none">КНТ</span>
@@ -73,7 +73,7 @@
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
-          <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
             None — не модератор, ссылки быть не должно; 0 — модератор, но очередь пуста.
