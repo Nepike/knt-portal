@@ -18,6 +18,7 @@ from chats.models import Chat
 
 from .legacy_markup import to_markdown
 from .management.commands.import_legacy_files import extension, filename
+from .throttle import throttled
 from .markup import render
 from .tasks import ping
 
@@ -312,6 +313,28 @@ class SupportWithoutLoginTests(TestCase):
             for _ in range(14):
                 self.client.post(reverse("support"), payload)
         self.assertEqual(sent.call_count, 10)
+
+
+class ThrottleTests(SimpleTestCase):
+    """Ограничитель частоты: сколько пропускает и как ведёт себя без кэша."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_the_limit_is_how_many_calls_get_through(self):
+        self.assertEqual([not throttled("t:calls", 2) for _ in range(4)], [True, True, False, False])
+
+    def test_keys_count_separately(self):
+        for _ in range(3):
+            throttled("t:one", 2)
+        self.assertFalse(throttled("t:two", 2))
+
+    def test_a_dead_cache_lets_people_through_instead_of_locking_them_out(self):
+        """Redis лёг — забывший пароль не должен из-за этого остаться без входа.
+        Ограничитель нужен против потока, а не вместо самой страницы."""
+        with patch("core.throttle.cache.add", side_effect=ConnectionError("Redis не отвечает")):
+            with self.assertLogs("core.throttle", "ERROR"):
+                self.assertFalse(throttled("t:dead", 1))
 
 
 class LegacyFileKeyTests(SimpleTestCase):

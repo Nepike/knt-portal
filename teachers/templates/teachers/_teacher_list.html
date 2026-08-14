@@ -3,7 +3,8 @@
 <a href="{% url 'teacher_detail' t.pk %}" class="flex items-center gap-3 rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 hover:border-accent/60 transition-colors">
   <span class="w-12 h-12 rounded-full overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700 shrink-0 inline-flex">
     {% if t.photo %}
-      <img src="{{ t.photo|media }}" alt="" class="w-full h-full object-cover">
+      {# lazy — за каждой картинкой идёт свой запрос в хранилище; те, до которых не долистали, ждут #}
+      <img src="{{ t.photo|media }}" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover">
     {% else %}
       <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium">{{ t.surname|slice:":1" }}{{ t.name|slice:":1" }}</span>
     {% endif %}
@@ -39,3 +40,11 @@
   <p>{% if q %}По запросу «{{ q }}» никого не нашлось{% else %}Преподавателей пока нет{% endif %}</p>
 </div>
 {% endfor %}
+
+{% if page.has_next %}
+{# маячок: попал в зону видимости — подтянул следующую порцию (запрос поиска едет в querystring) #}
+<div class="py-4 text-center text-slate-400"
+     hx-get="{% querystring page=page.next_page_number %}" hx-trigger="intersect once" hx-swap="outerHTML">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</div>
+{% endif %}

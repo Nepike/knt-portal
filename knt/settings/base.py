@@ -144,6 +144,12 @@ DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"
 EMAIL_BACKEND = "core.mail.QueuedEmailBackend"
 EMAIL_DELIVERY_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
+# Кэш. В разработке — память процесса: runserver один, делить не с кем, а поднятый
+# контейнер Redis не должен быть условием, без которого не открывается форма входа.
+# Прод переопределяет на Redis (см. prod.py) — там воркеров несколько, и общий счётчик
+# нужен по-настоящему.
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
 # Шина событий чата (только prod, dev держит слой в памяти). socket_timeout задаём явно:
 # он должен быть заметно больше, чем channels_redis ждёт сообщение блокирующим чтением,
 # иначе таймеры гонятся и рвут сокет (ловили это на redis-py с дефолтом в 5с).

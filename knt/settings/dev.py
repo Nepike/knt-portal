@@ -18,6 +18,7 @@ TELEGRAM_CONSOLE = True
 CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 # Очереди Redis всё-таки нужен — поднимается контейнером (см. README). Базы разные:
-# 0 — шина чата, 1 — очередь задач, 2 — ответы; flushdb в одной не сносит остальные.
+# 0 — шина чата, 1 — очередь задач, 2 — ответы, 3 — кэш (только прод, тут своего хватает);
+# flushdb в одной не сносит остальные.
 CELERY_BROKER_URL = "redis://127.0.0.1:6379/1"
 CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/2"

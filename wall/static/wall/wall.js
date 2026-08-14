@@ -19,7 +19,6 @@ const HANDLE = 14; // сторона уголка, за который тяну�
 const TOP = 40; // дальше не приближаем: клетка и так во весь палец
 const TAP = 320; // мс между касаниями, которые считаем двойным
 const NEAR = 24; // и допуск по расстоянию для него — палец не попадает в ту же точку
-const CATCHUP = 15000; // как часто спрашиваем, не отстала ли доска от сервера
 const SWATCH = 20; // сторона образца в палитре
 const SIDEWAYS = 1024; // с этой ширины палитра и панель стоят рядом с доской (lg в разметке)
 
@@ -112,10 +111,6 @@ document.addEventListener("alpine:init", () => {
       });
       new ResizeObserver(() => this.resize()).observe(this.$refs.view.parentElement);
       setInterval(() => this.tick(), 1000);
-      setInterval(() => this.catchUp(), CATCHUP);
-      // Вкладку, на которую вернулись, догоняем сразу: пока она лежала свёрнутой, опрос
-      // не шёл, и доска на ней ровно та, какой её оставили.
-      addEventListener("visibilitychange", () => this.catchUp());
       // Сокет открываем первым: события, пришедшие пока едет снимок, подождут в очереди.
       // Наоборот было бы дырой — чужой мазок между снимком и подпиской пропал бы совсем.
       this.connect();
@@ -756,6 +751,10 @@ document.addEventListener("alpine:init", () => {
     },
 
     // --- сокет ---
+    // Обновления приходят ТОЛЬКО отсюда. Обрыв связи страница видит сама (onclose) и после
+    // переподключения перечитывает полотно. Мазок, положенный мимо этого процесса — командой
+    // из консоли, — на уже открытой странице появится после перезагрузки: ради одного такого
+    // случая опрашивать сервер у каждого, кто держит доску открытой, незачем.
 
     connect() {
       const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -768,19 +767,6 @@ document.addEventListener("alpine:init", () => {
       socket.onmessage = (event) => this.apply(JSON.parse(event.data));
       // 1, 2, 4… до 30с: если сервер лежит, не добиваем его переподключениями.
       socket.onclose = () => setTimeout(() => this.connect(), Math.min(1000 * 2 ** this.attempt++, 30000));
-    },
-
-    // Сокет — не гарантия доставки. Пиксель, положенный мимо этого процесса (командой
-    // из консоли, соседним воркером), уходит через общий слой сообщений, и если слой
-    // занят или, как в разработке, живёт в памяти одного процесса, — на странице его
-    // нет и не будет до перезагрузки. Спросить номер версии стоит два десятка байт,
-    // и снимок перекачиваем, только если он и правда отстал.
-    async catchUp() {
-      if (this.film || this.loading || !this.cells || document.hidden) return;
-      const response = await fetch(this.urls.version, { headers: { "Cache-Control": "no-cache" } });
-      if (!response.ok) return;
-      const { version } = await response.json();
-      if (version > this.version) this.load();
     },
 
     apply(message) {

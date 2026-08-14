@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.db.models import Count, Exists, OuterRef, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -7,6 +8,12 @@ from django.views.decorators.http import require_POST
 
 from .forms import ReviewForm
 from .models import SCORE_LABELS, Review, Teacher
+
+PAGE_SIZE = 20  # преподавателей в порции
+# Сколько оценок нужно, чтобы попасть в топ. Без порога наверху висел человек с одним
+# отзывом на пять звёзд: средняя от одной оценки — это не рейтинг, а мнение одного студента.
+TOP_MIN_REVIEWS = 15
+TOP_SIZE = 3
 
 
 def _reviews(user):
@@ -25,19 +32,35 @@ def _hx_refresh():
     return response
 
 
+def _top(size=TOP_SIZE):
+    """Лучшие — среди тех, кого оценивали достаточно много раз.
+
+    Порог отсекает случайные пятёрки, а заодно оставляет в памяти десяток человек
+    вместо всей кафедры: считать среднюю из четырёх шкал в Python по всему списку
+    было бы вторым проходом по той же таблице.
+    """
+    rated = [
+        teacher for teacher in Teacher.objects.with_ratings().filter(reviews_count__gte=TOP_MIN_REVIEWS)
+        if teacher.overall_rating()
+    ]
+    return sorted(rated, key=lambda t: (t.overall_rating(), t.reviews_count), reverse=True)[:size]
+
+
 def teacher_list(request):
     q = request.GET.get("q", "").strip()
     teachers = Teacher.objects.with_ratings().prefetch_related("subjects")
     if q:
         teachers = teachers.filter(Q(surname__icontains=q) | Q(name__icontains=q) | Q(patronymic__icontains=q))
 
-    # Живой поиск: HTMX перерисовывает только список
-    if request.headers.get("HX-Request"):
-        return render(request, "teachers/_teacher_list.html", {"teachers": teachers, "q": q})
+    # Порциями, как книги и материалы: у преподавателя есть фото, и каждое — отдельный
+    # запрос за картинкой. Списком целиком страница открывалась минуту.
+    page = Paginator(teachers, PAGE_SIZE).get_page(request.GET.get("page"))
+    context = {"page": page, "teachers": page.object_list, "q": q}
 
-    rated = [t for t in Teacher.objects.with_ratings().prefetch_related("subjects") if t.overall_rating()]
-    top = sorted(rated, key=lambda t: (t.overall_rating(), t.reviews_count), reverse=True)[:3]
-    return render(request, "teachers/teacher_list.html", {"teachers": teachers, "q": q, "top": top})
+    # Живой поиск и догрузка: HTMX перерисовывает только список.
+    if request.headers.get("HX-Request"):
+        return render(request, "teachers/_teacher_list.html", context)
+    return render(request, "teachers/teacher_list.html", {**context, "top": _top()})
 
 
 def teacher_detail(request, pk):

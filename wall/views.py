@@ -80,7 +80,6 @@ def wall(request):
                 "reroll": reverse("wall_reroll"),
                 "pixel": reverse("wall_pixel"),
                 "history": reverse("wall_history"),
-                "version": reverse("wall_version"),
                 "fill": reverse("wall_fill"),
                 "rollback": reverse("wall_rollback"),
                 "protect": reverse("wall_protect"),
@@ -107,19 +106,6 @@ def board_snapshot(request):
     at = version(board)
     response = HttpResponse(snapshot(board), content_type="application/octet-stream")
     response["X-Wall-Version"] = at
-    response["Cache-Control"] = "no-store"
-    return response
-
-
-def board_version(request):
-    """Номер последнего события — им страница проверяет, не отстала ли она от доски.
-
-    Сокет доставку не гарантирует: пиксель, положенный мимо этого процесса (командой
-    из консоли, соседним воркером), уходит через общий слой сообщений, и на странице
-    его может не оказаться вовсе. Один MAX(id) по индексу — дешёвая цена за то, чтобы
-    доска не врала до перезагрузки.
-    """
-    response = JsonResponse({"version": version(_board())})
     response["Cache-Control"] = "no-store"
     return response
 

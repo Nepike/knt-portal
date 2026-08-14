@@ -25,6 +25,8 @@
 
   <link href="{% static 'core/vendor/fontawesome/css/fontawesome.min.css' %}" rel="stylesheet">
   <link href="{% static 'core/vendor/fontawesome/css/solid.min.css' %}" rel="stylesheet">
+  {# brands — отдельный шрифт: логотипы ВК и телеграма в профилях и у преподавателей #}
+  <link href="{% static 'core/vendor/fontawesome/css/brands.min.css' %}" rel="stylesheet">
   <script defer src="{% static 'core/vendor/htmx.min.js' %}"></script>
   <script defer src="{% static 'core/js/components.js' %}"></script>
   {# Плагины Alpine — сюда: они вешаются на alpine:init, значит грузиться должны ДО ядра #}
@@ -37,8 +39,14 @@
   {% block css %}{% endblock %}
 </head>
 
+{% comment %}
+  Высоты везде в dvh, а не screen (=100vh). На телефоне 100vh — это высота окна БЕЗ панелей
+  браузера, то есть больше видимой: страница получала лишнюю полосу прокрутки ровно в высоту
+  панели, и под подвалом (а в чате — под самим чатом) выглядывал фон body. dvh — то, что видно
+  сейчас, поэтому лишней прокрутки не появляется.
+{% endcomment %}
 <body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-      {% if request.user.is_authenticated %}data-live{% endif %} class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+      {% if request.user.is_authenticated %}data-live{% endif %} class="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
   <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
 
@@ -61,9 +69,9 @@
           </a>
           <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
-          <a href="#" class="nav-link"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a {% if not beta_locked %}href="{% url 'teacher_list' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
-          <a href="#" class="nav-link"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a {% if not beta_locked %}href="{% url 'wall' %}"{% endif %} class="nav-link {% if beta_locked %}nav-link-disabled{% endif %} {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
           <a href="#" class="nav-link"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
@@ -82,13 +90,17 @@
           </a>
           {% endif %}
 
-          <a href="#" class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>
-          <a href="#" class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Закладки?</a>
-          <a href="#" class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Новости?</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Закладки?</a>
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Новости?</a>
         </nav>
 
+        {% comment %}
+          Кнопки «Войти» здесь нет: форма входа и так занимает почти каждую страницу,
+          до которой доходит незалогиненный, — вторая ссылка на неё только шумит.
+        {% endcomment %}
+        {% if request.user.is_authenticated %}
         <div class="relative mt-auto pt-3 border-t border-slate-200 dark:border-slate-800" x-data="{ open: false }">
-          {% if request.user.is_authenticated %}
           <button @click="open = !open" class="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
             {# TODO (M5 profiles): рамка аватара — оверлей экипированной косметики (квадратный PNG); сейчас плейсхолдер-градиент #}
             <span class="w-9 h-9 rounded-[22%] p-0.5 bg-brand-gradient inline-flex shrink-0">
@@ -117,15 +129,13 @@
               <button type="submit" class="w-full flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Выйти</button>
             </form>
           </div>
-          {% else %}
-          <a href="{% url 'login' %}" class="btn btn-brand w-full">Войти</a>
-          {% endif %}
         </div>
+        {% endif %}
   </aside>
   <div x-show="sidebar" x-cloak @click="sidebar = false" class="fixed inset-0 z-35 bg-black/40 lg:hidden"></div>
 
-  {# h-dvh вместо min-h-screen (чат) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
-  <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-screen{% endblock %}">
+  {# h-dvh вместо min-h-dvh (чат, стена) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
+  <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
     {# Страницы, которые сами про бету и рассказывают, блок гасят — см. core/support.html #}
     {% block beta_banner %}
     {% if beta %}

@@ -44,7 +44,6 @@ def _filters_url(request):
 
 def material_list(request):
     form = MaterialFilterForm(request.GET or None)
-    q = request.GET.get("q", "").strip()
 
     materials = (
         _visible(request.user)
@@ -52,8 +51,6 @@ def material_list(request):
         .prefetch_related("terms", "teachers")
         .annotate(files_count=Count("files", distinct=True))
     )
-    if q:
-        materials = materials.filter(Q(title__icontains=q) | Q(synopsis__icontains=q))
     if form.is_valid():
         if subject := form.cleaned_data["subject"]:
             materials = materials.filter(subject=subject)
@@ -68,7 +65,7 @@ def material_list(request):
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
 
     context = {
-        "page": page, "materials": page.object_list, "q": q, "form": form,
+        "page": page, "materials": page.object_list, "form": form,
         # Заголовок года не должен повториться на стыке порций: сравниваем с годом
         # элемента, стоящего прямо перед первым на этой странице.
         "carry_year": ordered[page.start_index() - 2].year if page.number > 1 else None,

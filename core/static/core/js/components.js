@@ -124,6 +124,7 @@ document.addEventListener("alpine:init", () => {
   // т.к. spread ...base() превратил бы геттер в статичное значение.
   const base = ({ options, search = false }) => ({
     open: false, focused: false, query: "", activeIndex: 0, options, search,
+    scrolling: false, // по списку ведут пальцем — клик в конце жеста выбором не считаем
     toggle() { this.open ? this.close() : this.openMenu(); },
     openMenu() { this.open = true; this.activeIndex = 0; if (this.search) this.$nextTick(() => this.$refs.search.focus()); },
     close() { this.open = false; this.query = ""; },
@@ -135,7 +136,15 @@ document.addEventListener("alpine:init", () => {
       this.$nextTick(() => this.$el.querySelector(`[data-opt="${this.activeIndex}"]`)?.scrollIntoView({ block: "nearest" }));
     },
     onEnter() { const o = this.filtered[this.activeIndex]; if (this.open && o) this.pick(o); else this.openMenu(); },
-    onFocusOut(e) { if (!this.$el.contains(e.relatedTarget)) { this.focused = false; this.close(); } },
+    // relatedTarget === null — фокус ушёл «в никуда». На телефоне так выглядит касание
+    // самого списка: браузер снимает фокус с селекта, а mousedown, которым мы его держим
+    // на десктопе, во время жеста не приходит вовсе — и меню закрывалось под пальцем.
+    // Настоящий уход мимо селекта всё равно закроет @click.outside.
+    onFocusOut(e) {
+      if (this.$el.contains(e.relatedTarget)) return;
+      this.focused = false;
+      if (e.relatedTarget) this.close();
+    },
     // Значение живёт в hidden input и меняется из Alpine, а такая правка события не даёт.
     // Шлём change сами (в nextTick — иначе слушатель прочитает ещё старое значение),
     // чтобы htmx-фильтры и любые формы работали с нашими селектами как с обычными.

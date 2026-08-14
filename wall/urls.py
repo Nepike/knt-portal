@@ -5,7 +5,6 @@ from . import views
 urlpatterns = [
     path("wall/", views.wall, name="wall"),
     path("wall/snapshot/", views.board_snapshot, name="wall_snapshot"),
-    path("wall/version/", views.board_version, name="wall_version"),
     path("wall/history/", views.board_history, name="wall_history"),
     path("wall/paint/", views.pixel_paint, name="wall_paint"),
     path("wall/erase/", views.pixel_erase, name="wall_erase"),

@@ -74,11 +74,6 @@ class MaterialListTests(TestCase):
         self.client.force_login(self.author)
         self.assertContains(self.get(), "Черновик")
 
-    def test_search_matches_title_and_synopsis(self):
-        self.make("Семинары", self.matan, self.first, synopsis="разбор пределов")
-        self.assertContains(self.get(q="пределов"), "Семинары")
-        self.assertNotContains(self.get(q="пределов"), "Задачи по физике")
-
     def test_filters_by_subject_term_and_teacher(self):
         by_subject = self.get(subject=self.physics.pk)
         self.assertContains(by_subject, "Задачи по физике")

@@ -777,13 +777,6 @@ class ViewTests(TestCase):
         self.assertEqual(response.content[2 * 8 + 3], self.color)
         self.assertEqual(response["X-Wall-Version"], str(version(self.board)))
 
-    def test_the_version_endpoint_tells_the_page_it_fell_behind(self):
-        self.assertEqual(self.client.get(reverse("wall_version")).json()["version"], 0)
-        put(self.user, self.board, 1, 1)
-        response = self.client.get(reverse("wall_version"))
-        self.assertEqual(response.json()["version"], version(self.board))
-        self.assertEqual(response["Cache-Control"], "no-store")
-
     def test_painting_through_the_view(self):
         response = self.client.post(reverse("wall_paint"), {"x": 1, "y": 1, "color": self.color})
         self.assertEqual(response.status_code, 200)

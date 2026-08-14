@@ -42,9 +42,28 @@ CHANNEL_LAYERS = {
     }
 }
 
-# Тот же Redis, что и у шины чата, но другие базы (0 — шина, 1 — очередь, 2 — ответы).
+# Тот же Redis, что и у шины чата, но другие базы (0 — шина, 1 — очередь, 2 — ответы, 3 — кэш).
 CELERY_BROKER_URL = "redis://redis:6379/1"
 CELERY_RESULT_BACKEND = "redis://redis:6379/2"
+
+# База 3 — кэш. На нём живут ограничители частоты (core/throttle.py): поддержка и
+# восстановление пароля считают обращения с адреса. В памяти процесса этот счётчик
+# был у КАЖДОГО воркера свой, то есть лимит на деле был вдвое выше объявленного
+# и обнулялся любым перезапуском. Своя база, а не общая с очередью: `cache.clear()`
+# у этого бекенда — это FLUSHDB, и на общей базе он унёс бы ещё и задачи Celery.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": "redis://redis:6379/3",
+        "OPTIONS": {
+            # Явные таймауты: у redis-py 6 по умолчанию их нет вовсе, и подвисший Redis
+            # держал бы воркер бесконечно. Кэш — не то, ради чего стоит ждать: две
+            # секунды и мимо (throttled() умеет обходиться без него).
+            "socket_connect_timeout": 2,
+            "socket_timeout": 2,
+        },
+    }
+}
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
