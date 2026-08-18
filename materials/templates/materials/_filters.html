@@ -1,0 +1,10 @@
+{% comment %}
+  Блок возвращается вместе со списком (oob-заменой): выбрали семестр — в предметах
+  и преподавателях остаются только те, у кого в этом семестре что-то есть.
+  Порядок — как ищут материал: сначала семестр, потом предмет, потом преподаватель.
+{% endcomment %}
+<div id="material-filters" class="grid gap-3 grid-cols-1 sm:grid-cols-3"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% include "core/inputs.html" with field=form.term hide_optional=True %}
+  {% include "core/inputs.html" with field=form.subject hide_optional=True %}
+  {% include "core/inputs.html" with field=form.teacher hide_optional=True %}
+</div>

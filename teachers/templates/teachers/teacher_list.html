@@ -7,7 +7,7 @@
 {% if top %}
 <h1 class="text-2xl font-bold text-center mb-8">Лучшие преподаватели</h1>
 {# TODO: стилизованные рамки топ-3 («как в гонках») — вместе с косметикой профилей #}
-<div class="grid sm:grid-cols-3 gap-3 sm:gap-4 w-full max-w-3xl mx-auto mb-12">
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 w-full max-w-3xl mx-auto mb-12">
   {% for t in top %}
   <a href="{% url 'teacher_detail' t.pk %}" class="relative flex items-center gap-4 sm:flex-col sm:gap-0 sm:text-center rounded-2xl border-2 bg-white dark:bg-slate-900 p-4 pr-10 sm:pr-4 sm:py-7 transition hover:-translate-y-0.5 hover:shadow-md
               {% if forloop.counter == 1 %}border-amber-400{% elif forloop.counter == 2 %}border-slate-300 dark:border-slate-600{% else %}border-amber-700/60{% endif %}">

@@ -19,6 +19,8 @@ from .forms import CommentForm, MaterialFilterForm, MaterialForm
 from .models import Comment, Material
 
 PAGE_SIZE = 20  # материалов в порции
+# Поля фильтра и то, как каждое цепляется к материалу.
+FILTERS = {"term": "terms", "subject": "subject", "teacher": "teachers"}
 
 
 def _visible(user):
@@ -42,6 +44,28 @@ def _filters_url(request):
     return f"{request.path}?{query}" if query else request.path
 
 
+def _narrow(form, base, chosen):
+    """Оставить в каждом селекте только то, что вообще встречается у материалов,
+    отобранных ОСТАЛЬНЫМИ фильтрами: выбрал семестр — предметы сузились до его предметов.
+
+    Свой фильтр в расчёт не берём: иначе в списке осталось бы одно уже выбранное значение
+    и сменить его было бы нечем. Выбранное на всякий случай добавляем к списку явно —
+    семестр могли выбрать после предмета, которого в нём нет, и тогда своего же значения
+    в списке не оказалось бы. Формы это не касается: она уже проверена по полным наборам,
+    сужаем только то, что рисуется.
+    """
+    for name, lookup in FILTERS.items():
+        rest = base
+        for other, other_lookup in FILTERS.items():
+            if other != name and chosen.get(other):
+                rest = rest.filter(**{other_lookup: chosen[other]})
+        found = Q(pk__in=rest.values(lookup))
+        if chosen.get(name):
+            found |= Q(pk=chosen[name].pk)
+        field = form.fields[name]
+        field.queryset = field.queryset.filter(found)
+
+
 def material_list(request):
     form = MaterialFilterForm(request.GET or None)
 
@@ -51,13 +75,11 @@ def material_list(request):
         .prefetch_related("terms", "teachers")
         .annotate(files_count=Count("files", distinct=True))
     )
-    if form.is_valid():
-        if subject := form.cleaned_data["subject"]:
-            materials = materials.filter(subject=subject)
-        if term := form.cleaned_data["term"]:
-            materials = materials.filter(terms=term)
-        if teacher := form.cleaned_data["teacher"]:
-            materials = materials.filter(teachers=teacher)
+    chosen = {name: form.cleaned_data[name] for name in FILTERS} if form.is_valid() else {}
+    for name, lookup in FILTERS.items():
+        if chosen.get(name):
+            materials = materials.filter(**{lookup: chosen[name]})
+    _narrow(form, _visible(request.user), chosen)
 
     # Год здесь — год, когда материал был актуален, поэтому свежие сверху; id последним,
     # иначе на границе порций материалы с одинаковым ключом перескакивают.
@@ -73,9 +95,13 @@ def material_list(request):
     if not request.headers.get("HX-Request"):
         return render(request, "materials/materials.html", context)
 
-    response = render(request, "materials/_material_list.html", context)
-    if not request.GET.get("page"):
-        response["HX-Push-Url"] = _filters_url(request)
+    if request.GET.get("page"):
+        return render(request, "materials/_material_list.html", context)
+
+    # Сменили фильтр — вместе со списком возвращаем и сам блок фильтров: наборы вариантов
+    # в остальных селектах после этого другие.
+    response = render(request, "materials/_material_list.html", {**context, "refresh_filters": True})
+    response["HX-Push-Url"] = _filters_url(request)
     return response
 
 

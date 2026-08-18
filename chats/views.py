@@ -1,12 +1,13 @@
 from datetime import timedelta
 
 from django.contrib import messages as django_messages
-from django.db.models import F, Prefetch, Q
+from django.db.models import F, Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from core.search import by_name
 from users.models import User
 
 from .events import notify_chat, notify_joined, notify_left
@@ -93,10 +94,10 @@ def _touch(message):
 
 
 def _found_users(user, q=""):
-    qs = User.objects.filter(is_active=True).exclude(pk=user.pk).select_related("team").order_by("surname", "name")
+    people = User.objects.filter(is_active=True).exclude(pk=user.pk).select_related("team")
     if q:
-        qs = qs.filter(Q(name__icontains=q) | Q(surname__icontains=q) | Q(patronymic__icontains=q))
-    return qs[:10]
+        return by_name(people, q)[:10]
+    return people.order_by("surname", "name")[:10]
 
 
 def _page_context(request, **extra):

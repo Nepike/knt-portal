@@ -17,7 +17,7 @@
 {% endcomment %}
 <form hx-get="{% url 'book_list' %}" hx-target="#book-list" hx-history="false"
       hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">
-  <div class="grid gap-3 sm:grid-cols-[1.4fr_1fr_.8fr]">
+  <div class="grid gap-3 grid-cols-1 sm:grid-cols-[1.4fr_1fr_.8fr]">
     <div class="relative">
       <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>
       <input name="q" value="{{ q }}" placeholder="Название или автор…" autocomplete="off"
@@ -40,7 +40,12 @@
   </div>
 </form>
 
-<div id="book-list" class="grid gap-3 lg:grid-cols-2">
+{% comment %}
+  grid-cols-1 обязателен, хотя колонка и так одна: без него ширину колонки задаёт
+  содержимое (auto), и на телефоне карточки книг растягивали страницу вдвое шире экрана.
+  grid-cols-1 — это minmax(0, 1fr), то есть колонке разрешено быть уже своего содержимого.
+{% endcomment %}
+<div id="book-list" class="grid gap-3 grid-cols-1 lg:grid-cols-2">
   {% include "library/_book_list.html" %}
 </div>
 {% endblock %}

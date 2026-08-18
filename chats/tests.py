@@ -32,6 +32,38 @@ def make_team(number, stage="bachelor", year=2024):
     )
 
 
+class UserSearchTests(TestCase):
+    """Строка «с кем начать чат». Правила поиска общие — core/search.py."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.me = make_user("me@t.local")
+        cls.maxim = make_user("m@t.local", name="Максим", surname="Щучкин")
+        cls.katya = make_user("k@t.local", name="Екатерина", surname="Бажанова", patronymic="Максимовна")
+
+    def setUp(self):
+        self.client.force_login(self.me)
+
+    def found(self, q):
+        response = self.client.get(reverse("user_search"), {"q": q}, headers={"HX-Request": "true"})
+        return response.content.decode()
+
+    def test_full_name_finds_the_person(self):
+        # Раньше искали строкой целиком по каждому полю отдельно — и не находили никого.
+        for query in ("Максим Щучкин", "Щучкин Максим", "макс щуч"):
+            with self.subTest(query=query):
+                self.assertIn("Щучкин", self.found(query))
+
+    def test_a_stranger_is_not_dragged_in_by_her_patronymic(self):
+        page = self.found("Максим")
+        self.assertIn("Щучкин", page)
+        self.assertNotIn("Бажанова", page)
+
+    def test_i_am_never_among_the_found(self):
+        self.assertNotIn("Никого не нашлось", self.found("Максим"))
+        self.assertIn("Никого не нашлось", self.found("Иванов"))
+
+
 class DirectChatTests(TestCase):
     @classmethod
     def setUpTestData(cls):

@@ -103,6 +103,44 @@ class MaterialListTests(TestCase):
         self.assertIn(f"subject={self.matan.pk}", pushed)
         self.assertNotIn("term=", pushed)
 
+    def options(self, response, name):
+        return set(response.context["form"].fields[name].queryset.values_list("pk", flat=True))
+
+    def test_choosing_a_term_leaves_only_what_it_has(self):
+        # В первом семестре есть только матан, во втором — только физика.
+        first = self.get(term=self.first.pk)
+        self.assertEqual(self.options(first, "subject"), {self.matan.pk})
+        self.assertEqual(self.options(first, "teacher"), {self.lector.pk})
+
+        second = self.get(term=self.second.pk)
+        self.assertEqual(self.options(second, "subject"), {self.physics.pk})
+        self.assertEqual(self.options(second, "teacher"), set())
+
+    def test_a_filter_never_narrows_itself(self):
+        # Иначе в списке осталось бы одно выбранное значение и сменить его было бы нечем.
+        response = self.get(term=self.first.pk)
+        self.assertEqual(self.options(response, "term"), {self.first.pk, self.second.pk})
+
+    def test_chosen_value_stays_in_the_list_even_when_it_fits_nothing(self):
+        response = self.get(term=self.second.pk, subject=self.matan.pk)
+        self.assertIn(self.matan.pk, self.options(response, "subject"))
+        self.assertNotContains(response, "Лекции по матану")
+
+    def test_variants_with_nothing_behind_them_are_dropped(self):
+        empty = Subject.objects.create(name="Химия", dative="химии", accusative="химию")
+        self.assertNotIn(empty.pk, self.options(self.get(), "subject"))
+
+    def test_the_filter_block_comes_back_with_the_list_but_not_with_the_next_chunk(self):
+        changed = self.client.get(
+            reverse("material_list"), {"term": self.first.pk}, headers={"HX-Request": "true"},
+        )
+        self.assertContains(changed, "hx-swap-oob")
+
+        chunk = self.client.get(
+            reverse("material_list"), {"term": self.first.pk, "page": "1"}, headers={"HX-Request": "true"},
+        )
+        self.assertNotContains(chunk, "hx-swap-oob")
+
 
 class YearGroupingTests(TestCase):
     """Заголовок года не должен повторяться на стыке порций."""

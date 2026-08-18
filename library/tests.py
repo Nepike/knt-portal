@@ -431,7 +431,7 @@ class BookEditTests(TestCase):
         response = self.client.post(reverse("book_new"), self.fields(files=[upload()]),
                                     headers={"HX-Request": "true"})
         book = Book.objects.get(title="Механика")
-        # редирект htmx не отработает — HtmxRedirectMiddleware отдаёт заголовок
+        # редирект htmx не отработает — HtmxMiddleware отдаёт заголовок
         self.assertEqual(response["HX-Redirect"], reverse("book_detail", args=[book.pk]))
 
     def test_delete_is_post_only(self):

@@ -1,10 +1,12 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, OuterRef
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
+
+from core.search import by_name
 
 from .forms import ReviewForm
 from .models import SCORE_LABELS, Review, Teacher
@@ -50,7 +52,9 @@ def teacher_list(request):
     q = request.GET.get("q", "").strip()
     teachers = Teacher.objects.with_ratings().prefetch_related("subjects")
     if q:
-        teachers = teachers.filter(Q(surname__icontains=q) | Q(name__icontains=q) | Q(patronymic__icontains=q))
+        # Отчество здесь в поиске участвует: на карточке оно на виду, и ФИО целиком
+        # переписывают из расписания.
+        teachers = by_name(teachers, q, fields=("surname", "name", "patronymic"))
 
     # Порциями, как книги и материалы: у преподавателя есть фото, и каждое — отдельный
     # запрос за картинкой. Списком целиком страница открывалась минуту.

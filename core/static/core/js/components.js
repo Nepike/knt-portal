@@ -119,6 +119,12 @@ document.addEventListener("alpine:init", () => {
     get up() { return this.focused || this.filled || this.alwaysUp; },
   }));
 
+  // Поиск по списку — по тем же правилам, что и на сервере (core/search.py): запрос
+  // режем на слова, каждое должно найтись в подписи, порядок слов любой. Иначе
+  // «Иван Иванов» не находил Иванова Ивана — подпись начинается с фамилии.
+  const words = (query) => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = (label, parts) => parts.every((part) => label.toLowerCase().includes(part));
+
   // Общее для select и multiSelect: открытие/закрытие, фокус, клавиатура.
   // Только методы и данные — геттеры (active/filtered/...) живут в компонентах,
   // т.к. spread ...base() превратил бы геттер в статичное значение.
@@ -192,7 +198,7 @@ document.addEventListener("alpine:init", () => {
     selectedValue: cfg.value ?? null,
     get active() { return this.open || this.focused; },
     get selectedLabel() { const o = this.options.find((o) => o.value === this.selectedValue); return o ? o.label : ""; },
-    get filtered() { const q = this.query.trim().toLowerCase(); return q ? this.options.filter((o) => o.label.toLowerCase().includes(q)) : this.options; },
+    get filtered() { const parts = words(this.query); return parts.length ? this.options.filter((o) => hits(o.label, parts)) : this.options; },
     pick(o) { this.selectedValue = o.value; this.close(); this.changed(); },
     clear() { this.selectedValue = null; this.changed(); },
   }));
@@ -649,7 +655,7 @@ document.addEventListener("alpine:init", () => {
     selected: [...(cfg.values ?? [])],
     get active() { return this.open || this.focused; },
     get selectedOptions() { return this.options.filter((o) => this.selected.includes(o.value)); },
-    get filtered() { const q = this.query.trim().toLowerCase(); return this.options.filter((o) => !this.selected.includes(o.value) && (!q || o.label.toLowerCase().includes(q))); },
+    get filtered() { const parts = words(this.query); return this.options.filter((o) => !this.selected.includes(o.value) && hits(o.label, parts)); },
     pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; this.changed(); this.focusSearch(); },
     remove(v) { this.selected = this.selected.filter((x) => x !== v); this.changed(); },
   }));

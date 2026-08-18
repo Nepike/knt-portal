@@ -19,6 +19,7 @@ from chats.models import Chat
 
 from .legacy_markup import to_markdown
 from .management.commands.import_legacy_files import extension, filename
+from .search import by_name
 from .throttle import throttled
 from .markup import render
 from .tasks import ping
@@ -123,7 +124,7 @@ class LegacyMarkupTests(SimpleTestCase):
     def test_dash_is_escaped_only_at_the_start_of_a_line(self):
         # В середине фразы это тире, и «\-» показалось бы читателю как есть.
         self.assertEqual(self.delta({"insert": "тут - тире"}), "тут - тире")
-        self.assertEqual(self.delta({"insert": "- не список"}), "\- не список")
+        self.assertEqual(self.delta({"insert": "- не список"}), r"\- не список")
 
     def test_html_formula_is_taken_from_the_source_not_the_rendering(self):
         raw = (
@@ -176,6 +177,60 @@ def make_user(email, **extra):
     extra.setdefault("name", "Иван")
     extra.setdefault("surname", "Иванов")
     return User.objects.create_user(email=email, password="pass12345", must_change_password=False, **extra)
+
+
+class PeopleSearchTests(TestCase):
+    """Поиск по имени — один на весь сайт, core/search.py."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.maxim = make_user("m@x.ru", name="Максим", surname="Щучкин")
+        cls.kate = make_user("k@x.ru", name="Екатерина", surname="Бажанова", patronymic="Максимовна")
+        cls.koval = make_user("kv@x.ru", name="Пётр", surname="Ковалёв")
+        cls.volkov = make_user("v@x.ru", name="Сергей", surname="Волков")
+
+    def found(self, query, **kwargs):
+        return [user.email for user in by_name(User.objects.all(), query, **kwargs)]
+
+    def test_a_full_name_is_found_whatever_the_order_of_the_words(self):
+        for query in ("Максим Щучкин", "Щучкин Максим", "макс щуч"):
+            with self.subTest(query=query):
+                self.assertEqual(self.found(query), [self.maxim.email])
+
+    def test_the_patronymic_does_not_drag_in_a_stranger(self):
+        self.assertNotIn(self.kate.email, self.found("Максим"))
+
+    def test_but_it_does_when_asked_for_it(self):
+        fields = ("surname", "name", "patronymic")
+        self.assertIn(self.kate.email, self.found("Бажанова Екатерина Максимовна", fields=fields))
+
+    def test_those_whose_name_begins_with_the_word_go_first(self):
+        # Список обрезан десятком, поэтому порядок решает, попадёт ли нужный человек в него.
+        self.assertEqual(self.found("ков"), [self.koval.email, self.volkov.email])
+
+    def test_yo_and_ye_are_the_same_letter_on_both_sides(self):
+        # В базе есть и «Пётр», и «Петр» — а в поиске пишут как придётся.
+        self.assertEqual(self.found("ковалев"), [self.koval.email])
+        self.assertEqual(self.found("КОВАЛЁВ"), [self.koval.email])
+
+    def test_an_empty_query_changes_nothing(self):
+        self.assertEqual(len(self.found("   ")), User.objects.count())
+
+
+class HtmxVaryTests(TestCase):
+    """По одному адресу у нас два ответа — страница и кусок разметки для htmx."""
+
+    def setUp(self):
+        self.client.force_login(make_user("reader@x.ru"))
+
+    def test_both_answers_tell_the_browser_they_are_different(self):
+        # Без этого браузер по «назад» рисовал кусок целым документом: без шапки,
+        # меню и фильтров — их-то и «сбрасывало».
+        page = self.client.get(reverse("material_list"))
+        chunk = self.client.get(reverse("material_list"), headers={"HX-Request": "true"})
+        self.assertNotEqual(page.content, chunk.content)
+        for response in (page, chunk):
+            self.assertIn("HX-Request", response.headers["Vary"])
 
 
 @override_settings(BETA=True)

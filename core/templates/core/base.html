@@ -47,8 +47,16 @@
 {% endcomment %}
 <body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
       {% if request.user.is_authenticated %}data-live{% endif %} class="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
-  <aside class="fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 p-4 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0"
+  {% comment %}
+    Панель красим на всю БОЛЬШУЮ высоту (lvh), а содержимое держим в текущей (dvh).
+    Когда браузер прячет свою панель, окно вырастает, и fixed-элемент догоняет новую
+    высоту не сразу — на кадр под меню выглядывала страница. lvh — потолок, меньше
+    которого окно не бывает уже не станет, поэтому пустого места не остаётся; dvh внутри
+    оставляет на виду блок аккаунта, он прижат к низу через mt-auto.
+  {% endcomment %}
+  <aside class="fixed top-0 left-0 z-40 h-lvh w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
+    <div class="h-dvh overflow-y-auto p-4 flex flex-col">
 
          <a href="{% url 'home' %}" class="flex items-center gap-2.5 px-2 pb-4">
           <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-11 h-11 shrink-0 dark:brightness-0 dark:invert">
@@ -133,8 +141,10 @@
           </div>
         </div>
         {% endif %}
+    </div>
   </aside>
-  <div x-show="sidebar" x-cloak @click="sidebar = false" class="fixed inset-0 z-35 bg-black/40 lg:hidden"></div>
+  {# h-lvh по той же причине, что и у панели: затемнение не должно обрываться выше края окна #}
+  <div x-show="sidebar" x-cloak @click="sidebar = false" class="fixed inset-x-0 top-0 h-lvh z-35 bg-black/40 lg:hidden"></div>
 
   {# h-dvh вместо min-h-dvh (чат, стена) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
   <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">

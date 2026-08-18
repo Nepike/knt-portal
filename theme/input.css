@@ -99,6 +99,8 @@ html { color-scheme: light; }
 
   /* Текст материала: Markdown автора. Плагина typography у нас нет (он ставится через
      npm, а мы живём на standalone-бинарнике), поэтому оформляем теги руками. */
+  /* Длинная ссылка или ключ одним словом иначе растягивает страницу шире экрана. */
+  .prose { @apply break-words; }
   .prose > * + * { @apply mt-3; }
   .prose h1, .prose h2, .prose h3, .prose h4 { @apply font-bold mt-6 mb-2 leading-snug; }
   .prose h1 { @apply text-xl; }
