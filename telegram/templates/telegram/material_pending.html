@@ -1,9 +1,10 @@
-{% if created %}📁 Новый материал{% else %}✏️ Материал отредактирован и вернулся на проверку{% endif %}: <a href="{{ url }}">{{ material.title }}</a>
+{% if created %}📁 <b>Новый материал</b>{% else %}📝 <b>Материал вернулся на проверку</b>{% endif %}
+<a href="{{ url }}">{{ material.title }}</a>
+{% if material.synopsis %}
+<blockquote>{{ material.synopsis }}</blockquote>{% endif %}
 
-{% if material.synopsis %}{{ material.synopsis }}
-{% endif %}<b>Предмет:</b> {{ material.subject.name }}
-<b>Год:</b> {{ material.year }}
-<b>Файлов:</b> {{ material.files.count }}
-{% if material.teachers.all %}<b>Преподаватели:</b> {% for teacher in material.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
-{% endif %}{% if material.terms.all %}<b>Семестры:</b> {% for term in material.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
-{% endif %}<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if material.hide_uploader %} (на сайте анонимно){% endif %}
+<b>Предмет:</b> {{ material.subject.name }}
+{% if material.terms.all %}<b>Семестры:</b> {% for term in material.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}{% if material.teachers.all %}<b>Преподаватели:</b> {% for teacher in material.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}<b>Год:</b> {{ material.year }} · <b>Файлов:</b> {{ material.files.count }}
+<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if material.hide_uploader %} · на сайте анонимно{% endif %}

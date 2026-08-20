@@ -14,21 +14,16 @@ def home(request):
     return redirect("material_list")
 
 
-def _came_from(request):
-    """Откуда пришли — чтобы не заставлять копировать адрес руками.
-
-    Саму поддержку не подставляем: после отправки браузер шлёт её же, и следующее
-    обращение уезжало бы с адресом страницы обращений.
-    """
-    referer = request.META.get("HTTP_REFERER", "")
-    return "" if reverse("support") in referer else referer
-
-
 @login_not_required
 def support(request):
-    """Открыта и без входа: чаще всего пишут как раз те, кто не может войти."""
-    known = request.user.email if request.user.is_authenticated else ""
-    form = SupportForm(request.POST or None, known=known, initial={"page": _came_from(request)})
+    """Открыта и без входа: чаще всего пишут как раз те, кто не может войти.
+
+    Адрес страницы, с которой пришли, раньше подставлялся из referer и уезжал в чат
+    отдельной строкой — и сбивал с толку: предложение «верните подписи» приходило
+    со ссылкой на случайный материал, будто речь про него.
+    """
+    author = request.user if request.user.is_authenticated else None
+    form = SupportForm(request.POST or None, request.FILES or None, known=bool(author))
     if request.method == "POST" and form.is_valid():
         # Форма открыта всему интернету и толкает сообщения в чат — без ограничителя
         # его завалило бы за вечер. Молчим о лимите: спамить в ответ подсказками незачем,
@@ -39,10 +34,12 @@ def support(request):
 
         notify(SUPPORT, "telegram/support.html", {
             **form.cleaned_data,
-            "author": request.user if request.user.is_authenticated else None,
+            "author": author,
+            # Кто человек и как с ним связаться — на его странице; почту в чат не тащим.
+            "profile_url": request.build_absolute_uri(reverse("profile", args=[author.pk])) if author else "",
             # Поверх cleaned_data, а не до: там лежит код («broken»), а в чат нужно словами.
             "topic": dict(SupportForm.TOPICS)[form.cleaned_data["topic"]],
-        })
+        }, image=form.cleaned_data.get("image"))
         messages.success(request, "Спасибо, сообщение ушло. Разберёмся.")
         return redirect("support")
 

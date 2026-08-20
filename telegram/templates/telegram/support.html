@@ -1,8 +1,12 @@
+{% comment %}
+  Общий вид сообщений бота: первой строкой значок и событие жирным, дальше подробности
+  строками «Поле: значение», авторский текст — цитатой. Разметка телеграмная (HTML),
+  из тегов ему известны b/i/u/s/a/code/pre/blockquote — своих придумывать нельзя.
+
+  Почты тут намеренно нет: кто человек и как с ним связаться, видно на его странице.
+{% endcomment %}
 🛟 <b>Поддержка</b> · {{ topic }}
 
-{{ text }}
-{% if page %}
-<b>Страница:</b> {{ page }}{% endif %}
-{% if author %}<b>От:</b> {{ author.name }} {{ author.surname }} · {{ author.email }} · id {{ author.pk }}
-{% if contact and contact != author.email %}<b>Ответить:</b> {{ contact }}{% endif %}
-{% else %}<b>От:</b> не вошёл на сайт · {{ contact }}{% endif %}
+<blockquote>{{ text }}</blockquote>
+
+<b>От:</b> {% if author %}<a href="{{ profile_url }}">{{ author.name }} {{ author.surname }}</a>{% if author.tg_page %} · <a href="https://t.me/{{ author.tg_page|cut:"@" }}">телеграм</a>{% elif author.vk_page %} · <a href="https://vk.com/{{ author.vk_page }}">вконтакте</a>{% endif %}{% else %}гость · {{ contact }}{% endif %}

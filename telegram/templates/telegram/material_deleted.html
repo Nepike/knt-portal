@@ -1,3 +1,4 @@
-🗑 Материал удалён: <b>{{ material.title }}</b>
+🗑 <b>Материал удалён</b>
+{{ material.title }}
 
-<b>Удалил:</b> {{ editor.name }} {{ editor.surname }}{% if material.uploader_id == editor.pk %} (он же и загрузил){% endif %}
+<b>Удалил:</b> {{ editor.name }} {{ editor.surname }}{% if material.uploader_id == editor.pk %} · он же и загрузил{% endif %}

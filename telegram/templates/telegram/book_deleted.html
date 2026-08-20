@@ -1,3 +1,4 @@
-🗑 Книга удалена: <b>{{ book.title }}</b>
+🗑 <b>Книга удалена</b>
+{{ book.title }}
 
-<b>Удалил:</b> {{ editor.name }} {{ editor.surname }}{% if book.uploader_id == editor.pk %} (он же и загрузил){% endif %}
+<b>Удалил:</b> {{ editor.name }} {{ editor.surname }}{% if book.uploader_id == editor.pk %} · он же и загрузил{% endif %}

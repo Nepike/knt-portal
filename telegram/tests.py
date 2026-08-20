@@ -1,6 +1,8 @@
+from base64 import b64decode, b64encode
 from unittest import mock
 
 from celery.exceptions import OperationalError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -8,7 +10,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from .bot import get_bot
 from .models import TelegramChat
 from .notify import MODERATION, notify
-from .tasks import send_message
+from .tasks import CAPTION_LIMIT, send_message, send_photo
 
 # Шаблон держим прямо здесь: настоящие появятся вместе с модерацией.
 TEMPLATES = [{
@@ -57,6 +59,17 @@ class NotifyTests(SimpleTestCase):
             notify(MODERATION, "tg.txt", {"title": "<b>жирно</b>"})
 
         self.assertIn("&lt;b&gt;", task.delay.call_args.args[1])
+
+    def test_a_picture_goes_into_the_task_itself(self):
+        # Воркер — отдельный контейнер: файла на диске веб-процесса он не увидит.
+        image = SimpleUploadedFile("доска.png", b"\x89PNG-bytes", content_type="image/png")
+        with mock.patch("telegram.notify.send_photo") as task:
+            notify(MODERATION, "tg.txt", {"title": "Зорич"}, image=image)
+
+        chat, text, encoded, name = task.delay.call_args.args
+        self.assertEqual(b64decode(encoded), b"\x89PNG-bytes")
+        self.assertEqual(name, "доска.png")
+        self.assertEqual(text, "Книга <b>Зорич</b>")
 
     def test_dead_broker_does_not_break_the_caller(self):
         # Уведомление — не потеря: всё то же есть на сайте. Ронять запрос из-за него нельзя.
@@ -109,3 +122,29 @@ class SendMessageTests(TestCase):
         TelegramChat.objects.create(name=MODERATION, chat_id=-1001234567890)
 
         self.send(None)  # падения быть не должно — это и проверяем
+
+
+@override_settings(TELEGRAM_CONSOLE=False)
+class SendPhotoTests(TestCase):
+    def send(self, text):
+        TelegramChat.objects.create(name=MODERATION, chat_id=-1001234567890, topic_id=7)
+        bot = mock.MagicMock()
+        with mock.patch("telegram.tasks.get_bot", return_value=bot):
+            send_photo(MODERATION, text, b64encode(b"png-bytes").decode(), "доска.png")
+        return bot
+
+    def test_short_text_becomes_the_caption(self):
+        bot = self.send("Коротко")
+
+        bot.send_message.assert_not_called()
+        kwargs = bot.send_photo.call_args.kwargs
+        self.assertEqual(kwargs["caption"], "Коротко")
+        self.assertEqual(kwargs["photo"], b"png-bytes")
+        self.assertEqual(kwargs["message_thread_id"], 7)
+
+    def test_a_long_report_goes_as_its_own_message_and_the_picture_follows(self):
+        # Обрезанное обращение хуже разорванного на два сообщения.
+        bot = self.send("а" * (CAPTION_LIMIT + 1))
+
+        bot.send_message.assert_called_once()
+        self.assertIsNone(bot.send_photo.call_args.kwargs["caption"])

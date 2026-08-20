@@ -1,14 +1,18 @@
 import json
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from django.core import mail
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+
+from PIL import Image as PilImage
 
 from knt.celery import app as celery_app
 from core.models import Team
@@ -179,6 +183,12 @@ def make_user(email, **extra):
     return User.objects.create_user(email=email, password="pass12345", must_change_password=False, **extra)
 
 
+def make_image(name="скриншот.png"):
+    buffer = BytesIO()
+    PilImage.new("RGB", (4, 4), "red").save(buffer, format="PNG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+
 class PeopleSearchTests(TestCase):
     """Поиск по имени — один на весь сайт, core/search.py."""
 
@@ -314,7 +324,7 @@ class SupportFormTests(TestCase):
     def test_a_report_reaches_the_support_chat(self):
         with patch("core.views.notify") as sent:
             response = self.client.post(reverse("support"), {
-                "topic": "broken", "text": "Не открывается книга", "page": "/library/12/",
+                "topic": "broken", "text": "Не открывается книга",
             })
         self.assertRedirects(response, reverse("support"))
         chat, template, context = sent.call_args.args
@@ -334,29 +344,42 @@ class SupportFormTests(TestCase):
         page = self.client.get(reverse("support")).content.decode()
         self.assertNotIn("бета-версии", page)
 
-    def test_the_contact_is_prefilled_for_those_we_already_know(self):
-        form = self.client.get(reverse("support")).context["form"]
-        self.assertEqual(form.fields["contact"].initial, self.user.email)
-        self.assertFalse(form.fields["contact"].required)
-
-    def test_the_page_field_is_prefilled_from_where_the_person_came_from(self):
-        response = self.client.get(reverse("support"), headers={"referer": "https://knt-mipt.ru/library/12/"})
-        self.assertEqual(response.context["form"].initial["page"], "https://knt-mipt.ru/library/12/")
-
-    def test_the_support_page_itself_is_not_offered_as_the_broken_one(self):
-        # После отправки браузер шлёт referer со страницы поддержки — подставлять его нельзя.
-        response = self.client.get(reverse("support"), headers={"referer": "https://knt-mipt.ru/support/"})
-        self.assertEqual(response.context["form"].initial["page"], "")
+    def test_a_logged_in_person_is_not_asked_for_a_contact(self):
+        # Связаться есть как: в чат уезжает ссылка на профиль, а там телеграм и ВК.
+        self.assertNotIn("contact", self.client.get(reverse("support")).context["form"].fields)
 
     def test_the_message_carries_who_wrote_and_how_to_answer(self):
+        self.user.tg_page = "ivan"
         text = render_to_string("telegram/support.html", {
-            "author": self.user, "topic": "Предложение", "text": "Добавьте тёмную тему", "page": "", "contact": "@ivan",
+            "author": self.user, "profile_url": "https://knt-mipt.ru/users/1/",
+            "topic": "Предложение", "text": "Добавьте тёмную тему",
         })
         self.assertIn("Добавьте тёмную тему", text)
+        self.assertIn("https://knt-mipt.ru/users/1/", text)
         self.assertIn("Иван Петров", text)
-        self.assertIn(self.user.email, text)
-        self.assertIn("@ivan", text)
+        self.assertIn("https://t.me/ivan", text)
+        # Почты в чате быть не должно, а страницы, с которой пришли, — тем более:
+        # она попадала туда из referer и сбивала с толку.
+        self.assertNotIn(self.user.email, text)
         self.assertNotIn("Страница:", text)
+
+    def test_vk_stands_in_when_there_is_no_telegram(self):
+        self.user.vk_page = "ivan_vk"
+        text = render_to_string("telegram/support.html", {"author": self.user, "topic": "Другое", "text": "?"})
+        self.assertIn("https://vk.com/ivan_vk", text)
+
+    def test_without_any_contacts_the_message_is_just_shorter(self):
+        text = render_to_string("telegram/support.html", {"author": self.user, "topic": "Другое", "text": "?"})
+        self.assertIn("Иван Петров", text)
+        self.assertNotIn("t.me", text)
+        self.assertNotIn("vk.com", text)
+
+    def test_a_picture_rides_along_with_the_report(self):
+        with patch("core.views.notify") as sent:
+            self.client.post(reverse("support"), {
+                "topic": "broken", "text": "вот так это выглядит", "image": make_image(),
+            })
+        self.assertTrue(sent.call_args.kwargs["image"])
 
 
 @override_settings(BETA=True)
@@ -389,9 +412,9 @@ class SupportWithoutLoginTests(TestCase):
     def test_the_message_shows_that_nobody_stands_behind_the_report(self):
         text = render_to_string("telegram/support.html", {
             "author": None, "topic": "Аккаунт и доступ", "text": "Не приходит письмо",
-            "page": "", "contact": "ivan@mipt.ru",
+            "contact": "ivan@mipt.ru",
         })
-        self.assertIn("не вошёл на сайт", text)
+        self.assertIn("гость", text)
         self.assertIn("ivan@mipt.ru", text)
 
     def test_a_flood_stops_reaching_the_chat(self):

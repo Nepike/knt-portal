@@ -10,12 +10,14 @@
   <h1 class="text-2xl font-bold">Поддержка</h1>
   <p class="mt-2 text-slate-500">Опиши, что случилось — сообщение придёт команде сайта.</p>
 
-  <form method="post" class="mt-8 flex flex-col gap-5">
+  <form method="post" enctype="multipart/form-data" class="mt-8 flex flex-col gap-5">
     {% csrf_token %}
     {% include "core/inputs.html" with field=form.topic %}
     {% include "core/inputs.html" with field=form.text %}
-    {% include "core/inputs.html" with field=form.contact %}
-    {% include "core/inputs.html" with field=form.page %}
+    {# Скриншот объясняет поломку лучше любого описания — как и было на старом сайте #}
+    {% include "attachments/_image_pick.html" with field=form.image %}
+    {% if form.image.errors %}<p class="-mt-3 text-xs text-rose-500">{{ form.image.errors.0 }}</p>{% endif %}
+    {% if form.contact %}{% include "core/inputs.html" with field=form.contact %}{% endif %}
 
     <div class="pt-1">
       <button type="submit" class="btn btn-primary"><i class="fa-solid fa-paper-plane"></i>Отправить</button>

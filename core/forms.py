@@ -1,6 +1,13 @@
 from django import forms
 
+from attachments.models import human_size
+
 from .widgets import AccentSelect, AccentSelectMultiple
+
+# Картинка обращения едет в телеграм ЧЕРЕЗ ОЧЕРЕДЬ, байтами в самой задаче: на сайте
+# у неё нет владельца, и в хранилище она осталась бы сиротой. Отсюда и потолок скромнее,
+# чем у картинок галереи, — это всё-таки сообщение в брокере, а не файл на диске.
+MAX_SUPPORT_IMAGE = 5 * 1024 * 1024
 
 SUBJECTS = [
     ("1", "Алгебра"), ("2", "Геометрия"), ("3", "Математический анализ"),
@@ -37,16 +44,22 @@ class SupportForm(forms.Form):
 
     topic = forms.ChoiceField(label="Тема", choices=TOPICS, initial="broken", widget=AccentSelect)
     text = forms.CharField(label="Сообщение", max_length=2000, widget=forms.Textarea(attrs={"rows": 8}))
+    image = forms.ImageField(label="Картинка", required=False)
     contact = forms.CharField(label="Почта или телеграм для ответа", max_length=100)
-    page = forms.CharField(label="Ссылка на страницу", required=False, max_length=200)
 
-    def __init__(self, *args, known=None, **kwargs):
-        """`known` — почта вошедшего. Есть она — контакт необязателен и подставлен;
-        нет (человек пишет со страницы входа) — без контакта ответить будет некуда."""
+    def __init__(self, *args, known=False, **kwargs):
+        """`known` — человек вошёл на сайт. Тогда контакт не спрашиваем вовсе: в чат уезжает
+        ссылка на его профиль, а там и телеграм, и ВК. Не вошёл (пишет со страницы входа —
+        это как раз частый случай) — без контакта ответить будет некуда."""
         super().__init__(*args, **kwargs)
         if known:
-            self.fields["contact"].required = False
-            self.fields["contact"].initial = known
+            del self.fields["contact"]
+
+    def clean_image(self):
+        image = self.cleaned_data["image"]
+        if image and image.size > MAX_SUPPORT_IMAGE:
+            raise forms.ValidationError(f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
+        return image
 
 
 class DemoForm(forms.Form):

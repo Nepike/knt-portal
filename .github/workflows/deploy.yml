@@ -25,11 +25,13 @@ jobs:
         run: |
           echo "STARTED=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "$COMMITS" ] || [ "$COMMITS" = "null" ]; then
-            LIST="• ручной запуск"
+            LIST="Ручной запуск"
           else
-            LIST=$(printf '%s' "$COMMITS" | jq -r '.[] | "• <a href=\"\(.url)\">\(.id[0:7])</a> \(.author.name | @html): \(.message | split("\n")[0] | @html)"')
+            # author.username — аккаунт на гитхабе; author.name пришло бы из git config,
+            # то есть тем именем, каким человек подписан у себя на машине.
+            LIST=$(printf '%s' "$COMMITS" | jq -r '.[] | "<code>\(.id[0:7])</code> \(.message | split("\n")[0] | @html) — <a href=\"\(.url)\">\(.author.username // .author.name | @html)</a>"')
           fi
-          TEXT=$(printf '🚀 <b>Деплой запущен</b> · <code>%s</code>\n\n%s' "$BRANCH" "$LIST")
+          TEXT=$(printf '🚀 <b>Деплой запущен</b>\n<b>Ветка:</b> <code>%s</code>\n\n%s' "$BRANCH" "$LIST")
           if [ -n "$COMPARE" ]; then
             TEXT=$(printf '%s\n\n<a href="%s">Все изменения</a>' "$TEXT" "$COMPARE")
           fi
@@ -57,7 +59,7 @@ jobs:
         run: |
           D=$(( $(date +%s) - ${STARTED:-$(date +%s)} ))
           [ "$D" -ge 60 ] && T="$((D / 60)) мин $((D % 60)) с" || T="$D с"
-          TEXT=$(printf '✅ <b>Деплой завершён</b> · %s\n\n<a href="https://knt-mipt.ru">knt-mipt.ru</a>' "$T")
+          TEXT=$(printf '✅ <b>Деплой завершён</b>\n<b>Время:</b> %s\n\n<a href="https://knt-mipt.ru">knt-mipt.ru</a>' "$T")
           curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
             -d parse_mode=HTML -d disable_web_page_preview=true \
@@ -69,7 +71,7 @@ jobs:
         run: |
           D=$(( $(date +%s) - ${STARTED:-$(date +%s)} ))
           [ "$D" -ge 60 ] && T="$((D / 60)) мин $((D % 60)) с" || T="$D с"
-          TEXT=$(printf '❌ <b>Деплой упал</b> · %s\n\n<a href="%s">Логи прогона</a>' "$T" "$RUN_URL")
+          TEXT=$(printf '❌ <b>Деплой упал</b>\n<b>Время:</b> %s\n\n<a href="%s">Логи прогона</a>' "$T" "$RUN_URL")
           curl -sS -X POST "$TG_API" \
             -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
             -d parse_mode=HTML -d disable_web_page_preview=true \
