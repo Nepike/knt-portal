@@ -1,5 +1,6 @@
 <div id="review-{{ r.pk }}" class="rounded-btn border-2 border-accent/60 bg-white dark:bg-slate-900 p-4">
-  <form hx-post="{% url 'review_edit' r.pk %}" hx-target="#review-{{ r.pk }}" hx-swap="outerHTML" class="space-y-4">
+  <form hx-post="{% url 'review_edit' r.pk %}" hx-target="#review-{{ r.pk }}" hx-swap="outerHTML"
+        hx-encoding="multipart/form-data" class="space-y-4">
     {% csrf_token %}
     <p class="font-semibold">Редактирование отзыва</p>
     {% include "teachers/_review_fields.html" %}

@@ -13,6 +13,10 @@ from core.models import Subject
 def photo_upload_to(instance, filename):
     return random_key("teachers", filename)
 
+
+def review_image_to(instance, filename):
+    return random_key("reviews", filename)
+
 SCORE_LABELS = {
     "score_knowledge": "Знания",
     "score_skill": "Умение преподавать",
@@ -87,6 +91,9 @@ class Review(models.Model):
     author = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="автор", on_delete=models.CASCADE, related_name="teacher_reviews")
     hide_author = models.BooleanField("анонимно", default=False)
     text = models.TextField("текст", blank=True)
+    image = models.ImageField(
+        "изображение", upload_to=review_image_to, storage=media_storage, null=True, blank=True,
+    )
 
     score_knowledge = models.PositiveSmallIntegerField("знания", null=True, blank=True, validators=SCORE_VALIDATORS)
     score_skill = models.PositiveSmallIntegerField("умение преподавать", null=True, blank=True, validators=SCORE_VALIDATORS)
@@ -108,6 +115,11 @@ class Review(models.Model):
 
     def __str__(self):
         return f"{self.author} → {self.teacher}"
+
+    def is_detailed(self):
+        """Есть что читать — текст или картинка. Такие отзывы видны всегда и им ставят
+        лайки; голые оценки сворачиваются под кнопку."""
+        return bool(self.text or self.image)
 
     def overall(self):
         rated = [getattr(self, f) for f in SCORE_LABELS if getattr(self, f) is not None]

@@ -1,0 +1,26 @@
+{% load attachment_extras %}
+{% comment %}
+  Одна прикреплённая картинка: выбрать, заменить, снять. Ждёт `field` (поле формы)
+  и `saved` (что лежит в базе — form.initial.<поле>, а НЕ значение поля: у формы,
+  вернувшейся с ошибкой, там уже свежая загрузка, для которой адреса ещё нет).
+
+  Снятие — обычный чекбокс Django: ClearableFileInput сам понимает «<поле>-clear»
+  и очищает поле, разбирать это руками не надо. Скрытым полем, а не checkbox: пустая
+  строка для CheckboxInput тоже «нет», а значение из Alpine так надёжнее.
+{% endcomment %}
+<div x-data="imagePick('{{ saved|media }}')" class="w-full">
+  <label class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-accent cursor-pointer">
+    <input x-ref="input" type="file" name="{{ field.html_name }}" accept="image/*" class="hidden" @change="pick($event)">
+    <i class="fa-solid fa-paperclip"></i>
+    <span x-text="name || (url ? 'Заменить картинку' : 'Картинка')"></span>
+  </label>
+  <input type="hidden" name="{{ field.html_name }}-clear" :value="cleared ? 'on' : ''">
+
+  <div x-show="url" x-cloak class="relative mt-2 w-fit">
+    <img :src="url" alt="" class="max-h-32 rounded-xl border border-slate-200 dark:border-slate-800">
+    <button type="button" @click="drop()" aria-label="Убрать картинку"
+            class="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 hover:text-rose-500 shadow-sm">
+      <i class="fa-solid fa-xmark text-xs"></i>
+    </button>
+  </div>
+</div>

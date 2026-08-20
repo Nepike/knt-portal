@@ -5,6 +5,6 @@
 <form id="comment-{{ c.pk }}" hx-post="{% url 'comment_edit' c.pk %}" hx-target="this" hx-swap="outerHTML"
       hx-encoding="multipart/form-data"
       class="rounded-2xl border-2 border-accent/50 bg-white dark:bg-slate-900 p-4">
+  {# Подсказка про замену больше не нужна: прикреплённая картинка теперь видна прямо в форме #}
   {% include "materials/_comment_fields.html" with form=form submit="Сохранить" %}
-  <p class="mt-2 text-xs text-slate-400">Новая картинка заменит прежнюю.</p>
 </form>

@@ -69,6 +69,18 @@ def check_images(uploads):
     ]
 
 
+def drop_replaced(form, field="image"):
+    """Снять из хранилища картинку, которую форма заменила или убрала.
+
+    Блоб удаляется вместе с записью (post_delete в attachments/storage.py), но запись-то
+    жива — прежний файл ей больше не принадлежит, и добраться до него потом будет неоткуда.
+    Звать ПОСЛЕ save(): сравниваем то, что было в базе при показе формы, с тем, что стало.
+    """
+    was = form.initial.get(field)
+    if was and str(was) != str(getattr(form.instance, field)):
+        was.storage.delete(str(was))
+
+
 def check_name(name):
     """Причина отказа по имени файла или None."""
     if Path(name).suffix.lstrip(".").lower() in FORBIDDEN_EXTENSIONS:

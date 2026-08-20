@@ -642,6 +642,28 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  // Одна картинка в комментарии или отзыве: показываем ту, что уже прицеплена (иначе при
+  // правке не понять, есть она вообще или нет), и даём снять её, не трогая сам комментарий.
+  // `cleared` уезжает в поле «<имя>-clear», по которому Django очищает картинку сам.
+  Alpine.data("imagePick", (saved = "") => ({
+    url: saved,
+    name: "",
+    cleared: false,
+    pick(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      this.url = URL.createObjectURL(file);
+      this.name = file.name;
+      this.cleared = false; // выбрали новую — снимать прежнюю не надо, она и так заменится
+    },
+    drop() {
+      this.$refs.input.value = "";
+      this.url = "";
+      this.name = "";
+      this.cleared = !!saved; // снимать в базе нечего, если её там и не было
+    },
+  }));
+
   // Звёзды 1–5 для формы отзыва. Повторный клик по той же звезде снимает оценку.
   Alpine.data("stars", ({ value = null } = {}) => ({
     value,

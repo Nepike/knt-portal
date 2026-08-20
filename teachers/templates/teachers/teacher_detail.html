@@ -95,7 +95,7 @@
     <div class="flex flex-col gap-3">
 
       {% if not user_review %}
-      <form method="post" class="rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+      <form method="post" enctype="multipart/form-data" class="rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
         {% csrf_token %}
         <p class="font-semibold">Оставить отзыв</p>
         {% include "teachers/_review_fields.html" %}

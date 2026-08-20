@@ -1,5 +1,5 @@
 {% load attachment_extras %}
-<div id="review-{{ r.pk }}" {% if not r.text and r.author_id != user.pk %}x-show="showAll" x-cloak {% endif %}class="rounded-btn bg-white dark:bg-slate-900 p-4 {% if r.author_id == user.pk %}border-2 border-accent/60{% else %}border border-slate-200 dark:border-slate-800{% endif %}">
+<div id="review-{{ r.pk }}" {% if not r.is_detailed and r.author_id != user.pk %}x-show="showAll" x-cloak {% endif %}class="rounded-btn bg-white dark:bg-slate-900 p-4 {% if r.author_id == user.pk %}border-2 border-accent/60{% else %}border border-slate-200 dark:border-slate-800{% endif %}">
   <div class="flex items-start gap-3">
     {% if r.hide_author %}
     <span class="w-10 h-10 rounded-lg shrink-0 bg-slate-200 dark:bg-slate-700 flex items-center justify-center"><i class="fa-solid fa-user-secret text-xl text-slate-500 dark:text-slate-400"></i></span>
@@ -34,7 +34,15 @@
 
   {% if r.text %}
   <p class="text-sm mt-3 whitespace-pre-line">{{ r.text }}</p>
-  {% else %}
+  {% endif %}
+
+  {% if r.image %}{% with url=r.image|media %}
+  <a href="{{ url }}" target="_blank" rel="noopener" class="block mt-3 max-w-xs rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
+    <img src="{{ url }}" alt="" loading="lazy" class="w-full h-auto">
+  </a>
+  {% endwith %}{% endif %}
+
+  {% if not r.is_detailed %}
   <div class="flex flex-wrap gap-1.5 mt-3">
     {% for label, v in r.score_items %}
     <span class="inline-flex items-center gap-1.5 rounded-md bg-slate-100 dark:bg-slate-800 px-2 py-1 text-xs text-slate-500 dark:text-slate-400">
@@ -44,10 +52,10 @@
   </div>
   {% endif %}
 
-  {% if r.text or r.author_id == user.pk or perms.teachers.change_review or perms.teachers.delete_review %}
+  {% if r.is_detailed or r.author_id == user.pk or perms.teachers.change_review or perms.teachers.delete_review %}
   <div class="flex items-center justify-between gap-4 mt-3">
     <div class="flex gap-4 text-sm">
-      {% if r.text %}
+      {% if r.is_detailed %}
       <button type="button" hx-post="{% url 'review_like' r.pk %}" hx-target="#review-{{ r.pk }}" hx-swap="outerHTML"
               class="transition-colors {% if r.liked_by_me %}text-accent{% else %}text-slate-400 hover:text-accent{% endif %}">
         <i class="fa-solid fa-thumbs-up mr-1"></i>{{ r.likes }}

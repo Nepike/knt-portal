@@ -130,6 +130,25 @@ class MaterialListTests(TestCase):
         empty = Subject.objects.create(name="Химия", dative="химии", accusative="химию")
         self.assertNotIn(empty.pk, self.options(self.get(), "subject"))
 
+    def test_a_card_carries_the_filters_into_its_link(self):
+        # По этой строке страница материала и узнаёт, куда возвращать по «Материалы».
+        response = self.get(term=self.first.pk)
+        self.assertContains(response, f"{self.lectures.get_absolute_url()}?term={self.first.pk}")
+
+    def test_the_card_names_who_uploaded_it_unless_asked_not_to(self):
+        # По фамилии загрузившего материалы ищут не реже, чем по предмету.
+        uploader = make_user("up@t.local")
+        uploader.surname = "Загрузчиков"  # не «Иванов»: тот же ФИО и у того, кто смотрит
+        uploader.save(update_fields=["surname"])
+        Material.objects.filter(pk=self.lectures.pk).update(uploader=uploader)
+
+        self.assertContains(self.get(term=self.first.pk), "Загрузчиков")
+
+        Material.objects.filter(pk=self.lectures.pk).update(hide_uploader=True)
+        response = self.get(term=self.first.pk)
+        self.assertContains(response, "Аноним")
+        self.assertNotContains(response, "Загрузчиков")
+
     def test_the_filter_block_comes_back_with_the_list_but_not_with_the_next_chunk(self):
         changed = self.client.get(
             reverse("material_list"), {"term": self.first.pk}, headers={"HX-Request": "true"},
@@ -199,6 +218,16 @@ class MaterialDetailTests(TestCase):
             material=material, name="Лекция 1.pdf", file=SimpleUploadedFile("lecture.pdf", b"x"),
         )
         return material
+
+    def test_the_back_link_returns_to_the_same_selection(self):
+        # Ссылка «Материалы» вела в начало списка и стирала подбор, с которым сюда пришли.
+        material = self.make()
+        self.client.force_login(self.reader)
+
+        url = reverse("material_detail", args=[material.pk])
+        self.assertContains(self.client.get(url, {"term": "2", "subject": self.subject.pk}),
+                            f'href="{reverse("material_list")}?term=2&amp;subject={self.subject.pk}"')
+        self.assertContains(self.client.get(url), f'href="{reverse("material_list")}"')
 
     def test_page_shows_text_and_files(self):
         material = self.make()
@@ -480,6 +509,28 @@ class CommentTests(TestCase):
         self.add(image=make_image())
 
         self.assertTrue(Comment.objects.get().image)
+
+    def test_the_edit_form_shows_the_attached_image(self):
+        # Поле файла всегда пустое, и по нему не понять, прицеплено что-то или нет.
+        self.add(image=make_image())
+        comment = Comment.objects.get()
+
+        form = self.client.get(reverse("comment_edit", args=[comment.pk]))
+        self.assertContains(form, comment.image.url)
+
+    def test_the_image_can_be_taken_off_without_deleting_the_comment(self):
+        # Раньше ради этого приходилось удалять комментарий и писать заново.
+        self.add(text="было с картинкой", image=make_image())
+        comment = Comment.objects.get()
+        name, storage = comment.image.name, comment.image.storage
+
+        self.client.post(reverse("comment_edit", args=[comment.pk]),
+                         {"text": "стало без", "image-clear": "on"})
+
+        comment.refresh_from_db()
+        self.assertFalse(comment.image)
+        self.assertEqual(comment.text, "стало без")
+        self.assertFalse(storage.exists(name), "снятая картинка осталась в хранилище")
 
     def test_vote_keeps_the_replies_on_screen(self):
         # Карточка возвращается из ленты, а не собирается заново: иначе у корня

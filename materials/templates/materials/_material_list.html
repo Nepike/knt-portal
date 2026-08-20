@@ -28,8 +28,8 @@
     <div class="min-w-0 flex-1">
       <div class="flex items-start gap-2">
         <h3 class="font-semibold leading-snug">
-          {# after:inset-0 растягивает ссылку на всю карточку #}
-          <a href="{% url 'material_detail' material.pk %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ material.title }}</a>
+          {# after:inset-0 растягивает ссылку на всю карточку; фильтры едут следом, чтобы «назад» вернуло к тому же подбору #}
+          <a href="{% url 'material_detail' material.pk %}{% if filters %}?{{ filters }}{% endif %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ material.title }}</a>
         </h3>
         {% include "moderation/_badge.html" with item=material %}
       </div>
@@ -38,22 +38,45 @@
       <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{{ material.synopsis }}</p>
       {% endif %}
 
-      <div class="flex flex-wrap gap-1.5 mt-2">
-        <span class="rounded-full bg-accent/10 text-accent text-xs px-2.5 py-0.5">{{ material.subject.name }}</span>
-        {% for teacher in material.teachers.all %}
-        <span class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-0.5">{{ teacher.short_name }}</span>
-        {% endfor %}
-        {% for term in material.terms.all %}
-        <span class="rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs px-2.5 py-0.5">{{ term }}</span>
-        {% endfor %}
+      {% comment %}
+        Предмет, преподаватели и семестры раньше шли подряд одинаковыми пилюлями — по виду
+        не разобрать, где что. Пилюля осталась одна, у предмета: он главная примета
+        материала. Остальное — подписью со своим значком.
+      {% endcomment %}
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-slate-500 dark:text-slate-400">
+        <span class="rounded-full bg-accent/10 text-accent px-2.5 py-0.5">{{ material.subject.name }}</span>
+        {% if material.teachers.all %}
+        <span class="inline-flex items-center gap-1.5">
+          <i class="fa-solid fa-chalkboard-user text-slate-400 dark:text-slate-500"></i>
+          {% for teacher in material.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        </span>
+        {% endif %}
+        {% if material.terms.all %}
+        <span class="inline-flex items-center gap-1.5">
+          <i class="fa-solid fa-calendar-days text-slate-400 dark:text-slate-500"></i>
+          {{ material.terms.all|length|plural:"Семестр,Семестры,Семестры" }}
+          {% for term in material.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        </span>
+        {% endif %}
       </div>
 
-      {% if material.files_count %}
-      <p class="text-xs text-slate-400 mt-2">
-        <i class="fa-solid fa-paperclip"></i>
-        {{ material.files_count }} {{ material.files_count|plural:"файл,файла,файлов" }}
-      </p>
-      {% endif %}
+      {# Кто загрузил — по фамилии материалы ищут не реже, чем по предмету #}
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-slate-400 dark:text-slate-500">
+        <span class="inline-flex items-center gap-1.5">
+          <i class="fa-solid fa-user"></i>
+          {% if material.hide_uploader or not material.uploader %}Аноним{% else %}{{ material.uploader.name }} {{ material.uploader.surname }}{% endif %}
+        </span>
+        {% if material.files_count %}
+        <span class="inline-flex items-center gap-1.5">
+          <i class="fa-solid fa-paperclip"></i>{{ material.files_count }} {{ material.files_count|plural:"файл,файла,файлов" }}
+        </span>
+        {% endif %}
+        {% if material.images_count %}
+        <span class="inline-flex items-center gap-1.5">
+          <i class="fa-solid fa-image"></i>{{ material.images_count }} {{ material.images_count|plural:"изображение,изображения,изображений" }}
+        </span>
+        {% endif %}
+      </div>
     </div>
   </div>
 </article>

@@ -6,12 +6,13 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Exists, OuterRef, Q
 from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from attachments.models import human_size
 from attachments.uploads import (
-    MAX_IMAGE_SIZE, check_images, check_pending, check_uploads, max_upload_size, pending_uploads,
-    saved_files, saved_images, sync_files, sync_images, upload_limits,
+    MAX_IMAGE_SIZE, check_images, check_pending, check_uploads, drop_replaced, max_upload_size,
+    pending_uploads, saved_files, saved_images, sync_files, sync_images, upload_limits,
 )
 from telegram.notify import MODERATION, notify
 
@@ -38,10 +39,21 @@ def _may_edit(user, material):
     return material.uploader_id == user.pk or _may_moderate(user)
 
 
+def _filter_query(params):
+    """Непустые фильтры строкой запроса. Из неё собирается и адрес списка, и ссылка
+    «назад» на странице материала: без неё возврат к списку сбрасывал бы весь подбор."""
+    return urlencode({name: value for name in FILTERS if (value := params.get(name))})
+
+
 def _filters_url(request):
     """Адрес с текущими фильтрами: ссылку можно переслать, а F5 не сбросит подбор."""
-    query = urlencode({key: value for key, value in request.GET.items() if value and key != "page"})
+    query = _filter_query(request.GET)
     return f"{request.path}?{query}" if query else request.path
+
+
+def _list_url(params):
+    query = _filter_query(params)
+    return f"{reverse('material_list')}?{query}" if query else reverse("material_list")
 
 
 def _narrow(form, base, chosen):
@@ -71,9 +83,9 @@ def material_list(request):
 
     materials = (
         _visible(request.user)
-        .select_related("subject")
+        .select_related("subject", "uploader")
         .prefetch_related("terms", "teachers")
-        .annotate(files_count=Count("files", distinct=True))
+        .annotate(files_count=Count("files", distinct=True), images_count=Count("images", distinct=True))
     )
     chosen = {name: form.cleaned_data[name] for name in FILTERS} if form.is_valid() else {}
     for name, lookup in FILTERS.items():
@@ -88,6 +100,8 @@ def material_list(request):
 
     context = {
         "page": page, "materials": page.object_list, "form": form,
+        # Фильтры едут в ссылку каждой карточки — со страницы материала есть куда вернуться.
+        "filters": _filter_query(request.GET),
         # Заголовок года не должен повториться на стыке порций: сравниваем с годом
         # элемента, стоящего прямо перед первым на этой странице.
         "carry_year": ordered[page.start_index() - 2].year if page.number > 1 else None,
@@ -114,6 +128,9 @@ def material_detail(request, pk):
     )
     return render(request, "materials/material_detail.html", {
         "material": material,
+        # Ссылка «Материалы» ведёт не в начало списка, а туда, откуда пришли: фильтры
+        # приезжают сюда в адресе карточки.
+        "back_url": _list_url(request.GET),
         "may_edit": _may_edit(request.user, material),
         "may_moderate": _may_moderate(request.user),
         "comments": _thread(request.user, material),
@@ -239,6 +256,7 @@ def comment_edit(request, pk):
     form = CommentForm(request.POST or None, request.FILES or None, instance=comment)
     if request.method == "POST" and form.is_valid():
         form.save()
+        drop_replaced(form)
         return _card(request, comment.material, pk)
     return render(request, "materials/_comment_form.html", {
         "form": form, "c": comment, "material": comment.material,
