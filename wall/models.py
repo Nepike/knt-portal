@@ -136,7 +136,7 @@ class ProtectedArea(models.Model):
 
 
 class WallProfile(models.Model):
-    """Цвет человека и его запас пикселей.
+    """Запас пикселей человека и его счётчик закрашенного.
 
     Заряды не начисляются по расписанию: храним, сколько их было в момент charged_at,
     а сколько есть сейчас — считаем при обращении. Иначе понадобилась бы задача,
@@ -146,10 +146,11 @@ class WallProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, verbose_name="владелец", on_delete=models.CASCADE, related_name="wall",
     )
-    color = models.PositiveSmallIntegerField("цвет")
     charges = models.PositiveSmallIntegerField("заряды", default=MAX_CHARGES)
     charged_at = models.DateTimeField("отсчёт зарядов", default=timezone.now)
-    rerolls = models.PositiveIntegerField("менял цвет", default=0)
+    # Считаем ЗДЕСЬ, а не по журналу доски: в него пишут и заливки модератора, и консоль,
+    # а награда полагается только за мазок, оплаченный зарядом. Растёт в _take_charge.
+    painted = models.PositiveIntegerField("закрашено клеток", default=0)
     banned_until = models.DateTimeField("доска закрыта до", null=True, blank=True)
 
     class Meta:

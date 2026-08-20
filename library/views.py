@@ -12,6 +12,7 @@ from attachments.models import File, human_size
 from attachments.uploads import (
     check_pending, check_uploads, max_upload_size, pending_uploads, saved_files, sync_files, upload_limits,
 )
+from economy import rewards
 from telegram.notify import MODERATION, notify
 
 from .forms import BookFilterForm, BookForm
@@ -179,6 +180,9 @@ def book_review(request, pk):
         book.reject(request.user, request.POST.get("note", ""))
         text = "Книга отклонена."
     book.save(update_fields=Book.REVIEW_FIELDS)
+    # Автору — за опубликованную работу, модератору — за разобранную чужую.
+    rewards.sync(book.uploader)
+    rewards.sync(request.user)
 
     if request.headers.get("HX-Request"):
         return render(request, "moderation/_decision.html", {"text": text})

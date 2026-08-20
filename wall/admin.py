@@ -11,17 +11,13 @@ class BoardAdmin(admin.ModelAdmin):
 
 @admin.register(WallProfile)
 class WallProfileAdmin(admin.ModelAdmin):
-    list_display = ("user", "color_name", "charges", "rerolls", "banned_until")
+    list_display = ("user", "charges", "painted", "banned_until")
     search_fields = ("user__email", "user__surname")
-    # Цвет и заряды — результат игры, правится только через сервис. Бан здесь руками:
+    # Заряды и счётчик — результат игры, правятся только сервисом. Бан здесь руками:
     # на самой Стене он вешается на автора клетки, а снять его иногда надо, не разыскивая
     # по доске, чей пиксель.
-    readonly_fields = ("user", "color_name", "charges", "charged_at", "rerolls")
-    fields = ("user", "color_name", "charges", "charged_at", "rerolls", "banned_until")
-
-    @admin.display(description="цвет")
-    def color_name(self, obj):
-        return palette.get(obj.color).name
+    readonly_fields = ("user", "charges", "charged_at", "painted")
+    fields = ("user", "charges", "charged_at", "painted", "banned_until")
 
 
 @admin.register(ProtectedArea)

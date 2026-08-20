@@ -1,0 +1,35 @@
+{% load attachment_extras %}
+{% comment %}
+  Аватар человека. Ждёт:
+    person — у кого берём photo/name/surname;
+    box    — размер и форма внешнего квадрата классами («w-9 h-9 rounded-[22%]»);
+    text   — кегль инициалов, когда фото нет;
+    frame  — отступ под фирменную рамку-заглушку («p-1»); пусто — без рамки;
+    worn   — надетая косметическая рамка (CosmeticItem). Если она есть, заглушка не рисуется.
+
+  Классы приходят строками от вызывающего, а не собираются из кусков: Tailwind ищет их
+  в шаблонах буквально, и «w-{{ size }}» в сборку попросту не попадёт.
+
+  Подложка под фото непрозрачная ВСЕГДА. Аватар можно загрузить png с прозрачностью,
+  и без подложки сквозь него просвечивала бы рамка — дырки в лице читаются как поломка.
+{% endcomment %}
+{% if worn %}
+  {% comment %}
+    Косметическая рамка лежит ПОВЕРХ и занимает весь квадрат, а аватар утоплен внутрь
+    на 10%. Доля не на глаз: при 14% между аватаром и рамкой видно фон, при 6% рамка
+    заезжает на лицо. Углы у аватара тут почти прямые — проём у рамок квадратный,
+    и скруглённый уголок оставлял бы под собой просвет.
+  {% endcomment %}
+  <span class="{{ box }} relative shrink-0 inline-block">
+    <span class="absolute inset-[10%] rounded-[8%] overflow-hidden inline-flex bg-slate-200 dark:bg-slate-700">
+      {% include "core/_face.html" %}
+    </span>
+    <img src="{{ worn.image|media }}" alt="{{ worn.name }}" class="absolute inset-0 w-full h-full select-none pointer-events-none">
+  </span>
+{% else %}
+  <span class="{{ box }} shrink-0 inline-flex {% if frame %}{{ frame }} bg-brand-gradient{% else %}overflow-hidden bg-slate-200 dark:bg-slate-700{% endif %}">
+    <span class="flex-1 inline-flex overflow-hidden{% if frame %} rounded-[20%] bg-slate-200 dark:bg-slate-700{% endif %}">
+      {% include "core/_face.html" %}
+    </span>
+  </span>
+{% endif %}

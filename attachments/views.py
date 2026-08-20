@@ -10,6 +10,8 @@ from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonRespo
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
+from economy import rewards
+
 from .media import MEDIA_CACHE, file_pk, media_key
 from .models import File, human_size
 from .storage import file_storage
@@ -55,6 +57,12 @@ def download(request, token, name):
         # Просмотрщик pdf дочитывает книгу кусками по тому же адресу — считаем только
         # первый запрос, иначе одно открытие давало бы десяток «скачиваний».
         File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
+        # Пересчёт зовём не на каждое скачивание, а только когда набралась порция:
+        # он стоит несколько запросов, а раздача файлов — самый горячий путь на сайте.
+        # Счётчик читаем догрузочный, до update: разойтись он может разве что при
+        # одновременных скачиваниях, а пропущенную порцию доберёт следующая.
+        if file.uploader_id and (file.downloads + 1) % rewards.DOWNLOAD_SYNC_EVERY == 0:
+            rewards.sync(file.uploader)
     return _deliver(file.file.name)
 
 

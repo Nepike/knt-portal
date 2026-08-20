@@ -170,6 +170,24 @@ html { color-scheme: light; }
   .switch-field:has(input:checked) .switch { @apply bg-accent; }
   .switch-field:has(input:checked) .switch::after { transform: translateX(1rem); }
 
+  /* Сетка инвентаря. Пропорции плитки идут от формы самой вещи: рамка квадратная,
+     шапка вытянутая 6:1. Общий квадрат для всех сплющивал бы шапку в кашу, а
+     object-contain оставлял бы вокруг неё пустоту в половину плитки.
+     Классами, а не утилитами в разметке: имя вида приезжает из базы строкой. */
+  .slot-avatar_frame { @apply grid-cols-3 sm:grid-cols-5 lg:grid-cols-6; }
+  .slot-avatar_frame img { @apply aspect-square; }
+  .slot-profile_header { @apply grid-cols-1 sm:grid-cols-2; }
+  .slot-profile_header img { @apply aspect-[6/1] object-cover rounded-md; }
+
+  /* Редкости косметики. Классом, а не набором утилит в разметке: цвет ступени —
+     это про дизайн, и менять его надо в одном месте, а не в четырёх шаблонах. */
+  .rarity { @apply border-2; }
+  .rarity-common { @apply border-slate-300 dark:border-slate-600; }
+  .rarity-rare { @apply border-sky-400; }
+  .rarity-epic { @apply border-violet-400; }
+  .rarity-legendary { @apply border-amber-400; }
+  .rarity-mythical { @apply border-rose-400; }
+
   /* Тост: карточка с цветной иконкой по типу (цвет задаёт JS в components.js). */
   .toast {
     @apply flex items-start gap-3 w-80 max-w-[calc(100vw-2rem)] rounded-btn p-3 text-sm shadow-lg;

@@ -21,6 +21,7 @@ from users.models import User
 
 from chats.models import Chat
 
+from . import beta
 from .legacy_markup import to_markdown
 from .management.commands.import_legacy_files import extension, filename
 from .search import by_name
@@ -245,49 +246,67 @@ class HtmxVaryTests(TestCase):
 
 @override_settings(BETA=True)
 class BetaLockTests(TestCase):
-    """К 14 авг 2026 закрыт ровно один адрес — профиль. Всё остальное открыто."""
+    """Закрыт ровно один раздел — профиль со всем, что к нему прицеплено.
+
+    Решение пользователя: открывать его не по частям, а разом с геймификацией.
+    """
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
         self.staff = make_user("staff@x.ru", is_staff=True)
-
-    def test_everything_but_the_profile_is_reachable(self):
         self.client.force_login(self.reader)
+
+    def test_every_other_section_is_reachable(self):
         # Загрузка и правка тоже: «только чтение» кончилось вместе с проверкой разделов.
         for name in ("material_list", "book_list", "teacher_list", "support",
                      "chat_list", "material_new", "book_new"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
-    def test_the_unfinished_profile_explains_itself_instead_of_pretending_to_be_missing(self):
-        # 403 со страницей, а не 404: страница существует, просто ещё не сделана.
-        self.client.force_login(self.reader)
+    def test_the_profile_explains_itself_instead_of_pretending_to_be_missing(self):
+        # 403 со страницей, а не 404: страница существует, просто ещё не показывается.
         response = self.client.get(reverse("profile", args=[self.reader.pk]))
+
         self.assertEqual(response.status_code, 403)
         self.assertContains(response, "Страница ещё не готова", status_code=403)
+
+    def test_everything_hanging_off_the_profile_is_closed_too(self):
+        # Правка, сессии и экипировка живут на той же странице — открывать их поодиночке
+        # значило бы оставить работающие ручки у закрытой двери.
+        self.assertEqual(self.client.get(reverse("profile_edit")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("session_end")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("item_unequip")).status_code, 403)
 
     def test_staff_walks_everywhere(self):
         self.client.force_login(self.staff)
         self.assertEqual(self.client.get(reverse("profile", args=[self.staff.pk])).status_code, 200)
 
     def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
+        self.client.logout()
         target = reverse("profile", args=[self.reader.pk])
+
         self.assertRedirects(self.client.get(target), f"{reverse('login')}?next={target}")
 
     def test_the_root_leads_to_materials(self):
-        self.client.force_login(self.reader)
         self.assertRedirects(self.client.get("/"), reverse("material_list"))
 
     @override_settings(BETA=False)
     def test_switching_beta_off_opens_everything(self):
-        self.client.force_login(self.reader)
         self.assertEqual(self.client.get(reverse("profile", args=[self.reader.pk])).status_code, 200)
 
     def test_the_account_menu_does_not_offer_a_page_that_is_closed(self):
         """Пункт «Профиль» гасим, а не прячем — как и разделы в меню слева."""
-        self.client.force_login(self.reader)
         page = self.client.get(reverse("material_list")).content.decode()
+
         self.assertIn("Профиль", page)
         self.assertNotIn(reverse("profile", args=[self.reader.pk]), page)
+
+    def test_staff_still_gets_the_link(self):
+        # Флаг считается по тому же списку, что и замок, значит и исключение для
+        # персонала должно совпадать: иначе пункт серый, а страница открывается.
+        self.client.force_login(self.staff)
+        page = self.client.get(reverse("material_list")).content.decode()
+
+        self.assertIn(reverse("profile", args=[self.staff.pk]), page)
 
 
 @override_settings(BETA=True)

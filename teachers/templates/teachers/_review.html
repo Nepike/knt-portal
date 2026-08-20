@@ -9,13 +9,7 @@
     </div>
     {% else %}
     {# TODO (M5 profiles): косметика — рамка аватара/фон карточки #}
-    <a href="{% url 'profile' r.author_id %}" class="w-10 h-10 rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700 shrink-0 inline-flex">
-      {% if r.author.photo %}
-        <img src="{{ r.author.photo|media }}" alt="" class="w-full h-full object-cover">
-      {% else %}
-        <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium">{{ r.author.surname|slice:":1" }}{{ r.author.name|slice:":1" }}</span>
-      {% endif %}
-    </a>
+    <a href="{% url 'profile' r.author_id %}">{% include "core/_avatar.html" with person=r.author box="w-10 h-10 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-sm" %}</a>
     <div class="min-w-0 flex-1">
       <p class="font-medium text-sm leading-tight"><a href="{% url 'profile' r.author_id %}" class="hover:text-accent transition-colors">{{ r.author.name }} {{ r.author.surname }}</a>{% if r.author_id == user.pk %} <span class="text-xs font-normal text-accent">— ваш отзыв</span>{% endif %}</p>
       {% if r.author.team %}<p class="text-xs text-slate-400 mt-0.5">{{ r.author.team.get_grade_str }}</p>{% endif %}

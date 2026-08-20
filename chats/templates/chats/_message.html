@@ -1,6 +1,6 @@
 {# Единый пузырь: первая отрисовка, отправка, догрузка. data-id — курсор ленты #}
 {# oob=True — обновление уже показанного: htmx заменит элемент с тем же id на месте #}
-{% load chat_extras attachment_extras %}
+{% load chat_extras %}
 {% if not m.author %}
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="text-center text-xs text-slate-400 py-1">{{ m.text }}</div>
 {% else %}
@@ -8,13 +8,7 @@
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="flex gap-2 {% if own %}flex-row-reverse{% endif %}">
 
   {% if not own %}
-  <a href="{% url 'profile' m.author_id %}" class="w-8 h-8 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700 self-end">
-    {% if m.author.photo %}
-      <img src="{{ m.author.photo|media }}" alt="" class="w-full h-full object-cover">
-    {% else %}
-      <span class="flex-1 flex items-center justify-center text-[11px] font-medium">{{ m.author.surname|slice:":1" }}{{ m.author.name|slice:":1" }}</span>
-    {% endif %}
-  </a>
+  <a href="{% url 'profile' m.author_id %}" class="self-end">{% include "core/_avatar.html" with person=m.author box="w-8 h-8 rounded-[22%]" text="text-[11px]" %}</a>
   {% endif %}
 
   {# Набор атрибутов = набор прав: нет data-edit-url — нет пункта «Изменить» #}

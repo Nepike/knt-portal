@@ -1,4 +1,4 @@
-{% load static moderation_extras attachment_extras economy_extras %}
+{% load static moderation_extras economy_extras %}
 <!DOCTYPE html>
 <html lang="ru" class="theme-{{ site_theme }}">
 <head>
@@ -110,28 +110,20 @@
         {% if request.user.is_authenticated %}
         <div class="relative mt-auto pt-3 border-t border-slate-200 dark:border-slate-800" x-data="{ open: false }">
           <button @click="open = !open" class="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
-            {# TODO (M5 profiles): рамка аватара — оверлей экипированной косметики (квадратный PNG); сейчас плейсхолдер-градиент #}
-            <span class="w-9 h-9 rounded-[22%] p-0.5 bg-brand-gradient inline-flex shrink-0">
-              {% if request.user.photo %}
-                <img src="{{ request.user.photo|media }}" alt="" class="w-full h-full rounded-[20%] object-cover">
-              {% else %}
-                <span class="flex-1 rounded-[20%] bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-medium">{{ request.user.name|slice:":1" }}{{ request.user.surname|slice:":1" }}</span>
-              {% endif %}
-            </span>
+            {% include "core/_avatar.html" with person=request.user box="w-11 h-11 rounded-[22%]" text="text-sm" frame="p-0.5" %}
             <span class="min-w-0 flex-1 text-left">
               <span class="block text-sm font-medium truncate">{{ request.user.name }} {{ request.user.surname }}</span>
-              {# TODO (M5 profiles): реальный уровень #}
               {# TODO: своя SVG-иконка валюты вместо fa-cent-sign #}
-              <span class="block text-xs text-slate-500">ур. 1 · {% coins request.user %} <i class="fa-solid fa-cent-sign"></i></span>
+              <span class="block text-xs text-slate-500">{% coins request.user %} <i class="fa-solid fa-cent-sign"></i></span>
             </span>
             <i class="fa-solid fa-chevron-down text-slate-400 transition" :class="open && 'rotate-180'"></i>
           </button>
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
-            {# TODO: реальные URL инвентаря/настроек #}
-            {# Профиль ещё не сделан (core/beta.py) — пункт гасим по тому же правилу, что и разделы меню #}
-            <a {% if not beta_locked %}href="{% url 'profile' request.user.pk %}"{% endif %}
-               class="flex items-center gap-1 px-3 py-2 rounded {% if beta_locked %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
+            {# TODO: реальный URL инвентаря #}
+            {# Пункт гасим, а не прячем — по той же house-rule, что и разделы в меню слева #}
+            <a {% if not profile_locked %}href="{% url 'profile' request.user.pk %}"{% endif %}
+               class="flex items-center gap-1 px-3 py-2 rounded {% if profile_locked %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
             {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
             <form method="post" action="{% url 'logout' %}">

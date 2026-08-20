@@ -14,6 +14,7 @@ from attachments.uploads import (
     MAX_IMAGE_SIZE, check_images, check_pending, check_uploads, drop_replaced, max_upload_size,
     pending_uploads, saved_files, saved_images, sync_files, sync_images, upload_limits,
 )
+from economy import rewards
 from telegram.notify import MODERATION, notify
 
 from .forms import CommentForm, MaterialFilterForm, MaterialForm
@@ -287,6 +288,7 @@ def comment_vote(request, pk, vote):
     else:
         mine.add(request.user)
         other.remove(request.user)
+    rewards.sync(comment.author)
     return _card(request, comment.material, pk)
 
 
@@ -362,6 +364,9 @@ def material_review(request, pk):
         material.reject(request.user, request.POST.get("note", ""))
         text = "Материал отклонён."
     material.save(update_fields=Material.REVIEW_FIELDS)
+    # Автору — за опубликованную работу, модератору — за разобранную чужую.
+    rewards.sync(material.uploader)
+    rewards.sync(request.user)
 
     if request.headers.get("HX-Request"):
         return render(request, "moderation/_decision.html", {"text": text})

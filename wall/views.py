@@ -15,7 +15,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from economy.services import NotEnoughFunds, wallet_of
 from users.models import User
 
 from . import palette, rules
@@ -35,7 +34,6 @@ from .services import (
     profile_of,
     protect,
     require_moderator,
-    reroll,
     rollback,
     snapshot,
     status,
@@ -47,14 +45,9 @@ from .services import (
 def wall(request):
     board = _board()
     profile = profile_of(request.user)
-    balance = wallet_of(request.user).balance
     return render(request, "wall/wall.html", {
         "board": board,
-        "color": palette.get(profile.color),
-        "balance": balance,
         "max_charges": rules.MAX_CHARGES,
-        "price": rules.REROLL_PRICE,
-        "own_color": rules.OWN_COLOR_ONLY,
         "data": {
             "board": board.pk,  # ключ для подложки в памяти браузера: у каждой доски своя
             "title": board.title,
@@ -68,16 +61,12 @@ def wall(request):
             "colors": [{"hex": color.hex, "name": color.name} for color in palette.PALETTE],
             "max_charges": rules.MAX_CHARGES,
             "interval": rules.CHARGE_INTERVAL.total_seconds(),
-            "price": rules.REROLL_PRICE,
-            "balance": balance,
-            "own_color": rules.OWN_COLOR_ONLY,
             "max_area": rules.MAX_AREA,
             "areas": _areas(board),
             "urls": {
                 "snapshot": reverse("wall_snapshot"),
                 "paint": reverse("wall_paint"),
                 "erase": reverse("wall_erase"),
-                "reroll": reverse("wall_reroll"),
                 "pixel": reverse("wall_pixel"),
                 "history": reverse("wall_history"),
                 "fill": reverse("wall_fill"),
@@ -139,21 +128,6 @@ def pixel_paint(request):
 @require_POST
 def pixel_erase(request):
     return _place(request, erase)
-
-
-@require_POST
-def color_reroll(request):
-    if not rules.OWN_COLOR_ONLY:
-        raise Http404("цвет за аккаунтом сейчас не закреплён")
-    try:
-        code = reroll(request.user)
-    except NotEnoughFunds as error:
-        return JsonResponse({"error": str(error)}, status=409)
-    color = palette.get(code)
-    return JsonResponse({
-        "color": code, "hex": color.hex, "name": color.name,
-        "balance": wallet_of(request.user).balance,
-    })
 
 
 @require_POST
@@ -297,7 +271,6 @@ def _state(profile, **extra):
     иначе таймер зарядов на странице разъедется с сервером."""
     charges, next_at = status(profile)
     return {
-        "color": profile.color,
         "charges": charges,
         "next": next_at.isoformat() if next_at else None,
         **extra,

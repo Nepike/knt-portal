@@ -25,7 +25,6 @@
 """
 
 import math
-import random
 from collections import namedtuple
 
 Color = namedtuple("Color", "code hex name")
@@ -133,9 +132,3 @@ def nearest(red, green, blue):
 
     return min(range(len(PALETTE)), key=far)
 
-
-def roll(exclude=None):
-    """Случайный цвет. Нужен, пока за аккаунтом закрепляют один цвет (rules.OWN_COLOR_ONLY);
-    exclude — нынешний, чтобы платная смена всегда что-то меняла."""
-    pool = [color for color in PICKABLE if color.code != exclude]
-    return random.choice(pool).code

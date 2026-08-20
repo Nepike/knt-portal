@@ -1,6 +1,0 @@
-{% if shade %}
-<span class="inline-flex items-center gap-1.5 align-middle shrink-0" title="Цвет на Стене: {{ shade.name }}">
-  <span class="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-slate-300 dark:ring-slate-600" style="background: {{ shade.hex }}"></span>
-  {% if named %}<span class="text-slate-500 dark:text-slate-400">{{ shade.name }}</span>{% endif %}
-</span>
-{% endif %}

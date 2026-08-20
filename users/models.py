@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth.models import (
     AbstractBaseUser,
     BaseUserManager,
@@ -73,3 +76,72 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.name} {self.surname} ({self.email})"
+
+
+class UserSession(models.Model):
+    """Приписка к сессии: чья она, откуда и когда заходили в последний раз.
+
+    Django хранит сессию одним зашифрованным блобом, и снаружи о ней не известно ничего —
+    даже чья она. Поэтому свои сессии человек не мог ни увидеть, ни закрыть, а команде
+    `session_for --end` приходится перебирать и расшифровывать все живые подряд.
+
+    Живость определяет НЕ эта таблица, а сама django_session: строка привязана к ней
+    ключом с каскадом, поэтому выход, чистка `clearsessions` и закрытие с этой страницы
+    уносят приписку сами, без сторожа. Отсюда же зависимость: сессии обязаны лежать
+    в базе (SESSION_ENGINE по умолчанию), в кэше внешнего ключа не на что вешать.
+
+    Собственный id, а не ключ сессии первичным: ключ — это пароль на предъявителя,
+    и в разметке страницы «мои устройства» ему делать нечего.
+    """
+
+    session = models.OneToOneField(
+        "sessions.Session", verbose_name="сессия", on_delete=models.CASCADE, related_name="meta",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="пользователь",
+        on_delete=models.CASCADE, related_name="sessions",
+    )
+    ip = models.GenericIPAddressField("адрес", null=True, blank=True)
+    agent = models.CharField("браузер", max_length=200, blank=True)
+    created = models.DateTimeField("вход", default=timezone.now)
+    seen = models.DateTimeField("последний запрос", default=timezone.now)
+
+    class Meta:
+        verbose_name = "сессия"
+        verbose_name_plural = "сессии"
+        ordering = ["-seen"]
+
+    def __str__(self):
+        return f"{self.user}: {self.ip or '?'}"
+
+    def fresh(self):
+        """Заходили только что. Отметка обновляется раз в несколько минут, точнее «сейчас»
+        о ней всё равно не сказать, а «был 0 минут назад» читается как поломка."""
+        return timezone.now() - self.seen < timedelta(minutes=10)
+
+    def where(self):
+        """Браузер и система человеческими словами.
+
+        Порядок в списках важен: Edge представляется и хромом тоже, хром — ещё и сафари.
+        Побеждает первое совпадение, поэтому частные имена стоят раньше общих.
+        """
+        parts = (_first(self.agent, BROWSERS), _first(self.agent, SYSTEMS))
+        if named := " · ".join(part for part in parts if part):
+            return named
+        # Не узнали. Короткую строку показываем как есть — так себя называет сессия,
+        # выданная командой session_for; настоящий User-Agent для этого слишком длинный.
+        return self.agent if 0 < len(self.agent) <= 60 else "неизвестное устройство"
+
+
+BROWSERS = (
+    ("YaBrowser", "Яндекс.Браузер"), ("Edg", "Edge"), ("OPR", "Opera"), ("Vivaldi", "Vivaldi"),
+    ("Firefox", "Firefox"), ("Chrome", "Chrome"), ("Safari", "Safari"),
+)
+SYSTEMS = (
+    ("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"),
+    ("Windows", "Windows"), ("Mac OS", "macOS"), ("Linux", "Linux"),
+)
+
+
+def _first(agent, names):
+    return next((name for mark, name in names if mark in agent), "")

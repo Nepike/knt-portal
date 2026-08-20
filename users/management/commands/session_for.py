@@ -28,11 +28,13 @@ from django.contrib.sessions.models import Session
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from users.models import User
+from users.models import User, UserSession
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MINUTES = 30
+# Вместо браузера: в списке «мои устройства» такая сессия должна называть себя честно.
+AGENT = "выдана командой session_for"
 
 
 class Command(BaseCommand):
@@ -84,11 +86,15 @@ class Command(BaseCommand):
         store[HASH_SESSION_KEY] = user.get_session_auth_hash()
         store.set_expiry(minutes * 60)
         store.create()
+        # Приписку заводим и здесь, хотя сигнала входа не было: иначе выданная сессия
+        # не попадёт в список «мои устройства» и хозяин аккаунта её не увидит.
+        UserSession.objects.create(session_id=store.session_key, user=user, agent=AGENT)
         return store.session_key
 
     def drop(self, user):
-        """Своих сессий пользователь не перечисляет — id лежит внутри зашифрованных данных,
-        поэтому идём по живым и смотрим каждую. Их десятки, а не миллионы."""
+        """Сессии не только выданные этой командой, а вообще все — чтобы «закрыть доступ»
+        значило именно это. Поэтому идём по живым и расшифровываем каждую: обычный вход
+        приписку оставляет (users/sessions.py), но полагаться тут на неё нельзя."""
         doomed = [
             session.session_key
             for session in Session.objects.filter(expire_date__gt=timezone.now())

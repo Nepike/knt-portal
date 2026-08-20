@@ -2,18 +2,21 @@ from datetime import date
 
 from django.conf import settings
 
+from .beta import CLOSED
+
 
 def beta(request):
-    """Плашка «бета» в шапке и ссылки на то, что ещё не готово.
+    """Плашка «бета» в шапке и гашение пунктов, ведущих в закрытое.
 
-    `beta_locked` — «этому человеку закрытое не показываем». Считаем его не для текущего
-    адреса (он-то открыт, раз страница рисуется), а для того, что на ней нарисовано:
-    ссылку на профиль в меню аккаунта вести некуда, хотя сама страница с меню открыта.
-    Список закрытого — в core/beta.py.
+    `profile_locked` считаем по тому же списку, что и сам замок, а не отдельным флагом:
+    иначе, открыв профиль, легко забыть про пункт меню — и он останется серым.
     """
     user = getattr(request, "user", None)
     staff = bool(user and user.is_authenticated and user.is_staff)
-    return {"beta": settings.BETA, "beta_locked": settings.BETA and not staff}
+    return {
+        "beta": settings.BETA,
+        "profile_locked": settings.BETA and not staff and "profile" in CLOSED,
+    }
 
 
 def site_theme(request):

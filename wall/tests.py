@@ -34,7 +34,6 @@ from .services import (
     paint,
     profile_of,
     protect,
-    reroll,
     rollback,
     snapshot,
     status,
@@ -60,10 +59,12 @@ def make_moderator(email="mod@t.local"):
     return User.objects.get(pk=user.pk)  # права кешируются на объекте, берём свежий
 
 
+DEFAULT_COLOR = 1
+
+
 def put(user, board, x, y, color=None, free=False):
-    """Мазок в тестах: цвет по умолчанию — закреплённый за человеком. Большинству
-    проверок всё равно, каким именно красили, и так они короче."""
-    return paint(user, board, x, y, profile_of(user).color if color is None else color, free=free)
+    """Мазок в тестах: большинству проверок всё равно, каким цветом красили."""
+    return paint(user, board, x, y, DEFAULT_COLOR if color is None else color, free=free)
 
 
 def spread(board, n):
@@ -72,12 +73,8 @@ def spread(board, n):
     return n % board.width, n // board.width
 
 
-def set_color(user, name):
-    """Ставим человеку конкретный цвет — со случайным в тестах нечего сверять."""
-    code = next(c.code for c in palette.PICKABLE if c.name == name)
-    profile_of(user)  # профиль заводится лениво, до него обновлять нечего
-    WallProfile.objects.filter(user=user).update(color=code)
-    return code
+def color(name):
+    return next(c.code for c in palette.PICKABLE if c.name == name)
 
 
 class PaletteTests(TestCase):
@@ -103,16 +100,6 @@ class PaletteTests(TestCase):
     def test_names_are_unique(self):
         names = [c.name for c in palette.PALETTE]
         self.assertEqual(len(names), len(set(names)))
-
-    def test_roll_never_returns_the_empty_cell(self):
-        self.assertNotIn(palette.EMPTY, {palette.roll() for _ in range(200)})
-
-    def test_roll_never_repeats_the_excluded_color(self):
-        self.assertNotIn(7, {palette.roll(exclude=7) for _ in range(200)})
-
-    def test_roll_reaches_every_color(self):
-        random.seed(20260812)
-        self.assertEqual(len({palette.roll() for _ in range(3000)}), len(palette.PICKABLE))
 
 
 class BoardTests(TestCase):
@@ -188,7 +175,7 @@ class PaintTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        self.color = set_color(self.user, "основной синий")
+        self.color = DEFAULT_COLOR
 
     def test_painting_writes_the_pixel_and_the_journal(self):
         put(self.user, self.board, 3, 2)
@@ -198,8 +185,8 @@ class PaintTests(TestCase):
 
     def test_painting_over_a_stranger_replaces_the_owner(self):
         other = make_user("o@t.local")
-        theirs = set_color(other, "основной красный")
-        put(other, self.board, 1, 1)
+        theirs = color("основной красный")
+        put(other, self.board, 1, 1, theirs)
         put(self.user, self.board, 1, 1)
 
         pixel = Pixel.objects.get(board=self.board, x=1, y=1)
@@ -218,6 +205,7 @@ class PaintTests(TestCase):
             put(self.user, board, 0, 0)
 
     def test_a_banned_person_is_refused(self):
+        profile_of(self.user)  # профиль заводится лениво — до него обновлять нечего
         WallProfile.objects.filter(user=self.user).update(
             banned_until=timezone.now() + timedelta(days=1),
         )
@@ -236,7 +224,6 @@ class EraseTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        set_color(self.user, "основной синий")
 
     def test_erasing_your_own_pixel_empties_the_cell(self):
         put(self.user, self.board, 2, 2)
@@ -279,7 +266,7 @@ class SnapshotTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        self.color = set_color(self.user, "основной синий")
+        self.color = DEFAULT_COLOR
 
     def test_snapshot_is_one_byte_per_cell(self):
         self.assertEqual(len(snapshot(self.board)), 8 * 4)
@@ -306,22 +293,11 @@ class OwnColorTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        self.mine = set_color(self.user, "основной синий")
-        self.other = next(c.code for c in palette.PICKABLE if c.name == "основной зелёный")
+        self.other = color("основной зелёный")
 
-    def test_an_open_palette_honours_the_chosen_color(self):
+    def test_the_chosen_color_is_the_one_that_lands(self):
         put(self.user, self.board, 0, 0, self.other)
         self.assertEqual(Pixel.objects.get(x=0, y=0).color, self.other)
-
-    def test_a_locked_palette_puts_the_assigned_color_instead(self):
-        with mock.patch.object(rules, "OWN_COLOR_ONLY", True):
-            put(self.user, self.board, 0, 0, self.other)
-        self.assertEqual(Pixel.objects.get(x=0, y=0).color, self.mine)
-
-    def test_there_is_nothing_to_reroll_while_the_palette_is_open(self):
-        self.client.force_login(self.user)
-        credit(self.user, rules.REROLL_PRICE, MANUAL)
-        self.assertEqual(self.client.post(reverse("wall_reroll")).status_code, 404)
 
 
 class NewBoardTests(TestCase):
@@ -374,7 +350,7 @@ class JournalTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        self.color = set_color(self.user, "основной синий")
+        self.color = DEFAULT_COLOR
 
     def replay(self, events):
         cells = bytearray(self.board.width * self.board.height)
@@ -394,7 +370,7 @@ class JournalTests(TestCase):
         for x, y in ((1, 1), (2, 1), (3, 3)):
             put(self.user, self.board, x, y)
         erase(self.user, self.board, 2, 1)
-        fill(mod, self.board, (4, 0, 6, 1), set_color(mod, "тушь"))
+        fill(mod, self.board, (4, 0, 6, 1), color("тушь"))
         rollback(mod, self.board, (4, 0, 6, 1), timezone.now() - timedelta(hours=1))
         _, _, events = journal(self.board)
         self.assertEqual(self.replay(events), snapshot(self.board))
@@ -412,39 +388,13 @@ class JournalTests(TestCase):
         self.assertEqual((marks, events), ([], b""))
 
 
-class RerollTests(TestCase):
-    def setUp(self):
-        self.user = make_user()
-        self.was = set_color(self.user, "основной синий")
-
-    def test_reroll_changes_the_color_and_takes_the_money(self):
-        credit(self.user, rules.REROLL_PRICE, MANUAL)
-        now = reroll(self.user)
-        self.assertNotEqual(now, self.was)
-        self.assertEqual(wallet_of(self.user).balance, 0)
-        self.assertEqual(profile_of(self.user).rerolls, 1)
-
-    def test_without_money_the_color_stays(self):
-        credit(self.user, rules.REROLL_PRICE - 1, MANUAL)
-        with self.assertRaises(NotEnoughFunds):
-            reroll(self.user)
-        self.assertEqual(profile_of(self.user).color, self.was)
-        self.assertEqual(wallet_of(self.user).balance, rules.REROLL_PRICE - 1)
-
-    def test_the_journal_remembers_the_color_you_left(self):
-        credit(self.user, rules.REROLL_PRICE, MANUAL)
-        reroll(self.user)
-        self.assertIn("основной синий", BalanceLog.objects.first().note)
-
-
 class ArtistTests(TestCase):
     """Режим художника: модератор кладёт любой цвет и не тратит заряды."""
 
     def setUp(self):
         self.mod = make_moderator()
         self.board = make_board()
-        set_color(self.mod, "основной синий")
-        self.gold = next(c.code for c in palette.PICKABLE if c.name == "основной янтарный")
+        self.gold = color("основной янтарный")
 
     def test_moderator_paints_without_spending_a_charge(self):
         put(self.mod, self.board, 1, 1, self.gold, free=True)
@@ -477,7 +427,7 @@ class AreaTests(TestCase):
     def setUp(self):
         self.mod = make_moderator()
         self.board = make_board()
-        self.color = set_color(self.mod, "основной синий")
+        self.color = DEFAULT_COLOR
 
     def test_fill_paints_the_whole_rectangle(self):
         fill(self.mod, self.board, (1, 1, 3, 2), self.color)
@@ -521,17 +471,15 @@ class RollbackTests(TestCase):
         self.mod = make_moderator()
         self.board = make_board()
         self.author = make_user("a@t.local")
-        self.was = set_color(self.author, "основной зелёный")
-        set_color(self.mod, "основной синий")
+        self.was = color("основной зелёный")
 
     def test_rollback_restores_what_was_under_the_paint(self):
-        put(self.author, self.board, 1, 1)
+        put(self.author, self.board, 1, 1, self.was)
         moment = timezone.now()
         Placement.objects.update(created=moment - timedelta(hours=2))
         Pixel.objects.update(placed=moment - timedelta(hours=2))
 
         grief = make_user("g@t.local")
-        set_color(grief, "основной красный")
         put(grief, self.board, 1, 1)
         put(grief, self.board, 2, 2)
 
@@ -555,8 +503,6 @@ class ProtectedAreaTests(TestCase):
         self.mod = make_moderator()
         self.board = make_board()
         self.person = make_user("p@t.local")
-        set_color(self.person, "основной синий")
-        set_color(self.mod, "основной красный")
         protect(self.mod, self.board, (1, 1, 3, 3), note="герб")
 
     def test_a_frozen_cell_is_closed_for_everyone_else(self):
@@ -583,7 +529,6 @@ class BanTests(TestCase):
         self.mod = make_moderator()
         self.board = make_board()
         self.grief = make_user("g@t.local")
-        set_color(self.grief, "основной синий")
 
     def test_ban_closes_the_board_but_not_the_site(self):
         ban(self.mod, self.grief, 7)
@@ -714,36 +659,11 @@ class DrawTests(TestCase):
             self.draw(self.picture(), x=7, y=0, apply=True)
 
 
-class ColorMarkTests(TestCase):
-    """Цвет как подпись: метка рядом с именем по всему сайту."""
-
-    def setUp(self):
-        self.user = make_user()
-        self.client.force_login(self.user)
-
-    def render(self, person):
-        return Template("{% load wall_extras %}{% wall_dot person %}").render(Context({"person": person}))
-
-    def test_a_person_who_never_opened_the_wall_has_no_mark(self):
-        self.assertEqual(self.render(self.user).strip(), "")
-
-    def test_the_mark_carries_the_color(self):
-        code = set_color(self.user, "основной синий")
-        self.assertIn(palette.get(code).hex, self.render(User.objects.get(pk=self.user.pk)))
-
-    def test_the_profile_page_shows_the_color_by_name(self):
-        make_board()
-        code = set_color(self.user, "тушь")
-        response = self.client.get(reverse("profile", args=[self.user.pk]))
-        self.assertContains(response, palette.get(code).hex)
-        self.assertContains(response, "тушь")
-
-
 class ViewTests(TestCase):
     def setUp(self):
         self.user = make_user()
         self.board = make_board()
-        self.color = set_color(self.user, "основной синий")
+        self.color = DEFAULT_COLOR
         self.client.force_login(self.user)
 
     def test_the_page_opens(self):
@@ -755,7 +675,6 @@ class ViewTests(TestCase):
         data = self.client.get(reverse("wall")).context["data"]
         self.assertEqual(len(data["colors"]), len(palette.PALETTE))
         self.assertEqual(data["neutral_from"], len(palette.PALETTE) - len(palette.NEUTRALS))
-        self.assertFalse(data["own_color"])
 
     def test_the_page_needs_an_open_board(self):
         Board.objects.all().delete()
@@ -802,19 +721,6 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Pixel.objects.get(x=1, y=1).color, palette.EMPTY)
 
-    def test_reroll_without_money_is_refused(self):
-        with mock.patch.object(rules, "OWN_COLOR_ONLY", True):
-            response = self.client.post(reverse("wall_reroll"))
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(profile_of(self.user).color, self.color)
-
-    def test_reroll_returns_the_new_color_and_the_rest_of_the_money(self):
-        credit(self.user, rules.REROLL_PRICE + 25, MANUAL)
-        with mock.patch.object(rules, "OWN_COLOR_ONLY", True):
-            data = self.client.post(reverse("wall_reroll")).json()
-        self.assertNotEqual(data["color"], self.color)
-        self.assertEqual(data["balance"], 25)
-
     def card(self, x, y):
         return self.client.get(reverse("wall_pixel"), {"x": x, "y": y})
 
@@ -853,7 +759,7 @@ class ModeratorViewTests(TestCase):
     def setUp(self):
         self.mod = make_moderator()
         self.board = make_board()
-        self.color = set_color(self.mod, "основной синий")
+        self.color = DEFAULT_COLOR
         self.client.force_login(self.mod)
 
     def rect(self, **extra):
@@ -868,7 +774,7 @@ class ModeratorViewTests(TestCase):
         self.assertEqual(Pixel.objects.exclude(color=palette.EMPTY).count(), 6)
 
     def test_painting_any_color_through_the_view(self):
-        gold = next(c.code for c in palette.PICKABLE if c.name == "основной янтарный")
+        gold = color("основной янтарный")
         self.client.post(reverse("wall_paint"), {"x": 1, "y": 1, "color": gold, "free": 1})
         self.assertEqual(Pixel.objects.get(x=1, y=1).color, gold)
         self.assertEqual(profile_of(self.mod).charges, rules.MAX_CHARGES)

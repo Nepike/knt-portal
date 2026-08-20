@@ -8,6 +8,7 @@ from django.views.decorators.http import require_POST
 
 from attachments.uploads import drop_replaced
 from core.search import by_name
+from economy import rewards
 
 from .forms import ReviewForm
 from .models import SCORE_LABELS, Review, Teacher
@@ -79,6 +80,9 @@ def teacher_detail(request, pk):
         review.author = request.user
         review.save()
         drop_replaced(form)
+        # Отзыв с текстом стоит дороже голых оценок, поэтому пересчёт нужен и на правке:
+        # человек мог дописать текст к тому, что раньше было одними звёздами.
+        rewards.sync(request.user)
         messages.success(request, "Отзыв сохранён")
         return redirect("teacher_detail", pk=pk)
 
@@ -118,6 +122,7 @@ def review_edit(request, pk):
     if request.method == "POST" and form.is_valid():
         form.save()
         drop_replaced(form)
+        rewards.sync(review.author)
         messages.success(request, "Отзыв сохранён")
         return _hx_refresh()
     return render(request, "teachers/_review_form.html", {"form": form, "r": review})
@@ -142,4 +147,7 @@ def review_vote(request, pk, vote):
     else:
         mine.add(request.user)
         other.remove(request.user)
+    # Награда автору, не голосующему. Снятый лайк её не отнимает — как и удалённый
+    # материал: sync только доначисляет, вниз пересчитывает лишь recount_tokens --reset.
+    rewards.sync(review.author)
     return review_card(request, pk)

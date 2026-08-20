@@ -1,0 +1,45 @@
+{% extends "core/base.html" %}
+
+{% block title %}Настройки профиля{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-lg mx-auto">
+  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
+    <h1 class="text-xl font-bold mb-6">Настройки профиля</h1>
+
+    {# multipart из-за гифок: обычная картинка едет строкой, а они — файлом (см. включение ниже) #}
+    <form method="post" enctype="multipart/form-data" class="flex flex-col gap-5">
+      {% csrf_token %}
+
+      {% include "users/_avatar_pick.html" with field=form.photo file_field=form.photo_file person=user limit=avatar_limit %}
+      {% if form.photo.errors %}<p class="-mt-2 text-xs text-rose-500 text-center">{{ form.photo.errors.0 }}</p>{% endif %}
+      {% if form.photo_file.errors %}<p class="-mt-2 text-xs text-rose-500 text-center">{{ form.photo_file.errors.0 }}</p>{% endif %}
+
+      {% comment %}
+        ФИО, группа и почта — только показать. Имя стоит подписью под каждым материалом
+        и отзывом; свободное переименование на закрытом сайте было бы готовым способом
+        выдать себя за другого. Поля этих в форме нет вовсе (users/forms.py).
+      {% endcomment %}
+      <div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 px-4 py-3">
+        <p class="font-medium text-sm">{{ user.name }} {{ user.surname }}{% if user.patronymic %} {{ user.patronymic }}{% endif %}</p>
+        {% if user.team %}<p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ user.team.get_grade_str }} · {{ user.team.number }}</p>{% endif %}
+        {# break-words, а не break-all: почта — одно длинное слово, и рвать её посреди имени незачем, пока строка не переполнена #}
+        <p class="text-sm text-slate-500 dark:text-slate-400 break-words">{{ user.email }}</p>
+        <p class="text-xs text-slate-400 mt-1.5">Имя, группу и почту меняет администратор — напиши в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>.</p>
+      </div>
+
+      {% include "core/inputs.html" with field=form.birthday %}
+      {% include "core/inputs.html" with field=form.phone %}
+      {% include "core/inputs.html" with field=form.tg_page %}
+      {% include "core/inputs.html" with field=form.vk_page %}
+      {% include "core/inputs.html" with field=form.mailing_allowed variant="switch" %}
+
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+        <a href="{% url 'profile' user.pk %}" class="btn btn-ghost">Отмена</a>
+        <a href="{% url 'password_change' %}" class="btn btn-ghost ml-auto"><i class="fa-solid fa-key"></i>Сменить пароль</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

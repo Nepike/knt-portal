@@ -15,13 +15,7 @@
       <p class="font-medium text-sm leading-tight">Аноним{% if c.author_id == user.pk %} <span class="text-xs font-normal text-accent">— вы</span>{% endif %}</p>
     </div>
     {% else %}
-    <a href="{% url 'profile' c.author_id %}" class="w-9 h-9 rounded-lg overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700 shrink-0 inline-flex">
-      {% if c.author.photo %}
-      <img src="{{ c.author.photo|media }}" alt="" class="w-full h-full object-cover">
-      {% else %}
-      <span class="flex-1 bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-medium">{{ c.author.surname|slice:":1" }}{{ c.author.name|slice:":1" }}</span>
-      {% endif %}
-    </a>
+    <a href="{% url 'profile' c.author_id %}">{% include "core/_avatar.html" with person=c.author box="w-9 h-9 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-xs" %}</a>
     <div class="min-w-0 flex-1">
       <p class="font-medium text-sm leading-tight">
         <a href="{% url 'profile' c.author_id %}" class="hover:text-accent transition-colors">{{ c.author.name }} {{ c.author.surname }}</a>

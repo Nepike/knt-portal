@@ -1,13 +1,6 @@
-{% load attachment_extras %}
 {% for u in found_users %}
 <a href="{% url 'dm_start' u.pk %}" class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-  <span class="w-10 h-10 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700">
-    {% if u.photo %}
-      <img src="{{ u.photo|media }}" alt="" class="w-full h-full object-cover">
-    {% else %}
-      <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ u.surname|slice:":1" }}{{ u.name|slice:":1" }}</span>
-    {% endif %}
-  </span>
+  {% include "core/_avatar.html" with person=u box="w-10 h-10 rounded-[22%]" text="text-sm" %}
   <span class="min-w-0">
     <span class="block text-sm font-medium truncate">{{ u.name }} {{ u.surname }}</span>
     {% if u.team %}<span class="block text-xs text-slate-400">{{ u.team.get_grade_str }}</span>{% endif %}

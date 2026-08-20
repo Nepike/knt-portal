@@ -28,23 +28,6 @@
 
   <div class="shrink-0 flex items-center gap-2 sm:gap-3">
     <h1 class="font-bold text-lg sm:text-xl truncate">{{ board.title }}</h1>
-
-    {% if own_color %}
-    {# Цвет закреплён за аккаунтом: показываем свой и даём его сменить за монеты. #}
-    <span class="w-7 h-7 rounded-lg ring-1 ring-slate-300 dark:ring-slate-700 shrink-0"
-          style="background: {{ color.hex }}" :style="{ background: colorHex }"></span>
-    <span class="text-sm font-medium truncate" x-text="colorName">{{ color.name }}</span>
-    <button type="button" @click="reroll" :disabled="busy || balance < price"
-            class="btn btn-secondary ml-auto shrink-0"
-            :title="balance < price ? 'Не хватает монет' : 'Новый цвет выпадет случайно'">
-      <i class="fa-solid fa-dice"></i>
-      <span class="hidden sm:inline">Сменить</span>
-      <span>{{ price }}&nbsp;<i class="fa-solid fa-cent-sign"></i></span>
-    </button>
-    <span class="shrink-0 text-xs text-slate-400 whitespace-nowrap">
-      есть <b x-text="balance">{{ balance }}</b>
-    </span>
-    {% endif %}
   </div>
 
   {# ===== Доска ===== #}

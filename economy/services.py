@@ -19,22 +19,22 @@ def wallet_of(user):
     return Wallet.objects.get_or_create(user=user)[0]
 
 
-def credit(user, amount, reason, note=""):
-    """Начислить. amount — положительное число."""
+def credit(user, amount, reason, note="", key=""):
+    """Начислить. amount — положительное число, key — за что именно (см. BalanceLog.key)."""
     if amount <= 0:
         raise ValueError("начисление должно быть положительным")
-    return _move(user, amount, reason, note)
+    return _move(user, amount, reason, note, key)
 
 
-def spend(user, amount, reason, note=""):
+def spend(user, amount, reason, note="", key=""):
     """Списать. amount тоже положительный — знак ставим сами."""
     if amount <= 0:
         raise ValueError("списание должно быть положительным")
-    return _move(user, -amount, reason, note)
+    return _move(user, -amount, reason, note, key)
 
 
 @transaction.atomic
-def _move(user, delta, reason, note):
+def _move(user, delta, reason, note, key=""):
     wallet_of(user)  # у человека, который ещё ничего не заработал, кошелька нет
     wallet = Wallet.objects.select_for_update().get(user=user)
     balance = wallet.balance + delta
@@ -43,7 +43,7 @@ def _move(user, delta, reason, note):
     wallet.balance = balance
     wallet.save(update_fields=["balance"])
     return BalanceLog.objects.create(
-        wallet=wallet, amount=delta, reason=reason, note=note, balance_after=balance,
+        wallet=wallet, amount=delta, reason=reason, note=note, key=key, balance_after=balance,
     )
 
 

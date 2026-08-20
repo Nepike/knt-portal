@@ -664,6 +664,193 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  // Аватар: человек сам решает, каким куском фото станет миниатюра. Снимок с телефона
+  // бывает 4000×3000 и вертикальный, и в квадрате от него оставался бы случайный кусок.
+  // Кадр двигают мышью или пальцем, масштаб — ползунком, щипком или колесом.
+  //
+  // Наружу уходит не файл, а уже вырезанный квадрат data-URL'ом в скрытом поле: сервер
+  // всё равно перерисовывает картинку своим Pillow (users/forms.py), а так не нужен ни
+  // второй запрос, ни разбор исходника на сервере. Значение обновляем после каждого
+  // движения, чтобы не ловить отправку формы посреди асинхронной работы канваса.
+  const AVATAR_PX = 512;
+  Alpine.data("avatarPick", (saved = "", limit = 2000000) => {
+    // Всё, чего не касается разметка, держим ЗДЕСЬ, а не в данных компонента: Alpine
+    // оборачивает свои данные в Proxy, а drawImage подсунутый вместо Image прокси
+    // не принимает. Заодно перетаскивание не дёргает реактивность на каждый кадр.
+    let img = null;
+    let x = 0, y = 0; // левый верхний угол картинки в координатах окошка
+    let side = 0; // сторона окошка на экране, css-пиксели
+    let grab = null; // точка захвата при перетаскивании
+    const touches = new Map(); // пальцы на экране: два — это щипок
+    let span = 0; // расстояние между ними на прошлом кадре
+
+    return {
+      saved,
+      picked: false, // выбрали новый файл — разметке нужно только это
+      whole: false, // гифка: едет файлом целиком, кадр для неё не выбирают
+      cleared: false,
+      scale: 1, min: 1, max: 1,
+
+      pick(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        // Из гифки канвас берёт один кадр, и она перестала бы двигаться. Такую
+        // оставляем в самом input — уедет файлом, а сервер сохранит как есть.
+        this.whole = file.type === "image/gif";
+        if (!this.whole) event.target.value = "";
+        const url = URL.createObjectURL(file);
+        const next = new Image();
+        next.onload = () => {
+          img = next;
+          this.picked = true;
+          this.cleared = false;
+          this.fit();
+          URL.revokeObjectURL(url);
+        };
+        next.src = url;
+      },
+
+      drop() {
+        this.$refs.input.value = "";
+        img = null;
+        this.picked = false;
+        this.whole = false;
+        this.cleared = !!saved; // снимать в базе нечего, если её там и не было
+        this.commit();
+      },
+
+      // Начальный кадр: картинка целиком накрывает квадрат и стоит по центру.
+      fit() {
+        side = this.$refs.frame.getBoundingClientRect().width;
+        this.min = Math.max(side / img.naturalWidth, side / img.naturalHeight);
+        this.max = this.min * 5;
+        this.scale = this.min;
+        x = (side - img.naturalWidth * this.scale) / 2;
+        y = (side - img.naturalHeight * this.scale) / 2;
+        this.render();
+        this.commit();
+      },
+
+      // Картинка обязана накрывать окошко целиком — иначе в углу кадра оказалась бы пустота.
+      clamp() {
+        x = Math.min(0, Math.max(side - img.naturalWidth * this.scale, x));
+        y = Math.min(0, Math.max(side - img.naturalHeight * this.scale, y));
+      },
+
+      // Масштаб меняем относительно точки, за которую тянут (по умолчанию — центр окошка):
+      // иначе кадр уползает вбок при каждом движении ползунка.
+      zoom(next, cx = side / 2, cy = side / 2) {
+        if (!img) return;
+        next = Math.min(this.max, Math.max(this.min, next));
+        const k = next / this.scale;
+        x = cx - (cx - x) * k;
+        y = cy - (cy - y) * k;
+        this.scale = next;
+        this.clamp();
+        this.render();
+      },
+
+      render() {
+        const canvas = this.$refs.canvas;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = canvas.height = Math.round(side * dpr);
+        this.paint(canvas.getContext("2d"), canvas.width, dpr);
+      },
+
+      // k — во сколько раз холст крупнее окошка на экране.
+      paint(ctx, size, k) {
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(
+          img, x * k, y * k,
+          img.naturalWidth * this.scale * k, img.naturalHeight * this.scale * k,
+        );
+      },
+
+      // Готовое значение поля. Три состояния: пусто — не трогать, clear — снять,
+      // data-URL — заменить. Пишем после каждого движения, чтобы отправка формы
+      // не пришлась на середину работы канваса.
+      commit() {
+        // Гифка уже лежит в файловом поле — строкой её дублировать нечего.
+        this.$refs.out.value = this.whole ? "" : (img ? this.crop() : (this.cleared ? "clear" : ""));
+      },
+
+      crop() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = AVATAR_PX;
+        const ctx = canvas.getContext("2d");
+        this.paint(ctx, AVATAR_PX, AVATAR_PX / side);
+
+        // jpeg вчетверо легче, но не умеет прозрачность — а её на аватарах любят.
+        let value = canvas.toDataURL(this.opaque(ctx) ? "image/jpeg" : "image/png", 0.9);
+        if (value.length > limit) {
+          // Шумное фото в png в лимит POST не влезает. Подкладываем белое: иначе
+          // при переводе в jpeg браузер зальёт прозрачные места чёрным.
+          ctx.globalCompositeOperation = "destination-over";
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, AVATAR_PX, AVATAR_PX);
+          value = canvas.toDataURL("image/jpeg", 0.85);
+        }
+        return value;
+      },
+
+      opaque(ctx) {
+        const data = ctx.getImageData(0, 0, AVATAR_PX, AVATAR_PX).data;
+        for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return false;
+        return true;
+      },
+
+      down(event) {
+        if (!img || this.whole) return;
+        this.$refs.frame.setPointerCapture(event.pointerId);
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        grab = { x: event.clientX - x, y: event.clientY - y };
+        span = this.gap(); // ноль, пока палец один
+      },
+
+      move(event) {
+        if (!img || !touches.has(event.pointerId)) return;
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (span) {
+          const now = this.gap();
+          const box = this.$refs.frame.getBoundingClientRect();
+          const [a, b] = [...touches.values()];
+          this.zoom(this.scale * (now / span), (a.x + b.x) / 2 - box.left, (a.y + b.y) / 2 - box.top);
+          span = now;
+          return;
+        }
+        x = event.clientX - grab.x;
+        y = event.clientY - grab.y;
+        this.clamp();
+        this.render();
+      },
+
+      up(event) {
+        touches.delete(event.pointerId);
+        const rest = [...touches.values()][0];
+        if (rest) {
+          // Один палец из двух убрали — перехватываем заново, иначе кадр прыгнет на разницу.
+          grab = { x: rest.x - x, y: rest.y - y };
+          span = 0;
+          return;
+        }
+        grab = null;
+        this.commit();
+      },
+
+      gap() {
+        const [a, b] = [...touches.values()];
+        return b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+      },
+
+      wheel(event) {
+        if (!img || this.whole) return;
+        const box = this.$refs.frame.getBoundingClientRect();
+        this.zoom(this.scale * (event.deltaY < 0 ? 1.1 : 0.9), event.clientX - box.left, event.clientY - box.top);
+        this.commit();
+      },
+    };
+  });
+
   // Звёзды 1–5 для формы отзыва. Повторный клик по той же звезде снимает оценку.
   Alpine.data("stars", ({ value = null } = {}) => ({
     value,

@@ -10,8 +10,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from economy.models import BalanceLog
-from economy.services import spend
+from economy import rewards
 
 from . import palette, rules
 from .events import notify_area, notify_pixel
@@ -29,7 +28,7 @@ class NoCharges(WallError):
 
 
 def profile_of(user):
-    profile, _ = WallProfile.objects.get_or_create(user=user, defaults={"color": palette.roll()})
+    profile, _ = WallProfile.objects.get_or_create(user=user)
     return profile
 
 
@@ -48,14 +47,9 @@ def paint(user, board, x, y, color, free=False):
 
     free — режим художника: модератор кладёт цвет без заряда, этим на старте доски
     задают первые рисунки. Всем остальным мазок стоит заряда.
-
-    Пока включён rules.OWN_COLOR_ONLY, присланный цвет не в счёт: за аккаунтом
-    закреплён свой, его и кладём.
     """
     profile = _ready(user, board, x, y)
     _check_color(color)
-    if rules.OWN_COLOR_ONLY and not free:
-        color = profile.color
     if free:
         require_moderator(user)
     else:
@@ -78,23 +72,6 @@ def erase(user, board, x, y):
     if pixel.user_id != user.pk and not user.has_perm(MODERATOR):
         raise WallError("стереть можно только свой пиксель, чужой закрашивают")
     return _record(board, x, y, palette.EMPTY, user)
-
-
-@transaction.atomic
-def reroll(user):
-    """Сменить закреплённый цвет за валюту. Новый всегда отличается от прежнего.
-
-    Смысл имеет только при rules.OWN_COLOR_ONLY: когда палитра открыта всем, менять
-    нечего. Вьюха это и проверяет.
-    """
-    profile_of(user)
-    profile = WallProfile.objects.select_for_update().get(user=user)
-    was = palette.get(profile.color)
-    spend(user, rules.REROLL_PRICE, BalanceLog.Reason.WALL_REROLL, note=f"с «{was.name}»")
-    profile.color = palette.roll(exclude=profile.color)
-    profile.rerolls += 1
-    profile.save(update_fields=["color", "rerolls"])
-    return profile.color
 
 
 # --- инструменты модератора ---
@@ -315,11 +292,18 @@ def _settle(profile, now):
 
 
 def _take_charge(profile):
+    """Списать заряд за мазок. Сюда попадает ТОЛЬКО обычная закраска: режим художника
+    и консоль идут мимо, и токенов за них поэтому не бывает."""
     _settle(profile, timezone.now())
     if profile.charges < 1:
         raise NoCharges("пиксели кончились")
     profile.charges -= 1
-    profile.save(update_fields=["charges", "charged_at"])
+    profile.painted += 1
+    profile.save(update_fields=["charges", "charged_at", "painted"])
+    # Платим полусотнями: строка в журнал на каждый мазок превратила бы ленту операций
+    # в шум, за которым не видно ни одной другой награды.
+    if profile.painted % rewards.WALL_BATCH == 0:
+        rewards.sync(profile.user)
 
 
 def _record(board, x, y, color, user):

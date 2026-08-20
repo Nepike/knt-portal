@@ -1,0 +1,10 @@
+{% load attachment_extras %}
+{% comment %}
+  Само лицо: фото или инициалы. Вынесено из core/_avatar.html, чтобы не повторять
+  его в двух ветках — с косметической рамкой и без неё.
+{% endcomment %}
+{% if person.photo %}
+  <img src="{{ person.photo|media }}" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover">
+{% else %}
+  <span class="flex-1 flex items-center justify-center {{ text }} font-medium">{{ person.surname|slice:":1" }}{{ person.name|slice:":1" }}</span>
+{% endif %}

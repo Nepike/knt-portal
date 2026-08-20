@@ -1,37 +1,222 @@
 {% extends "core/base.html" %}
-{% load attachment_extras wall_extras %}
+{% load attachment_extras economy_extras %}
 
 {% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
 
 {% block content %}
-<div class="w-full max-w-md mx-auto">
-  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 text-center">
-    {# TODO (M5 profiles): рамка-косметика, фон, уровень, значки, инвентарь #}
-    <span class="w-32 h-32 rounded-[22%] p-1 bg-brand-gradient inline-flex">
-      {% if person.photo %}
-        <img src="{{ person.photo|media }}" alt="" class="w-full h-full rounded-[20%] object-cover">
-      {% else %}
-        <span class="flex-1 rounded-[20%] bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-3xl font-medium">{{ person.name|slice:":1" }}{{ person.surname|slice:":1" }}</span>
-      {% endif %}
-    </span>
+<div class="w-full max-w-3xl mx-auto flex flex-col gap-4">
 
-    <h1 class="text-xl font-bold mt-4">{{ person.name }} {{ person.surname }} {{ person.patronymic }}</h1>
-    {% if person.team %}
-    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ person.team.get_grade_str }} · {{ person.team.number }}</p>
+  {# ===== Шапка: фото, имя, контакты ===== #}
+  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+    {% if header %}
+    <div class="h-24 sm:h-32"><img src="{{ header.image|media }}" alt="{{ header.name }}" class="w-full h-full object-cover"></div>
+    {% else %}
+    <div class="h-24 sm:h-32 bg-brand-gradient opacity-20 dark:opacity-30"></div>
     {% endif %}
-    <a href="{% url 'wall' %}" class="inline-flex mt-2 text-sm hover:text-accent transition-colors">{% wall_dot person True %}</a>
 
-    {% if person.vk_page or person.tg_page or person.email %}
-    <div class="flex flex-wrap justify-center gap-x-5 gap-y-2 mt-4 text-sm">
-      {% if person.email %}<a href="mailto:{{ person.email }}" class="hover:text-accent transition-colors"><i class="fa-solid fa-envelope text-slate-400 mr-1.5"></i>{{ person.email }}</a>{% endif %}
-      {% if person.vk_page %}<a href="https://vk.com/{{ person.vk_page }}" target="_blank" class="hover:text-accent transition-colors"><i class="fa-brands fa-vk text-slate-400 mr-1.5"></i>{{ person.vk_page }}</a>{% endif %}
-      {% if person.tg_page %}<a href="https://t.me/{{ person.tg_page }}" target="_blank" class="hover:text-accent transition-colors"><i class="fa-brands fa-telegram text-slate-400 mr-1.5"></i>{{ person.tg_page }}</a>{% endif %}
+    <div class="px-4 sm:px-6 pb-5">
+      {% comment %}
+        Отрицательный отступ поднимает ряд на шапку — туда заезжает аватар, а имя рядом
+        остаётся под ней: items-end равняет всех по нижнему краю, самый высокий тут аватар.
+        На узком экране в строку они не помещаются, и длинное ФИО, перенесённое на две
+        строки, оказывалось бы выше аватара — поверх шапки. Поэтому там колонка.
+      {% endcomment %}
+      {% comment %}
+        relative тут не для позиционирования, а ради порядка отрисовки: у полосы-шапки
+        стоит opacity, а прозрачность заводит свой слой — и непозиционированный аватар
+        оказывался ПОД ней, срезанным по нижнему краю полосы.
+      {% endcomment %}
+      <div class="relative -mt-12 flex flex-col items-start sm:flex-row sm:flex-wrap sm:items-end gap-x-4 gap-y-3">
+        {% comment %}
+          С надетой рамкой квадрат берём крупнее: аватар внутри неё утоплен на 10%,
+          и при том же размере коробки лицо стало бы заметно мельче, чем без рамки.
+          120 и 96 подобраны так, чтобы само фото осталось ровно тем же.
+        {% endcomment %}
+        {% if worn %}
+          {% include "core/_avatar.html" with person=person box="w-30 h-30" text="text-3xl" %}
+        {% else %}
+          {% include "core/_avatar.html" with person=person box="w-24 h-24 rounded-[22%]" text="text-3xl" frame="p-1" %}
+        {% endif %}
+
+        <div class="w-full sm:w-auto sm:flex-1 min-w-0 pb-0.5">
+          {# TODO (M5 profiles): значки-медальки строкой под именем #}
+          <h1 class="text-xl font-bold leading-tight break-words">{{ person.name }} {{ person.surname }}{% if person.patronymic %} {{ person.patronymic }}{% endif %}</h1>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+            {% if person.team %}{{ person.team.get_grade_str }} · {{ person.team.number }}{% else %}Без группы{% endif %}
+          </p>
+        </div>
+
+        {% if own %}
+        <a href="{% url 'profile_edit' %}" class="btn btn-secondary shrink-0"><i class="fa-solid fa-pen"></i>Редактировать</a>
+        {% else %}
+        <a href="{% url 'dm_start' person.pk %}" class="btn btn-primary shrink-0"><i class="fa-solid fa-paper-plane"></i>Написать</a>
+        {% endif %}
+      </div>
+
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-sm">
+        <a href="mailto:{{ person.email }}" class="hover:text-accent transition-colors break-all"><i class="fa-solid fa-envelope text-slate-400 mr-1.5"></i>{{ person.email }}</a>
+        {% if person.tg_page %}<a href="https://t.me/{{ person.tg_page }}" target="_blank" rel="noopener" class="hover:text-accent transition-colors"><i class="fa-brands fa-telegram text-slate-400 mr-1.5"></i>{{ person.tg_page }}</a>{% endif %}
+        {% if person.vk_page %}<a href="https://vk.com/{{ person.vk_page }}" target="_blank" rel="noopener" class="hover:text-accent transition-colors"><i class="fa-brands fa-vk text-slate-400 mr-1.5"></i>{{ person.vk_page }}</a>{% endif %}
+        {% if person.birthday %}<span class="text-slate-500 dark:text-slate-400"><i class="fa-solid fa-cake-candles text-slate-400 mr-1.5"></i>{{ person.birthday|date:"j E" }}</span>{% endif %}
+        {% comment %}
+          Телефон — только себе. Почта и так у всех в поиске по сайту, а номер человек
+          оставлял старостам и деканату, а не всем 500 однокурсникам разом.
+        {% endcomment %}
+        {% if own and person.phone %}<span class="text-slate-500 dark:text-slate-400"><i class="fa-solid fa-phone text-slate-400 mr-1.5"></i>{{ person.phone }} <span class="text-xs opacity-60">· видно только вам</span></span>{% endif %}
+      </div>
     </div>
-    {% endif %}
+  </section>
 
-    {% if person.pk != user.pk %}
-    <a href="{% url 'dm_start' person.pk %}" class="btn btn-primary mt-6"><i class="fa-solid fa-paper-plane"></i>Написать сообщение</a>
-    {% endif %}
+  <div class="grid gap-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_260px]">
+
+    {# ===== Вклад в сайт ===== #}
+    <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+      <h2 class="font-bold mb-4">Вклад в сайт</h2>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {% include "users/_stat.html" with icon="fa-folder" value=stats.materials label="Материалы" %}
+        {% include "users/_stat.html" with icon="fa-book" value=stats.books label="Книги" %}
+        {% include "users/_stat.html" with icon="fa-star" value=stats.reviews label="Отзывы" %}
+        {% include "users/_stat.html" with icon="fa-comment" value=stats.comments label="Комментарии" %}
+      </div>
+
+      {% if stats.by_term %}
+      <h3 class="text-sm font-medium text-slate-500 dark:text-slate-400 mt-6 mb-3">Материалы по семестрам</h3>
+      <div class="flex flex-col gap-2">
+        {% for row in stats.by_term %}
+        <div class="flex items-center gap-3">
+          <span class="w-24 shrink-0 text-sm text-slate-500 dark:text-slate-400">{{ row.label }}</span>
+          <span class="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            <span class="block h-full rounded-full bg-accent" style="width: {{ row.share }}%"></span>
+          </span>
+          <span class="w-7 shrink-0 text-right text-sm font-medium tabular-nums">{{ row.count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+
+    {# ===== Кошелёк ===== #}
+    <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+      <h2 class="font-bold mb-4">КН-токены</h2>
+      {# TODO: своя SVG-иконка валюты вместо fa-cent-sign #}
+      <p class="text-3xl font-bold text-accent tabular-nums">{% coins person %} <i class="fa-solid fa-cent-sign text-2xl"></i></p>
+
+      {% if own %}
+        {% if entries %}
+        <ul class="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-sm">
+          {% for entry in entries %}
+          <li class="flex items-baseline gap-2">
+            <span class="font-medium tabular-nums shrink-0 {% if entry.amount > 0 %}text-emerald-500{% else %}text-slate-400{% endif %}">{{ entry.amount|stringformat:"+d" }}</span>
+            <span class="min-w-0 flex-1 truncate text-slate-500 dark:text-slate-400">{{ entry.note|default:entry.get_reason_display }}</span>
+            <span class="shrink-0 text-xs text-slate-400">{{ entry.created|date:"j M" }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-sm text-slate-400">Операций пока не было.</p>
+        {% endif %}
+      {% endif %}
+    </section>
+
   </div>
+
+  {% comment %}
+    Инвентарь — только свой. Чужой сундук это витрина «вот чего у тебя нет»,
+    а собирать её незачем: рамка и так видна на аватаре сверху.
+  {% endcomment %}
+  {% if own %}
+  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
+      <h2 class="font-bold">Инвентарь</h2>
+      <span class="text-xs text-slate-400">{{ items|length }} шт.</span>
+      <span class="ml-auto text-xs text-slate-400">нажми на вещь, чтобы надеть или снять</span>
+    </div>
+
+    {% comment %}
+      Блоками по видам вещей: рамки к рамкам, шапки к шапкам. Группировать умеет regroup,
+      но он режет ПОДРЯД ИДУЩИЕ — порядок задаёт запрос (cosmetics.services.inventory),
+      он же ставит редкие выше обычных.
+    {% endcomment %}
+    {% regroup items by kind as slots %}
+    {% for slot in slots %}
+    <h3 class="text-sm font-medium text-slate-500 dark:text-slate-400 mb-3 {% if not forloop.first %}mt-6{% endif %}">{{ slot.list.0.slot_title }}</h3>
+    <div class="grid gap-3 slot-{{ slot.grouper }}">
+      {% for own_item in slot.list %}
+      {% comment %}
+        Надетую вещь тем же нажатием и снимаем — отдельной кнопки на карточке не нужно.
+        Картинка живая: их у человека единицы, а не весь каталог, и грузятся они лениво.
+      {% endcomment %}
+      <form method="post" class="contents"
+            action="{% if own_item.equipped %}{% url 'item_unequip' %}{% else %}{% url 'item_equip' own_item.item.pk %}{% endif %}">
+        {% csrf_token %}
+        {% if own_item.equipped %}<input type="hidden" name="kind" value="{{ own_item.kind }}">{% endif %}
+        <button type="submit" title="{{ own_item.item.name }}"
+                class="relative group rounded-xl p-1.5 transition rarity rarity-{{ own_item.item.rarity }}
+                       {% if own_item.equipped %}bg-accent/10{% else %}hover:bg-slate-50 dark:hover:bg-slate-800/60{% endif %}">
+          <img src="{{ own_item.item.image|media }}" alt="" loading="lazy" decoding="async"
+               class="w-full transition-transform group-hover:scale-105">
+          {% if own_item.equipped %}
+          <span class="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-accent text-white dark:text-slate-950 text-[10px] flex items-center justify-center shadow" title="Надета">
+            <i class="fa-solid fa-check"></i>
+          </span>
+          {% endif %}
+          <span class="block mt-1 text-[11px] leading-tight truncate {% if own_item.equipped %}text-accent font-medium{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ own_item.item.name }}</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Пусто. Рамки появятся в магазине — он на подходе.</p>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% comment %}
+    Устройства — только своему хозяину и в самом низу: это не витрина, а страховка
+    на случай «зашёл с чужого компьютера и забыл выйти».
+  {% endcomment %}
+  {% if own %}
+  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
+      <h2 class="font-bold">Активные сессии</h2>
+      <span class="text-xs text-slate-400">видно только вам</span>
+      {% if devices|length > 1 %}
+      <form method="post" action="{% url 'session_end' %}" class="ml-auto"
+            onsubmit="return confirm('Закрыть все сессии, кроме текущей?')">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost !px-2.5 text-xs">Закрыть остальные</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <ul class="flex flex-col divide-y divide-slate-100 dark:divide-slate-800">
+      {% for device, current in devices %}
+      <li class="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+        <i class="fa-solid {% if 'Android' in device.agent or 'iPhone' in device.agent %}fa-mobile-screen{% else %}fa-display{% endif %} text-slate-400 w-5 text-center"></i>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium">
+            {{ device.where }}
+            {% if current %}<span class="ml-1 text-xs font-normal text-accent">— это устройство</span>{% endif %}
+          </p>
+          <p class="text-xs text-slate-400">
+            {{ device.ip|default:"адрес неизвестен" }} · вход {{ device.created|date:"j M, H:i" }} ·
+            {% if device.fresh %}сейчас на сайте{% else %}был {{ device.seen|timesince }} назад{% endif %}
+          </p>
+        </div>
+        {% if not current %}
+        <form method="post" action="{% url 'session_end' %}">
+          {% csrf_token %}
+          <input type="hidden" name="id" value="{{ device.pk }}">
+          <button type="submit" class="btn btn-ghost !px-2.5 text-slate-400 hover:!text-rose-500" aria-label="Закрыть сессию"><i class="fa-solid fa-xmark"></i></button>
+        </form>
+        {% endif %}
+      </li>
+      {% empty %}
+      <li class="py-3 text-sm text-slate-400">Ни одной — похоже, эту страницу открыли ещё до того, как учёт заработал.</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
 </div>
 {% endblock %}

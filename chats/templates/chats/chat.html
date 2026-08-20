@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load chat_extras attachment_extras %}
+{% load chat_extras %}
 
 {% block title %}{% if chat %}{% if other %}{{ other.name }} {{ other.surname }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
 
@@ -176,13 +176,7 @@
         {% for ms in chat.memberships.all %}
         <div class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
           <a href="{% url 'profile' ms.user_id %}" class="flex items-center gap-3 min-w-0 flex-1">
-            <span class="w-10 h-10 rounded-[22%] overflow-hidden shrink-0 inline-flex bg-slate-200 dark:bg-slate-700">
-              {% if ms.user.photo %}
-                <img src="{{ ms.user.photo|media }}" alt="" class="w-full h-full object-cover">
-              {% else %}
-                <span class="flex-1 flex items-center justify-center text-sm font-medium">{{ ms.user.surname|slice:":1" }}{{ ms.user.name|slice:":1" }}</span>
-              {% endif %}
-            </span>
+            {% include "core/_avatar.html" with person=ms.user box="w-10 h-10 rounded-[22%]" text="text-sm" %}
             <span class="min-w-0 flex-1">
               <span class="block text-sm font-medium truncate">{{ ms.user.name }} {{ ms.user.surname }}{% if ms.user_id == user.pk %} <span class="text-xs font-normal text-slate-400">(вы)</span>{% endif %}</span>
               {% if ms.user.team %}<span class="block text-xs text-slate-400">{{ ms.user.team.get_grade_str }}</span>{% endif %}

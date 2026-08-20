@@ -1,0 +1,52 @@
+{% load attachment_extras %}
+{% comment %}
+  Выбор аватара. Ждёт `field` (скрытое поле с готовым квадратом), `file_field` (запасной
+  путь для гифок), `person` (чьё фото уже в базе) и `limit` (сколько влезает в POST).
+
+  Обычная картинка режется на клиенте и уезжает строкой в `field`, а сам файл из input
+  вычищается — см. avatarPick в core/static/core/js/components.js. Гифка наоборот:
+  канвас взял бы из неё один кадр, поэтому она остаётся в файловом поле и едет как есть.
+{% endcomment %}
+<div x-data="avatarPick('{{ person.photo|media }}', {{ limit }})" class="flex flex-col items-center gap-3">
+
+  {% comment %}
+    Окошко кадра нарисовано всегда, даже когда файла ещё нет: fit() меряет по нему
+    сторону, а у скрытого через x-show элемента ширина нулевая.
+  {% endcomment %}
+  <div x-ref="frame"
+       @pointerdown="down($event)" @pointermove="move($event)"
+       @pointerup="up($event)" @pointercancel="up($event)" @wheel.prevent="wheel($event)"
+       class="relative w-56 h-56 rounded-[22%] overflow-hidden bg-slate-200 dark:bg-slate-700 touch-none select-none"
+       :class="picked && 'cursor-move'">
+    <canvas x-ref="canvas" x-show="picked" class="w-full h-full"></canvas>
+    {% if person.photo %}
+    <img x-show="!picked && !cleared" src="{{ person.photo|media }}" alt="" class="absolute inset-0 w-full h-full object-cover">
+    {% endif %}
+    <span x-show="!picked && (cleared || !saved)"
+          class="absolute inset-0 flex items-center justify-center text-5xl font-medium text-slate-400 dark:text-slate-500">{{ person.surname|slice:":1" }}{{ person.name|slice:":1" }}</span>
+  </div>
+
+  <input x-ref="out" type="hidden" name="{{ field.html_name }}">
+
+  {# Ползунок масштаба. x-model не берём: он пишет scale ДО обработчика, и zoom() увидел бы уже новое значение вместо прежнего #}
+  <div x-show="picked && !whole" x-cloak class="flex items-center gap-3 w-56">
+    <i class="fa-solid fa-image text-[10px] text-slate-400"></i>
+    <input type="range" :min="min" :max="max" :step="(max - min) / 100" :value="scale"
+           @input="zoom(+$event.target.value)" @change="commit()"
+           class="flex-1 accent-accent cursor-pointer" aria-label="Масштаб">
+    <i class="fa-solid fa-image text-slate-400"></i>
+  </div>
+
+  <p x-show="picked && !whole" x-cloak class="text-xs text-slate-400 text-center">Потяни фото, чтобы выбрать миниатюру</p>
+  <p x-show="whole" x-cloak class="text-xs text-slate-400 text-center">Гифка сохранится целиком — кадр для неё не выбрать</p>
+
+  <div class="flex flex-wrap justify-center gap-2">
+    <label class="btn btn-secondary">
+      <input x-ref="input" type="file" name="{{ file_field.html_name }}" accept="image/*" class="hidden" @change="pick($event)">
+      <i class="fa-solid fa-paperclip"></i><span x-text="picked || (saved && !cleared) ? 'Другое фото' : 'Выбрать фото'"></span>
+    </label>
+    <button type="button" x-show="picked || (saved && !cleared)" x-cloak @click="drop()" class="btn btn-ghost">
+      <i class="fa-solid fa-trash"></i>Убрать
+    </button>
+  </div>
+</div>

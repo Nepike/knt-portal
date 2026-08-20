@@ -8,7 +8,6 @@ urlpatterns = [
     path("wall/history/", views.board_history, name="wall_history"),
     path("wall/paint/", views.pixel_paint, name="wall_paint"),
     path("wall/erase/", views.pixel_erase, name="wall_erase"),
-    path("wall/reroll/", views.color_reroll, name="wall_reroll"),
     # Координаты в строке запроса, а не в пути: этот адрес клиент дёргает на каждый
     # клик, и дописать к нему «?x=…» проще, чем собирать путь в JS.
     path("wall/pixel/", views.pixel_card, name="wall_pixel"),

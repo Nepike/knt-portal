@@ -28,6 +28,7 @@ LOCAL_APPS = [
     "telegram",
     "moderation",
     "economy",
+    "cosmetics",
     "wall",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
@@ -46,6 +47,8 @@ MIDDLEWARE = [
     # Сайт закрытый: всё требует логина, кроме auth-страниц и явных @login_not_required.
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
     "users.middleware.MustChangePasswordMiddleware",
+    # После аутентификации: отметка «последний запрос» ставится уже известному человеку.
+    "users.sessions.ActivityMiddleware",
     # После логина: анонимного сначала отправляем входить, а не объясняем ему про бету.
     "core.middleware.BetaLockMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",

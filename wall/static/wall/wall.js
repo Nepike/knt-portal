@@ -98,7 +98,7 @@ document.addEventListener("alpine:init", () => {
       // С проверкой по списку: палитра меняется, а запомненный код — нет, и на цвете,
       // которого уже нет, споткнулась бы первая же отрисовка.
       const saved = Number(localStorage.getItem(`wall.brush.${this.board}`));
-      this.brush = saved > 0 && saved < this.colors.length ? saved : this.color;
+      this.brush = saved > 0 && saved < this.colors.length ? saved : 1;
       this.restoreTemplate();
 
       // Положение холста держим наготове: спрашивать его у браузера на каждое движение
@@ -129,22 +129,12 @@ document.addEventListener("alpine:init", () => {
 
     // --- что видно на панелях ---
 
-    get colorHex() {
-      return this.colors[this.color].hex;
-    },
-
-    get colorName() {
-      return this.colors[this.color].name;
-    },
-
-    // Каким цветом ляжет следующий мазок. Пока цвет закреплён за аккаунтом, выбирать
-    // нечего — кроме режима художника, где модератору можно любой.
+    // Каким цветом ляжет следующий мазок.
     get brushCode() {
-      return this.own_color && !this.artist ? this.color : this.brush;
+      return this.brush;
     },
 
     pick(code) {
-      if (this.own_color && !this.artist) return; // цвет закреплён, кисть не меняется
       this.brush = code;
       localStorage.setItem(`wall.brush.${this.board}`, code);
     },
@@ -808,21 +798,6 @@ document.addEventListener("alpine:init", () => {
         // Рисуем не дожидаясь сокета: своё действие должно отзываться сразу.
         this.put(this.sel.x, this.sel.y, kind === "paint" ? this.brushCode : 0);
         if (this.panel === "cell") this.showCard();
-      } finally {
-        this.busy = false;
-      }
-    },
-
-    async reroll() {
-      if (this.busy || !confirm(`Сменить цвет за ${this.price}? Новый выпадет случайно.`)) return;
-      this.busy = true;
-      try {
-        const data = await (await this.post(this.urls.reroll)).json();
-        if (data.error) return this.say("error", data.error);
-        this.color = data.color;
-        this.balance = data.balance;
-        this.say("info", `Теперь у тебя ${data.name}`);
-        this.invalidate();
       } finally {
         this.busy = false;
       }

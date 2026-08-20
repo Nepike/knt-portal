@@ -13,5 +13,6 @@ urlpatterns = [
     path('', include('materials.urls')),
     path('', include('attachments.urls')),
     path('', include('moderation.urls')),
+    path('', include('cosmetics.urls')),
     path('', include('wall.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
