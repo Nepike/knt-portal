@@ -2,6 +2,7 @@ from django import forms
 from django.contrib import admin
 
 from .models import BalanceLog, Wallet
+from .rewards import AUTOMATIC
 from .services import credit, spend
 
 
@@ -22,6 +23,15 @@ class GrantForm(forms.ModelForm):
     class Meta:
         model = BalanceLog
         fields = ("wallet", "amount", "reason", "note")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Причины пересчёта руками не выдаются. Такая строка приходит без ключа, а
+        # rewards читает её как «за это уже заплачено» — и человек молча недополучил бы
+        # свою автоматическую награду.
+        self.fields["reason"].choices = [
+            pair for pair in BalanceLog.Reason.choices if pair[0] not in AUTOMATIC
+        ]
 
     def clean(self):
         data = super().clean()

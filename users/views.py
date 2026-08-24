@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from cosmetics.models import CosmeticItem
-from cosmetics.services import inventory, worn
+from cosmetics.services import inventory, outfit
 from core.models import Moderated
 from core.throttle import client_ip, throttled
 from library.models import Book
@@ -76,12 +76,13 @@ def _contributions(person, full):
 
 
 def profile(request, pk):
-    # TODO (M5): фон и шапка профиля, значки — когда будет что рисовать
+    # TODO (M5): фон профиля и значки — когда будет что рисовать
     person = get_object_or_404(
         User.objects.select_related("team", "wallet"), pk=pk, is_active=True,
     )
     own = person.pk == request.user.pk
     wallet = getattr(person, "wallet", None)
+    on = outfit(person)
     return render(request, "users/profile.html", {
         "person": person,
         "own": own,
@@ -90,8 +91,8 @@ def profile(request, pk):
         # покупал, и откуда он заходит.
         "entries": wallet.entries.all()[:6] if wallet and own else [],
         "devices": _devices(request) if own else [],
-        "worn": worn(person),
-        "header": worn(person, CosmeticItem.Kind.PROFILE_HEADER),
+        "worn": on.get(CosmeticItem.Kind.AVATAR_FRAME),
+        "header": on.get(CosmeticItem.Kind.PROFILE_HEADER),
         # Инвентарь — только свой: чужой сундук это витрина «вот чего у тебя нет».
         "items": inventory(person) if own else [],
     })
@@ -112,7 +113,12 @@ def session_end(request):
     Текущую не трогаем — это просто выход, и он рядом, в меню аккаунта.
     """
     doomed = alive(request.user).exclude(session_id=request.session.session_key)
-    if pk := request.POST.get("id"):
+    pk = request.POST.get("id", "")
+    if pk:
+        # Не число — значит, запрос пришёл не с нашей страницы. Молча закрывать всё
+        # в таком случае нельзя, а падать пятисоткой на кривом поле незачем.
+        if not pk.isdigit():
+            return redirect("profile", pk=request.user.pk)
         doomed = doomed.filter(pk=pk)
 
     # Удаляем сами сессии — записи уедут за ними каскадом.

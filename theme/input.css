@@ -179,14 +179,66 @@ html { color-scheme: light; }
   .slot-profile_header { @apply grid-cols-1 sm:grid-cols-2; }
   .slot-profile_header img { @apply aspect-[6/1] object-cover rounded-md; }
 
-  /* Редкости косметики. Классом, а не набором утилит в разметке: цвет ступени —
-     это про дизайн, и менять его надо в одном месте, а не в четырёх шаблонах. */
-  .rarity { @apply border-2; }
-  .rarity-common { @apply border-slate-300 dark:border-slate-600; }
-  .rarity-rare { @apply border-sky-400; }
-  .rarity-epic { @apply border-violet-400; }
-  .rarity-legendary { @apply border-amber-400; }
-  .rarity-mythical { @apply border-rose-400; }
+  /* Плитка косметики: картинка на плашке своей ступени. Одна на инвентарь и магазин.
+     Цвет ступени приезжает одной переменной, всё остальное считается от неё — новая
+     ступень это две строки, а не пять правил в четырёх шаблонах.
+
+     Плашка идёт от светлого к тёмному не для красоты: рамки бывают и угольные (Sketch),
+     и почти белые (GHOST), и на любой однотонной подложке половина из них пропадала бы. */
+  .rarity {
+    --rarity: var(--color-slate-400);
+    --glow: 0%;  /* свечение внутри плашки */
+    --halo: 0%;  /* ореол вокруг неё */
+    --plate-top: #fff;
+    --plate-bottom: var(--color-slate-400);
+    @apply relative block rounded-xl border-2 p-1.5 overflow-hidden;
+    @apply transition duration-200 group-hover:-translate-y-0.5;
+    border-color: color-mix(in oklab, var(--rarity) 75%, transparent);
+    background-image:
+      radial-gradient(120% 78% at 50% 118%, color-mix(in oklab, var(--rarity) var(--glow), transparent), transparent 70%),
+      linear-gradient(165deg, var(--plate-top), var(--plate-bottom));
+    box-shadow: 0 0 14px -3px color-mix(in oklab, var(--rarity) var(--halo), transparent);
+  }
+  .dark .rarity {
+    --plate-top: var(--color-slate-600);
+    --plate-bottom: var(--color-slate-900);
+  }
+  /* Полоска ступени по низу: читается быстрее рамки и не спорит с картинкой. */
+  .rarity::after {
+    content: "";
+    @apply absolute inset-x-0 bottom-0 h-1;
+    background: linear-gradient(90deg, transparent, var(--rarity) 14%, var(--rarity) 86%, transparent);
+  }
+  .rarity img { @apply relative; }  /* иначе блик мифической лёг бы поверх самой рамки */
+
+  /* Свечение включается только с эпической: два десятка обычных вещей, светящихся
+     разом, — это ёлка, а не витрина. */
+  .rarity-common    { --rarity: var(--color-slate-400); }
+  .rarity-rare      { --rarity: var(--color-sky-400);    --glow: 24%; }
+  .rarity-epic      { --rarity: var(--color-violet-400); --glow: 38%; --halo: 35%; }
+  .rarity-legendary { --rarity: var(--color-amber-400);  --glow: 50%; --halo: 55%; }
+  .rarity-mythical  { --rarity: var(--color-rose-400);   --glow: 62%; --halo: 75%; }
+
+  /* Мифических на весь сайт четыре — блик по плашке им и оставим. */
+  .rarity-mythical::before {
+    content: "";
+    position: absolute;
+    top: -2rem;
+    bottom: -2rem;
+    left: -60%;
+    width: 45%;
+    pointer-events: none;
+    background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.45), transparent);
+    animation: rarity-shine 5s ease-in-out infinite;
+  }
+  @keyframes rarity-shine {
+    0%, 55% { transform: translateX(0); }
+    100% { transform: translateX(400%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rarity { @apply group-hover:translate-y-0; }
+    .rarity-mythical::before { animation: none; }
+  }
 
   /* Тост: карточка с цветной иконкой по типу (цвет задаёт JS в components.js). */
   .toast {

@@ -404,6 +404,16 @@ class UserSessionTests(TestCase):
 
         self.assertTrue(self.rows().filter(pk=mine.pk).exists())
 
+    def test_a_broken_id_closes_nothing_and_does_not_fall_over(self):
+        # filter(pk="ой") — это ValueError и пятисотка; закрывать всё подряд тоже нельзя.
+        self.enter()
+        self.enter(Client())
+
+        response = self.client.post(reverse("session_end"), {"id": "ой"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.rows().count(), 2)
+
     def test_the_list_is_not_closed_by_a_get(self):
         # Иначе достаточно было бы заманить человека на картинку по этому адресу.
         self.enter()

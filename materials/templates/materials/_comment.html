@@ -15,7 +15,7 @@
       <p class="font-medium text-sm leading-tight">Аноним{% if c.author_id == user.pk %} <span class="text-xs font-normal text-accent">— вы</span>{% endif %}</p>
     </div>
     {% else %}
-    <a href="{% url 'profile' c.author_id %}">{% include "core/_avatar.html" with person=c.author box="w-9 h-9 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-xs" %}</a>
+    <a href="{% url 'profile' c.author_id %}">{% include "core/_avatar.html" with person=c.author box="w-9 h-9 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-xs" only %}</a>
     <div class="min-w-0 flex-1">
       <p class="font-medium text-sm leading-tight">
         <a href="{% url 'profile' c.author_id %}" class="hover:text-accent transition-colors">{{ c.author.name }} {{ c.author.surname }}</a>

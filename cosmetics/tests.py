@@ -13,7 +13,7 @@ from PIL import Image as PilImage
 from users.models import User
 
 from .models import CosmeticItem, UserItem
-from .services import NotOwned, equip, grant, inventory, unequip, worn
+from .services import NotOwned, equip, grant, inventory, outfit, unequip, worn
 
 R = CosmeticItem.Rarity
 
@@ -125,6 +125,28 @@ class EquipTests(TestCase):
         self.assertIsNone(worn(self.user))
         self.assertEqual(UserItem.objects.filter(user=self.user).count(), 1)
 
+    def test_changing_the_slot_of_an_item_moves_it_in_everyones_inventory(self):
+        """Вид продублирован в UserItem — правка в админке обязана поехать следом,
+        иначе вещь останется в чужом блоке и займёт не тот слот."""
+        equip(self.user, grant(self.user, self.flame).item)
+
+        self.flame.kind = CosmeticItem.Kind.PROFILE_HEADER
+        self.flame.save()
+
+        owned = UserItem.objects.get(user=self.user, item=self.flame)
+        self.assertEqual(owned.kind, CosmeticItem.Kind.PROFILE_HEADER)
+        self.assertFalse(owned.equipped)  # в новом слоте могло быть надето своё
+
+    def test_everything_worn_comes_in_one_query(self):
+        # Слотов будет больше значков и фонов — запрос на каждый не годится.
+        equip(self.user, grant(self.user, self.flame).item)
+        equip(self.user, grant(self.user, make_frame("Туманность", kind=CosmeticItem.Kind.PROFILE_HEADER)).item)
+
+        with self.assertNumQueries(1):
+            on = outfit(self.user)
+
+        self.assertEqual(set(on), {CosmeticItem.Kind.AVATAR_FRAME, CosmeticItem.Kind.PROFILE_HEADER})
+
 
 class ProfileTests(TestCase):
     def setUp(self):
@@ -170,6 +192,32 @@ class ProfileTests(TestCase):
 
         self.assertEqual(self.client.get(reverse("item_equip", args=[self.flame.pk])).status_code, 405)
         self.assertIsNone(worn(self.user))
+
+    def test_a_stranger_frame_does_not_land_on_my_avatar_in_the_menu(self):
+        """core/_avatar.html включается ТОЛЬКО с `only`: без него аватар в меню аккаунта
+        подхватывал `worn` из контекста чужой страницы профиля и надевал чужую рамку."""
+        equip(self.other, grant(self.other, self.flame).item)
+
+        response = self.client.get(self.url(self.other))
+
+        # Рамка на странице ровно одна — на аватаре хозяина страницы, а не в меню слева.
+        self.assertEqual(response.content.decode().count(f'alt="{self.flame.name}"'), 1)
+
+    def test_my_own_frame_shows_in_the_menu_on_every_page(self):
+        # Иначе купленную вещь видно только на своей же странице профиля.
+        equip(self.user, grant(self.user, self.flame).item)
+
+        response = self.client.get(reverse("material_list"))
+
+        self.assertEqual(response.context["my_frame"], self.flame)
+        self.assertContains(response, f'alt="{self.flame.name}"')
+
+    def test_the_menu_does_not_pay_for_a_frame_on_htmx_fragments(self):
+        equip(self.user, grant(self.user, self.flame).item)
+
+        response = self.client.get(reverse("material_list"), headers={"hx-request": "true"})
+
+        self.assertNotIn("my_frame", response.context)
 
 
 class ImportTests(TestCase):

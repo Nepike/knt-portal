@@ -19,6 +19,17 @@ def wallet_of(user):
     return Wallet.objects.get_or_create(user=user)[0]
 
 
+def lock(user):
+    """Занять кошелёк до конца транзакции.
+
+    Нужен не только списанию: пересчёт наград сперва читает журнал, а потом дописывает
+    разницу, и без блокировки два одновременных вызова прочитали бы один и тот же журнал
+    и заплатили дважды.
+    """
+    wallet_of(user)  # у человека, который ещё ничего не заработал, кошелька нет
+    return Wallet.objects.select_for_update().get(user=user)
+
+
 def credit(user, amount, reason, note="", key=""):
     """Начислить. amount — положительное число, key — за что именно (см. BalanceLog.key)."""
     if amount <= 0:
@@ -35,8 +46,7 @@ def spend(user, amount, reason, note="", key=""):
 
 @transaction.atomic
 def _move(user, delta, reason, note, key=""):
-    wallet_of(user)  # у человека, который ещё ничего не заработал, кошелька нет
-    wallet = Wallet.objects.select_for_update().get(user=user)
+    wallet = lock(user)
     balance = wallet.balance + delta
     if balance < 0:
         raise NotEnoughFunds(f"нужно {-delta}, на балансе {wallet.balance}")

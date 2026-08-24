@@ -1,0 +1,20 @@
+{% load attachment_extras %}
+{% comment %}
+  Плитка вещи — картинка на плашке своей редкости. Общая для инвентаря и магазина,
+  поэтому кнопка и подпись остаются снаружи: нажатие у них разное.
+
+  Ждёт item и on (надето — тогда галочка в углу). Форму плитки задаёт .slot-<вид>
+  у сетки, оформление ступени — .rarity-<редкость>, обе в theme/input.css.
+
+  Подпись у картинки пустая: название вещи всё равно стоит строкой ниже, и второй
+  раз читать его вслух незачем.
+{% endcomment %}
+<span class="rarity rarity-{{ item.rarity }}
+             {% if on %}ring-2 ring-accent ring-offset-2 ring-offset-white dark:ring-offset-slate-900{% endif %}">
+  <img src="{{ item.image|media }}" alt="" loading="lazy" decoding="async"
+       class="w-full transition-transform duration-200 group-hover:scale-105">
+  {% if on %}
+  <span class="absolute z-10 top-1 right-1 w-5 h-5 rounded-full bg-accent text-white dark:text-slate-950 text-[10px] flex items-center justify-center shadow"
+        title="Надета"><i class="fa-solid fa-check"></i></span>
+  {% endif %}
+</span>

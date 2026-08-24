@@ -72,6 +72,7 @@ TEMPLATES = [
                 "core.context_processors.beta",
                 "core.context_processors.site_theme",
                 "chats.context_processors.unread_messages",
+                "cosmetics.context_processors.my_frame",
             ],
         },
     },

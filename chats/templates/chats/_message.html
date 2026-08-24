@@ -8,7 +8,7 @@
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="flex gap-2 {% if own %}flex-row-reverse{% endif %}">
 
   {% if not own %}
-  <a href="{% url 'profile' m.author_id %}" class="self-end">{% include "core/_avatar.html" with person=m.author box="w-8 h-8 rounded-[22%]" text="text-[11px]" %}</a>
+  <a href="{% url 'profile' m.author_id %}" class="self-end">{% include "core/_avatar.html" with person=m.author box="w-8 h-8 rounded-[22%]" text="text-[11px]" only %}</a>
   {% endif %}
 
   {# Набор атрибутов = набор прав: нет data-edit-url — нет пункта «Изменить» #}

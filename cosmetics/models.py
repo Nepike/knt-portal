@@ -2,9 +2,6 @@
 
 Своё приложение, а не часть economy: там валюта и журнал операций, здесь вещи и то,
 что человек носит. Пересекутся они позже, в магазине, — и пусть пересекутся явно.
-
-Слот пока один — рамка аватара, потому что рамок 41 штука готовых, а фон и шапку
-профиля надо рисовать с нуля. Место под них в `Kind` оставлено.
 """
 
 from django.conf import settings
@@ -22,7 +19,7 @@ class CosmeticItem(models.Model):
     class Kind(models.TextChoices):
         AVATAR_FRAME = "avatar_frame", "рамка аватара"
         PROFILE_HEADER = "profile_header", "шапка профиля"
-        # TODO (M5): значок под именем
+        # TODO (M5): значок под именем — новому виду нужна и своя плитка (.slot-* в input.css)
 
     class Rarity(models.TextChoices):
         """Ступени со старого сайта. Подписи там были матерные — смысл сохранён, слова нет."""
@@ -47,10 +44,9 @@ class CosmeticItem(models.Model):
     image = models.ImageField("анимация", upload_to=frame_upload_to, storage=media_storage)
     still = models.ImageField("кадр", upload_to=frame_upload_to, storage=media_storage)
 
-    # Откуда вещь взялась: «legacy:14» или «file:9f3c….png». По нему повторный импорт
-    # узнаёт уже перенесённое. По имени узнавать нельзя: у половины рамок имени в
-    # источнике нет вовсе, мы придумываем его сами — и на втором заходе придумали бы
-    # другое, разложив те же файлы второй раз.
+    # Откуда вещь взялась: «legacy:14», «file:9f3c….png», «generated:Ночь». По нему
+    # повторный импорт узнаёт уже перенесённое. По имени узнавать нельзя: половине рамок
+    # имя придумываем мы сами — на втором заходе придумали бы другое и разложили дважды.
     source = models.CharField("источник", max_length=120, blank=True)
     created = models.DateTimeField("добавлена", default=timezone.now)
 
@@ -68,6 +64,14 @@ class CosmeticItem(models.Model):
     def __str__(self):
         return f"{self.name} ({self.get_rarity_display()})"
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Вид продублирован в UserItem, и правка вида в админке обязана поехать следом,
+        # иначе вещь останется в чужом блоке инвентаря и займёт не тот слот. Снимаем
+        # заодно: в новом слоте у человека уже может быть надето своё.
+        if self.pk:
+            self.owners.exclude(kind=self.kind).update(kind=self.kind, equipped=False)
+
 
 # Заголовок блока в инвентаре. Не get_kind_display: там название вещи в единственном
 # числе («рамка аватара»), а над блоком нужна множественная подпись.
@@ -84,9 +88,9 @@ class UserItem(models.Model):
         settings.AUTH_USER_MODEL, verbose_name="владелец", on_delete=models.CASCADE, related_name="items",
     )
     item = models.ForeignKey(CosmeticItem, verbose_name="предмет", on_delete=models.CASCADE, related_name="owners")
-    # Копия item.kind. Без неё «одна вещь на слот» не выразить ограничением: путь по
-    # внешнему ключу в UniqueConstraint не пускают, а на старом сайте именно из-за
-    # этого работало правило «кто последний, тот и надет». Проставляется в save().
+    # Копия item.kind: путь по внешнему ключу в UniqueConstraint не пускают, а без
+    # ограничения «одна вещь на слот» держалось бы только на честном слове кода.
+    # Проставляется в save() и здесь, и на стороне предмета (CosmeticItem.save).
     kind = models.CharField("вид", max_length=20, choices=CosmeticItem.Kind.choices, editable=False)
     equipped = models.BooleanField("надето", default=False)
     acquired = models.DateTimeField("получено", default=timezone.now)
@@ -110,6 +114,5 @@ class UserItem(models.Model):
         return SLOT_TITLES.get(self.kind, self.get_kind_display())
 
     def save(self, *args, **kwargs):
-        if not self.kind:  # только у новой записи: у старой это лишний запрос за предметом
-            self.kind = self.item.kind
+        self.kind = self.item.kind  # предмет уже загружен везде, откуда сюда приходят
         super().save(*args, **kwargs)

@@ -17,6 +17,7 @@ from users.models import User
 from wall.models import WallProfile
 
 from . import rewards
+from .admin import GrantForm
 from .models import BalanceLog, Wallet
 from .services import NotEnoughFunds, credit, recount, spend, wallet_of
 
@@ -137,12 +138,38 @@ class AdminGrantTests(TestCase):
     def test_adding_an_entry_moves_the_balance(self):
         self.assertEqual(self.post(250).status_code, 302)
         self.assertEqual(wallet_of(self.user).balance, 250)
-        self.assertEqual(BalanceLog.objects.get().balance_after, 250)
+        # Только по этому кошельку: вход самого модератора в админку тоже оставил строку.
+        self.assertEqual(BalanceLog.objects.get(wallet=self.wallet).balance_after, 250)
 
     def test_overdraft_is_refused_by_the_form(self):
         response = self.post(-5)
         self.assertContains(response, "на балансе только 0")
-        self.assertEqual(BalanceLog.objects.count(), 0)
+        self.assertEqual(BalanceLog.objects.filter(wallet=self.wallet).count(), 0)
+
+    def test_reasons_of_the_recount_are_not_offered_by_hand(self):
+        """Иначе строка без ключа зачлась бы как «уже выплачено» — см. rewards.AUTOMATIC."""
+        offered = {value for value, _ in GrantForm().fields["reason"].choices}
+        self.assertEqual(offered, {MANUAL})
+
+
+class LoginRewardTests(TestCase):
+    """Стартовые обязаны находить человека сами: заведённый в админке иначе заходил бы
+    на пустой кошелёк и не смог купить в магазине ничего."""
+
+    def test_the_welcome_grant_lands_on_the_first_login(self):
+        user = make_user()
+        self.assertFalse(Wallet.objects.filter(user=user).exists())
+
+        self.client.force_login(user)
+
+        self.assertEqual(wallet_of(user).balance, rewards.WELCOME)
+
+    def test_logging_in_again_does_not_pay_twice(self):
+        user = make_user()
+        self.client.force_login(user)
+        self.client.force_login(user)
+
+        self.assertEqual(wallet_of(user).balance, rewards.WELCOME)
 
 
 class TagTests(TestCase):

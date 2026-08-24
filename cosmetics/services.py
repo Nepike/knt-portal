@@ -40,20 +40,25 @@ def unequip(user, kind=CosmeticItem.Kind.AVATAR_FRAME):
     return UserItem.objects.filter(user=user, kind=kind, equipped=True).update(equipped=False)
 
 
-def worn(user, kind=CosmeticItem.Kind.AVATAR_FRAME):
-    """Надетая вещь или None. Одним запросом вместе с самим предметом."""
+def outfit(user):
+    """Всё надетое разом: {вид: предмет}. Одним запросом, сколько бы слотов ни было."""
     if not user or not user.is_authenticated:
-        return None
-    owned = UserItem.objects.filter(user=user, kind=kind, equipped=True).select_related("item").first()
-    return owned.item if owned else None
+        return {}
+    rows = UserItem.objects.filter(user=user, equipped=True).select_related("item")
+    return {row.kind: row.item for row in rows}
+
+
+def worn(user, kind=CosmeticItem.Kind.AVATAR_FRAME):
+    """Надетая вещь одного вида или None."""
+    return outfit(user).get(kind)
 
 
 def inventory(user):
     """Инвентарь блоками: сперва вид вещи, внутри — от обычной к редкой.
 
-    Ранг считаем в запросе, а не в питоне: разметка группирует вещи подряд идущими
-    (`regroup`), и порядок обязан приехать из базы уже правильным. По самой редкости
-    сортировать нельзя — в базе это строка, и алфавит ставит legendary между epic и mythical.
+    Ранг считаем в запросе: разметка группирует подряд идущие (`regroup`), и порядок
+    обязан приехать из базы готовым. По самой редкости сортировать нельзя — в базе это
+    строка, и алфавит ставит legendary между epic и mythical.
     """
     rank = Case(
         *[When(item__rarity=value, then=step) for step, value in enumerate(CosmeticItem.RARITY_ORDER)],
