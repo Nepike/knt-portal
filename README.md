@@ -6,8 +6,9 @@ push to `main`.
 
 > **In active development.** First commit June 2026, still moving. The site is already serving its
 > users on the production domain, with one section held behind a beta gate until the gamification
-> around it is finished (`core/beta.py`). It replaces an earlier version of the same site — the
-> `import_legacy*` management commands exist to carry data across.
+> around it is finished (`core/beta.py`). It replaces the first generation of the same site,
+> [knt-portal-legacy](https://github.com/Nepike/knt-portal-legacy) — the `import_legacy*`
+> management commands exist to carry data across.
 
 The whole site is behind a login: `LoginRequiredMiddleware` is global and pages opt out explicitly,
 so there is nothing to see without an account.
