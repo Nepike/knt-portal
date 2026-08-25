@@ -154,7 +154,7 @@ def book_edit(request, pk=None):
     template = "library/_book_form.html" if request.headers.get("HX-Request") else "library/book_form.html"
     return render(request, template, {
         "form": form, "book": book, "file_errors": file_errors,
-        "max_size_hint": human_size(max_upload_size()), "upload_limits": upload_limits(),
+        "max_size_hint": human_size(max_upload_size(request.user)), "upload_limits": upload_limits(request.user),
         "saved_files": saved_files(book),
         "pending": pending_uploads(request) if request.method == "POST" else [],
     })

@@ -33,6 +33,16 @@ db.sqlite3-journal
 /tailwindcss.exe
 /core/static/core/css/base.css
 
+# --- Пекарня (tools/bake.py) ---
+# Исходники лекций и испечённые наборы — гигабайты, которым в репозитории не место,
+# а из истории git их потом не выковырять. Образец для тестов лежит не тут,
+# а в intake/testdata/ — он крошечный и нужен всегда.
+/tools/*.mkv
+/tools/*.mp4
+/tools/*.mov
+/tools/*.avi
+/baked/
+
 # --- IDE / ОС ---
 .idea/
 .vscode/

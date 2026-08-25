@@ -1,0 +1,129 @@
+{% extends "core/base.html" %}
+{% load text_extras %}
+
+{% block title %}{{ playlist.title }}{% endblock %}
+{% block main_width %}max-w-6xl{% endblock %}
+
+{% block content %}
+<a href="{% url 'playlist_list' %}" class="text-sm text-slate-500 hover:text-accent"><i class="fa-solid fa-arrow-left"></i> Лекторий</a>
+
+<div class="grid lg:grid-cols-[minmax(0,1fr)_20rem] gap-6 mt-3">
+  <div class="min-w-0">
+    {% if lecture %}
+      {% include "lectorium/_player.html" with manifest=lecture.manifest_url poster=lecture.poster_url only %}
+      <h1 class="text-xl font-bold mt-4 leading-snug">{{ lecture.title }}</h1>
+      <p class="text-sm text-slate-400">{{ playlist.title }} · {{ lecture.human_duration }}</p>
+    {% else %}
+      <div class="aspect-video rounded-xl border border-dashed border-slate-300 dark:border-slate-700
+                  flex items-center justify-center text-slate-400 text-center px-6">
+        {% if lectures %}Записи ещё обрабатываются{% else %}В этом курсе пока нет записей{% endif %}
+      </div>
+      <h1 class="text-xl font-bold mt-4 leading-snug">{{ playlist.title }}</h1>
+    {% endif %}
+
+    {% if playlist.synopsis %}
+    <p class="mt-3 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-line">{{ playlist.synopsis }}</p>
+    {% endif %}
+
+    <p class="mt-3 text-xs text-slate-400">
+      {{ playlist.subject.name }} · {{ playlist.year }}
+      {% for teacher in playlist.teachers.all %} · {{ teacher }}{% endfor %}
+      {% if playlist.uploader %} · выложил {{ playlist.uploader.full_name }}{% endif %}
+    </p>
+
+    {% if not playlist.is_published %}
+    <div class="mt-4 panel rounded-xl p-4">
+      <p class="text-sm font-semibold text-amber-600 dark:text-amber-400">
+        {% if playlist.is_pending %}Плейлист ждёт проверки{% else %}Плейлист отклонён{% endif %}
+      </p>
+      {% if playlist.review_note %}<p class="text-sm text-slate-500 mt-1">{{ playlist.review_note }}</p>{% endif %}
+
+      {% if may_moderate %}
+      <form method="post" action="{% url 'playlist_review' playlist.pk %}" class="flex flex-wrap gap-2 mt-3">
+        {% csrf_token %}
+        <button name="decision" value="approve" class="btn btn-primary"><i class="fa-solid fa-check"></i>Одобрить</button>
+        <button name="decision" value="reject" class="btn btn-ghost text-rose-500"><i class="fa-solid fa-xmark"></i>Отклонить</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# Список записей курса. На узком экране уезжает под плеер. #}
+  <aside class="panel rounded-2xl p-3 h-fit">
+    <p class="text-sm font-semibold px-1 mb-2">
+      {{ lectures|length }} {{ lectures|length|plural:"запись,записи,записей" }}
+    </p>
+    <ol class="flex flex-col gap-1">
+      {% for one in lectures %}
+      <li>
+        {% comment %}
+          Необработанная запись — не ссылка: смотреть там нечего, а нажатие впустую
+          выглядит поломкой. Вместо длительности показываем, что с ней происходит.
+        {% endcomment %}
+        <a {% if one.prefix %}href="?lecture={{ one.pk }}"{% endif %}
+           class="flex gap-3 items-center rounded-lg p-2
+                  {% if one.prefix %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}
+                  {% if one.pk == lecture.pk %}bg-accent/10{% endif %}">
+          <span class="w-6 text-center text-xs text-slate-400 shrink-0">{{ forloop.counter }}</span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm leading-snug line-clamp-2 {% if not one.prefix %}text-slate-400{% endif %}">{{ one.title }}</span>
+            {% if one.prefix %}
+              <span class="block text-xs text-slate-400">{{ one.human_duration }}</span>
+            {% elif one.job.status == "failed" %}
+              <span class="block text-xs text-rose-500" title="{{ one.job.note }}">
+                <i class="fa-solid fa-triangle-exclamation"></i> не обработалась
+              </span>
+            {% else %}
+              <span class="block text-xs text-amber-600 dark:text-amber-400">
+                <i class="fa-solid fa-hourglass-half"></i> обрабатывается
+              </span>
+            {% endif %}
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+
+    {% if may_edit %}
+    {% comment %}
+      Сдача записи. Файл едет прямо в хранилище (сырьё лекции — гигабайты), в форме
+      от него остаётся подписанный токен. Отправка через htmx: `beforeSend` откладывает
+      запрос, пока файл льётся, а редирект вьюхи превращает в переход HtmxRedirectMiddleware.
+    {% endcomment %}
+    <form class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2"
+          method="post" action="{% url 'lecture_add' playlist.pk %}"
+          hx-post="{% url 'lecture_add' playlist.pk %}" hx-target="this" hx-swap="none"
+          x-data="fileForm({{ upload_limits }}, [])" @htmx:confirm="beforeSend($event)"
+          @htmx:before-request="begin()" @htmx:before-on-load="end()" @htmx:after-request="end()">
+      {% csrf_token %}
+      <p class="text-sm font-semibold px-1">Сдать запись</p>
+      {% include "core/inputs.html" with field=lecture_form.title %}
+
+      <input type="file" x-ref="input" accept="video/*" class="hidden"
+             @change="add($event.target.files); $event.target.value = ''">
+      <button type="button" @click="$refs.input.click()" class="btn btn-secondary"
+              :disabled="percent !== null">
+        <i class="fa-solid fa-film"></i><span x-text="items.length ? items[0].name : 'Выбрать файл'"></span>
+      </button>
+
+      <template x-for="item in items" :key="item.id">
+        <div class="text-xs text-slate-400">
+          <span x-text="item.size"></span>
+          <span x-show="item.percent !== null"> · <span x-text="item.percent + '%'"></span></span>
+          <input type="hidden" name="uploaded" :value="item.token">
+        </div>
+      </template>
+      <template x-for="problem in errors"><p class="text-xs text-rose-500" x-text="problem"></p></template>
+
+      <button type="submit" class="btn btn-primary" :disabled="percent !== null || !items.length">
+        Отправить в обработку
+      </button>
+      <p class="text-xs text-slate-400 px-1">
+        Загружается частями — если связь оборвётся, продолжится с того же места.
+      </p>
+    </form>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

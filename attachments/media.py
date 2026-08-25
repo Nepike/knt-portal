@@ -8,6 +8,8 @@
 (в подпись входит время): вклеенная в HTML, она и протухает, и убивает кеш браузера.
 """
 
+from pathlib import PurePosixPath
+
 from django.conf import settings
 from django.core import signing
 from django.core.files.storage import FileSystemStorage
@@ -15,6 +17,9 @@ from django.urls import reverse
 
 MEDIA_SALT = "attachments.media"
 FILE_SALT = "attachments.download"
+# Своя соль у кусков HLS, а не общая с картинками: подпись — это разрешение, и разрешение
+# на сегмент лекции не должно годиться там, где отдаются чужие ключи, и наоборот.
+HLS_SALT = "attachments.hls"
 # Сколько браузер держит редирект там, где nginx не участвует (разработка).
 MEDIA_CACHE = 3600
 
@@ -76,5 +81,23 @@ def file_pk(token):
     """Номер файла или None, если подпись не наша."""
     try:
         return _signer(FILE_SALT).unsign_object(token)
+    except signing.BadSignature:
+        return None
+
+
+def hls_url(key):
+    """Наш адрес куска HLS — манифеста или сегмента.
+
+    Имя в хвосте адреса ради расширения: и плееры, и промежуточные кеши смотрят на него,
+    а сам хвост мы не читаем — ключ целиком лежит в подписи.
+    """
+    token = _signer(HLS_SALT).sign_object(key, compress=True)
+    return _external(reverse("hls_piece", args=[token, PurePosixPath(key).name]))
+
+
+def hls_key(token):
+    """Ключ куска HLS или None, если подпись не наша."""
+    try:
+        return _signer(HLS_SALT).unsign_object(token)
     except signing.BadSignature:
         return None

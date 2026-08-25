@@ -33,6 +33,15 @@ CLOSED = {
     "shop",
     "item_card",
     "item_buy",
+    # Лекторий: раздел есть, а записей в нём пока нет — сдавать лекции ещё нечем
+    # (загрузка и очередь заданий не готовы). Открывать пустой раздел незачем.
+    # `hls_check` сюда не нужен: он и так только для сотрудников.
+    "playlist_list",
+    "playlist_detail",
+    "playlist_new",
+    "playlist_edit",
+    "lecture_add",
+    "playlist_review",
 }
 
 

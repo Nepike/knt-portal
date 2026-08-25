@@ -12,6 +12,8 @@ urlpatterns = [
     path('', include('library.urls')),
     path('', include('materials.urls')),
     path('', include('attachments.urls')),
+    path('', include('intake.urls')),
+    path('', include('lectorium.urls')),
     path('', include('moderation.urls')),
     path('', include('cosmetics.urls')),
     path('', include('economy.urls')),

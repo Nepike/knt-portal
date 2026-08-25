@@ -1,0 +1,19 @@
+{% load static %}
+{% comment %}
+  Плеер лекции. Ждёт `manifest` — адрес мастер-манифеста, и необязательный `poster`.
+
+  Библиотеку компонент догружает сам по data-library, а не тегом в шапке. Тег пришлось
+  бы ставить ДО ядра Alpine (иначе к init() библиотеки ещё нет), и каждая страница
+  с плеером была бы обязана про это помнить; забыли — чёрный прямоугольник без
+  объяснений. Заодно Safari её не скачивает вовсе: он проигрывает HLS сам, своим
+  декодером, и на телефоне это заметно бережнее к батарее.
+{% endcomment %}
+<div x-data="lecturePlayer('{{ manifest|escapejs }}')" class="relative"
+     data-library="{% static 'core/vendor/hls.min.js' %}">
+  <video x-ref="video" controls playsinline preload="metadata"
+         {% if poster %}poster="{{ poster }}"{% endif %}
+         class="w-full aspect-video rounded-xl bg-black"></video>
+
+  <p x-show="problem" x-cloak x-text="problem"
+     class="mt-2 text-sm text-rose-600 dark:text-rose-400"></p>
+</div>

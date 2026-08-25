@@ -33,6 +33,8 @@ GitHub Actions
 | `economy` | Internal currency: a wallet per user, every change written to a ledger |
 | `cosmetics` | What the currency buys — avatar frames and profile headers, five rarity tiers |
 | `attachments` | Files and images, local disk or R2, including direct browser-to-bucket upload |
+| `intake` | What a finished media file must be, plus the job queue the off-site bakery works from |
+| `lectorium` | Video lectures: playlists that go through review, an HLS player, no bytes of its own |
 | `moderation` | The review queue over everything that inherits `Moderated` |
 | `telegram` | Bot: notifications into configurable chats and topics |
 

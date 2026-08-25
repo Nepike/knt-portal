@@ -77,7 +77,8 @@
           </a>
           <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
           <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
+          <a {% if not locked.playlist_list %}href="{% url 'playlist_list' %}"{% endif %}
+             class="nav-link {% if locked.playlist_list %}nav-link-disabled{% elif request.resolver_match.url_name == 'playlist_list' or request.resolver_match.url_name == 'playlist_detail' %}nav-link-active{% endif %}"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
