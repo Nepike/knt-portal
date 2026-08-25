@@ -1,5 +1,3 @@
-import os
-from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,63 +49,6 @@ def file_storage():
     from .models import File
 
     return File._meta.get_field("file").storage
-
-
-# Столько ключей S3 принимает в одном запросе на удаление.
-BATCH = 1000
-
-
-def _under(storage, folder):
-    """Все ключи под папкой, вглубь. Пустая или несуществующая — пусто."""
-    try:
-        folders, files = storage.listdir(folder)
-    except (FileNotFoundError, NotADirectoryError, OSError):
-        return
-    for name in files:
-        yield f"{folder}/{name}"
-    for name in folders:
-        yield from _under(storage, f"{folder}/{name}")
-
-
-def _drop_empty_dirs(storage, folder):
-    """Пустые каталоги на диске, снизу вверх. В бакете каталогов нет вовсе — там хватает
-    снять ключи, — а на диске они остаются после каждой удалённой лекции и копятся."""
-    try:
-        folders, _ = storage.listdir(folder)
-    except (FileNotFoundError, NotADirectoryError, OSError):
-        return
-    for name in folders:
-        _drop_empty_dirs(storage, f"{folder}/{name}")
-    with suppress(OSError):  # не пуст — и пусть остаётся
-        os.rmdir(storage.path(folder))
-
-
-def drop_prefix(prefix):
-    """Снять из хранилища всё, что лежит под префиксом. Возвращает, сколько сняли.
-
-    Нужно там, где запись владеет не одним файлом, а папкой: у лекции это тысячи
-    сегментов, и `post_delete` их не тронет — он снимает только файловые ПОЛЯ.
-    Без этой уборки удалённая лекция оставила бы в бакете гигабайты, на которые
-    уже ниоткуда не сослаться.
-
-    Поштучно у S3 это тысячи запросов, поэтому там удаляем пакетами по тысяче.
-    """
-    storage = file_storage()
-    prefix = prefix.strip("/")
-    keys = list(_under(storage, prefix))
-    if isinstance(storage, FileSystemStorage):
-        for key in keys:
-            storage.delete(key)
-        _drop_empty_dirs(storage, prefix)
-        return len(keys)
-
-    # Ключ в бакете идёт с префиксом хранилища, а listdir отдаёт путь без него.
-    location = f"{storage.location}/" if getattr(storage, "location", "") else ""
-    client = storage.connection.meta.client
-    for start in range(0, len(keys), BATCH):
-        batch = [{"Key": location + key} for key in keys[start:start + BATCH]]
-        client.delete_objects(Bucket=storage.bucket_name, Delete={"Objects": batch, "Quiet": True})
-    return len(keys)
 
 
 def media_fields():

@@ -1,3 +1,4 @@
+import struct
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import mkdtemp
@@ -14,11 +15,9 @@ from PIL import Image as PilImage
 from attachments.media import media_url
 from economy.models import BalanceLog
 from economy.services import NotEnoughFunds, credit, wallet_of
-# Разбор mp4 и построитель коробок живут в intake: их же берёт с собой пекарня.
-from intake.tests import make_mp4
 from users.models import User
 
-from . import specs
+from . import mp4, specs
 from .admin import CosmeticItemAdmin
 from .forms import CosmeticItemForm
 from .models import CosmeticItem, UserItem
@@ -276,9 +275,77 @@ class SpecTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
 
 
+def box(kind, payload=b""):
+    return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+
+def tkhd(width, height):
+    """Дорожка. Ширина и высота — 16.16 с фиксированной точкой в самом хвосте."""
+    return box(b"tkhd", bytes(4 + 20 + 8 + 8 + 36) + struct.pack(">II", width << 16, height << 16))
+
+
+def mvhd(seconds, scale=1000):
+    return box(b"mvhd", bytes(4 + 8) + struct.pack(">II", scale, int(seconds * scale)))
+
+
+def make_mp4(width=1920, height=1080, seconds=5.0, faststart=True, audio=False, name="fon.mp4"):
+    """Настоящее дерево коробок mp4 — без картинки внутри, но заголовок честный.
+
+    Так проверяется ровно то, что читает сайт: ffmpeg для этого не нужен ни здесь,
+    ни на сервере (см. docs/media-pipeline.md).
+    """
+    track = box(b"trak", tkhd(width, height) + (box(b"mdia", box(b"minf", box(b"smhd", bytes(8)))) if audio else b""))
+    moov = box(b"moov", mvhd(seconds) + track)
+    mdat = box(b"mdat", b"\0" * 64)
+    body = box(b"ftyp", b"isom" + bytes(8)) + (moov + mdat if faststart else mdat + moov)
+    return SimpleUploadedFile(name, body, content_type="video/mp4")
+
+
+SAMPLE = Path(__file__).parent / "testdata" / "background.mp4"
+
+
+class RealMp4Tests(TestCase):
+    """Настоящий файл из ffmpeg — чтобы разбор коробок проверялся не только на своих же
+    выдумках. Синтетика ниже перебирает случаи по одному, а этот пришёл из жизни."""
+
+    def test_the_header_is_read_the_same_as_a_player_would(self):
+        with SAMPLE.open("rb") as handle:
+            info = mp4.probe(handle)
+
+        self.assertEqual((info["width"], info["height"]), (1920, 1080))
+        self.assertAlmostEqual(info["seconds"], 2.0, places=1)
+        self.assertFalse(info["audio"])
+
+    def test_this_very_file_is_refused_for_the_reason_the_check_exists(self):
+        """У образца moov лежит В КОНЦЕ: браузер не начнёт играть, пока не скачает
+        весь файл. Ровно эту ошибку загрузивший у себя не увидит."""
+        self.assertFalse(mp4.probe(SAMPLE.open("rb"))["faststart"])
+
+
+class Mp4Tests(TestCase):
+    """Разбор заголовка mp4: это чтение коробок, а не обработка видео."""
+
+    def test_it_reads_size_length_and_order(self):
+        info = mp4.probe(make_mp4(1920, 1080, seconds=4.5).file)
+
+        self.assertEqual((info["width"], info["height"]), (1920, 1080))
+        self.assertAlmostEqual(info["seconds"], 4.5, places=2)
+        self.assertTrue(info["faststart"])
+        self.assertFalse(info["audio"])
+
+    def test_moov_after_mdat_is_seen_as_no_faststart(self):
+        self.assertFalse(mp4.probe(make_mp4(faststart=False).file)["faststart"])
+
+    def test_a_sound_track_is_noticed(self):
+        self.assertTrue(mp4.probe(make_mp4(audio=True).file)["audio"])
+
+    def test_something_that_is_not_mp4_is_refused(self):
+        with self.assertRaises(mp4.Broken):
+            mp4.probe(_png().file)
+
+
 class VideoSpecTests(TestCase):
-    """Приёмка видео у вещи. Сама сверка с рецептом — общая, и проверена в intake.tests;
-    здесь то, что знает только косметика: какому виду видео бывает и по какому рецепту."""
+    """Приёмка видео: отказ обязан говорить, что именно перепечь."""
 
     def refusal(self, kind=CosmeticItem.Kind.PROFILE_BACKGROUND, **kwargs):
         return specs.check_video(kind, make_mp4(**kwargs)) or ""
@@ -286,16 +353,17 @@ class VideoSpecTests(TestCase):
     def test_a_proper_background_passes(self):
         self.assertEqual(self.refusal(), "")
 
-    def test_the_header_is_measured_by_its_own_recipe(self):
-        """Фон в слоте шапки не проходит: у каждого вида свой рецепт, а не общий."""
-        header = CosmeticItem.Kind.PROFILE_HEADER
-
-        self.assertEqual(self.refusal(header, width=1536, height=256), "")
-        self.assertIn("1536×256", self.refusal(header))
-
-    def test_a_reason_from_the_shared_check_reaches_the_item(self):
-        """Переходник обязан доносить причину дословно, а не глотать её."""
+    def test_no_faststart_is_refused_because_students_would_wait(self):
         self.assertIn("faststart", self.refusal(faststart=False))
+
+    def test_sound_is_refused(self):
+        self.assertIn("вуковая дорожка", self.refusal(audio=True))
+
+    def test_the_wrong_shape_is_refused_the_same_way_as_a_picture(self):
+        self.assertIn("16:9", self.refusal(width=1080, height=1080))
+
+    def test_too_long_is_refused(self):
+        self.assertIn("длиннее", self.refusal(seconds=30))
 
     def test_frames_are_not_allowed_to_be_video(self):
         # Нужен прозрачный проём под лицо, а прозрачного видео для всех браузеров нет.

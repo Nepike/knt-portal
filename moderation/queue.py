@@ -4,7 +4,6 @@
 Новый вид контента добавляется строкой в GROUPS — материалы и лекторий придут сюда же.
 """
 
-from lectorium.models import Playlist
 from library.models import Book
 from materials.models import Material
 
@@ -12,9 +11,7 @@ from materials.models import Material
 GROUPS = [
     ("Книги", Book, "library.change_book", "moderation/_book.html"),
     ("Материалы", Material, "materials.change_material", "moderation/_material.html"),
-    # Проверяется плейлист целиком, а не отдельная лекция: метаданные на плейлисте,
-    # и смотреть курс по одной записи модератору незачем.
-    ("Лекции", Playlist, "lectorium.change_playlist", "moderation/_playlist.html"),
+    # TODO (лекторий): лекции — когда появится модель
 ]
 
 

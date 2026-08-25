@@ -43,37 +43,3 @@ class Command(BaseCommand):
         window = f"старше {options['days']} дн" if options["days"] else "любого возраста"
         verdict = "удалено" if options["apply"] else "нашлось (запусти с --apply)"
         self.stdout.write(self.style.SUCCESS(f"{verdict}: {found} ({window}), {size // 1024 // 1024} МБ"))
-
-        broken = self.abandoned(storage, cutoff, options["apply"])
-        self.stdout.write(self.style.SUCCESS(f"брошенных многочастных загрузок: {broken}"))
-
-    def abandoned(self, storage, cutoff, apply):
-        """Начатые и не собранные многочастные загрузки.
-
-        Их части лежат в бакете и стоят денег, но объектом ещё не стали — обычным
-        обходом каталога их не видно вовсе, только отдельным запросом. Копятся они
-        от закрытых вкладок и оборванной связи, то есть постоянно.
-        """
-        client = getattr(getattr(storage, "connection", None), "meta", None)
-        if client is None:
-            return 0  # локальный диск: многочастных загрузок там не бывает
-
-        client = client.client
-        found, marker = 0, {}
-        while True:
-            answer = client.list_multipart_uploads(Bucket=storage.bucket_name, **marker)
-            for upload in answer.get("Uploads", []):
-                if upload["Initiated"] > cutoff:
-                    continue
-                found += 1
-                self.stdout.write(f"{upload['Key']} (начата {upload['Initiated']:%d.%m %H:%M})")
-                if apply:
-                    client.abort_multipart_upload(
-                        Bucket=storage.bucket_name, Key=upload["Key"], UploadId=upload["UploadId"],
-                    )
-            if not answer.get("IsTruncated"):
-                return found
-            marker = {
-                "KeyMarker": answer["NextKeyMarker"],
-                "UploadIdMarker": answer["NextUploadIdMarker"],
-            }

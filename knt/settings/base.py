@@ -25,8 +25,6 @@ LOCAL_APPS = [
     "materials",
     "library",
     "attachments",
-    "intake",
-    "lectorium",
     "telegram",
     "moderation",
     "economy",
@@ -170,11 +168,6 @@ CELERY_TASK_TIME_LIMIT = 120  # не среагировала — воркер �
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # Redis может подняться позже воркера
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # логирование настраивает Django (см. prod.LOGGING)
 CELERY_TIMEZONE = TIME_ZONE  # понадобится расписаниям beat: crontab считает по нему
-
-# Приёмка медиа (docs/media-pipeline.md): по этому токену ходит пекарня. Логин ей
-# не годится — она не человек и в сессии не живёт. Пусто = приёмка закрыта совсем:
-# ручки открыты в интернет без логина, и забытая настройка не должна пускать всех.
-INTAKE_TOKEN = env("INTAKE_TOKEN", default="")
 
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
 TELEGRAM_CONSOLE = False  # dev печатает сообщения вместо отправки, как и письма

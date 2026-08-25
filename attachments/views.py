@@ -8,19 +8,14 @@ from django.core.files.storage import FileSystemStorage
 from django.db.models import F
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
-from django.utils.cache import patch_vary_headers
-from django.views.decorators.http import require_POST, require_http_methods
+from django.views.decorators.http import require_POST
 
 from economy import rewards
 
-from .hls import MANIFEST_TYPE, manifest
-from .media import MEDIA_CACHE, file_pk, hls_key, media_key
+from .media import MEDIA_CACHE, file_pk, media_key
 from .models import File, human_size
 from .storage import file_storage
-from .uploads import (
-    MAX_DIRECT_SIZE, MAX_PARTS, abort_multipart, begin_multipart, check_name, direct_upload,
-    finish_multipart, max_upload_size, multipart, part_size, part_urls, sign_upload, uploaded_parts,
-)
+from .uploads import MAX_DIRECT_SIZE, check_name, direct_upload, sign_upload
 
 # Внутренние адреса nginx: снаружи недоступны, попасть туда можно только
 # заголовком X-Accel-Redirect (см. nginx.conf).
@@ -71,53 +66,6 @@ def download(request, token, name):
     return _deliver(file.file.name)
 
 
-def _allow_our_origin(request, response):
-    """Разрешить плееру прочитать этот ответ.
-
-    Картинку и файл браузер берёт тегом, а `hls.js` — запросом из скрипта, и домен
-    файлов для страницы чужой. Без этого заголовка ответ приходит, но отдать его
-    плееру браузер отказывается, и видео молча не заводится.
-
-    Список берём из `CSRF_TRUSTED_ORIGINS`: это ровно наши собственные адреса, и второй
-    такой же список рано или поздно разошёлся бы с первым. В разработке домен файлов
-    свой же, заголовка `Origin` нет, и ветка не срабатывает вовсе.
-    """
-    origin = request.headers.get("Origin")
-    if origin and origin in settings.CSRF_TRUSTED_ORIGINS:
-        response["Access-Control-Allow-Origin"] = origin
-        # Range плеер шлёт при перемотке внутри сегмента; без разрешения браузер
-        # отбросил бы такой запрос ещё до отправки.
-        response["Access-Control-Allow-Headers"] = "Range"
-        response["Access-Control-Expose-Headers"] = "Content-Length, Content-Range"
-        patch_vary_headers(response, ["Origin"])
-    return response
-
-
-@login_not_required
-@require_http_methods(["GET", "HEAD", "OPTIONS"])
-def hls_piece(request, token, name):
-    """Кусок HLS: манифест или сегмент. Разрешение — сама подпись, как и у файлов.
-
-    Одна вьюха на оба, потому что и тем и другим плеер ходит по одинаковым адресам:
-    манифест переписываем на лету, сегмент отдаёт nginx. Имя в хвосте адреса — ради
-    расширения, читаем мы только подпись.
-    """
-    if request.method == "OPTIONS":  # предварительный запрос браузера перед Range
-        return _allow_our_origin(request, HttpResponse(status=204))
-
-    key = hls_key(token)
-    if key is None:
-        raise Http404
-    if not key.endswith(".m3u8"):
-        return _allow_our_origin(request, _deliver(key))
-
-    try:
-        text = manifest(key)
-    except FileNotFoundError:
-        raise Http404
-    return _allow_our_origin(request, HttpResponse(text, content_type=MANIFEST_TYPE))
-
-
 @login_not_required
 def media_image(request, token):
     key = media_key(token)
@@ -131,106 +79,23 @@ def media_image(request, token):
     return response
 
 
-def _asked(request, *fields):
-    """Тело запроса от Alpine или None, если прислали не то. Все ручки загрузки
-    разговаривают одинаково — JSON туда, JSON обратно."""
-    try:
-        payload = json.loads(request.body)
-    except ValueError:
-        return None
-    return payload if all(field in payload for field in fields) else None
-
-
-def _refuse(request, name, size):
-    """Причина, по которой такой файл принимать нельзя, или None."""
-    if problem := check_name(name):
-        return problem
-    limit = max_upload_size(request.user)
-    if size > limit:
-        return f"«{name}» больше {human_size(limit)}"
-    return None
-
-
 @require_POST
 def upload_url(request):
     """Подписанная ссылка, по которой браузер кладёт файл в R2 сам, минуя приложение."""
     if not direct_upload():
         return JsonResponse({"error": "Прямая загрузка недоступна"}, status=409)
-    payload = _asked(request, "name", "size")
-    if payload is None:
-        return HttpResponseBadRequest("Ожидались name и size")
-    name, size = str(payload["name"])[:150], int(payload["size"] or 0)
 
-    if problem := _refuse(request, name, size):
+    try:
+        payload = json.loads(request.body)
+        name = str(payload["name"])[:150]
+        size = int(payload["size"])
+    except (ValueError, TypeError, KeyError):
+        return HttpResponseBadRequest("Ожидались name и size")
+
+    if problem := check_name(name):
         return JsonResponse({"error": problem}, status=400)
     if size > MAX_DIRECT_SIZE:
-        return JsonResponse({"error": f"«{name}» не влезет одним куском"}, status=400)
+        return JsonResponse({"error": f"«{name}» больше {human_size(MAX_DIRECT_SIZE)}"}, status=400)
 
     url, token = sign_upload(name)
     return JsonResponse({"url": url, "token": token})
-
-
-def _started(request):
-    """Разобранный токен начатой загрузки или None. Ключ и номер загрузки приходят
-    от браузера, и без подписи он мог бы дописаться в чужую."""
-    payload = _asked(request, "token")
-    return multipart(payload["token"]) if payload else None
-
-
-@require_POST
-def upload_start(request):
-    """Начать многочастную загрузку — или продолжить прерванную.
-
-    Что уже залито, спрашиваем у ХРАНИЛИЩА: браузер мог закрыться, потерять свою память
-    или соврать, а правду знает только бакет.
-    """
-    if not direct_upload():
-        return JsonResponse({"error": "Прямая загрузка недоступна"}, status=409)
-    payload = _asked(request, "name", "size")
-    if payload is None:
-        return HttpResponseBadRequest("Ожидались name и size")
-    name, size = str(payload["name"])[:150], int(payload["size"] or 0)
-
-    if problem := _refuse(request, name, size):
-        return JsonResponse({"error": problem}, status=400)
-
-    # Продолжаем, только если присланный токен наш И такая загрузка в хранилище жива.
-    # Иначе начинаем заново: отдать браузеру мёртвый номер — значит дать ему залить
-    # гигабайты в никуда и узнать об этом на самом последнем шаге.
-    started = multipart(payload.get("resume") or "")
-    done = uploaded_parts(started) if started else None
-    token = payload["resume"] if done is not None else begin_multipart(name)
-    return JsonResponse({"token": token, "partSize": part_size(size), "done": done or {}})
-
-
-@require_POST
-def upload_parts(request):
-    """Ссылки на очередную порцию частей."""
-    payload = _asked(request, "token", "numbers")
-    started = _started(request)
-    if started is None:
-        return JsonResponse({"error": "Загрузка устарела — начни заново"}, status=400)
-    numbers = [int(number) for number in payload["numbers"]][:MAX_PARTS]
-    return JsonResponse({"urls": part_urls(started, numbers)})
-
-
-@require_POST
-def upload_finish(request):
-    """Собрать объект из частей и вернуть токен, который форма пришлёт вместо файла."""
-    payload = _asked(request, "token", "parts")
-    started = _started(request)
-    if started is None:
-        return JsonResponse({"error": "Загрузка устарела — начни заново"}, status=400)
-    parts = {int(number): str(tag) for number, tag in payload["parts"].items()}
-    if not parts:
-        return JsonResponse({"error": "Нечего собирать: ни одной части"}, status=400)
-    return JsonResponse({"token": finish_multipart(started, parts)})
-
-
-@require_POST
-def upload_abort(request):
-    """Бросить начатое. Незаконченные части занимают место в бакете и стоят денег."""
-    started = _started(request)
-    if started is not None:
-        abort_multipart(started)
-    return JsonResponse({"ok": True})

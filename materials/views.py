@@ -339,7 +339,7 @@ def material_edit(request, pk=None):
     return render(request, template, {
         "form": form, "material": material,
         "file_errors": file_errors, "image_errors": image_errors,
-        "max_size_hint": human_size(max_upload_size(request.user)), "upload_limits": upload_limits(request.user),
+        "max_size_hint": human_size(max_upload_size()), "upload_limits": upload_limits(),
         "max_image_size": MAX_IMAGE_SIZE, "max_image_hint": human_size(MAX_IMAGE_SIZE),
         "saved_files": saved_files(material), "saved_images": saved_images(material),
         "pending": pending_uploads(request) if request.method == "POST" else [],

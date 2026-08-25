@@ -1,45 +1,39 @@
-"""Приёмка косметики: что считается годной картинкой и годным видео.
+"""Спека: что считается готовым файлом для каждого вида вещи.
 
-Числа про видео живут не здесь, а в `intake/spec.py`: их же читает пекарня ручкой
-`GET /intake/spec/`, и разъехаться двум копиям нельзя. Здесь остаётся то, что
-касается только вещей, — картиночная мерка и соответствие «вид вещи → рецепт».
+Договор целиком — в `docs/media-pipeline.md`. Коротко: **сайт не конвертирует.**
+Файл печётся снаружи (руками или пекарней на машине с видеокартой), а здесь только
+проверяется и отвергается с внятной причиной. Поэтому ни ffmpeg, ни пережатия тут нет
+и не будет: проверка — это чтение размеров, а не обработка.
 
-Мерки разные не случайно. Картинки меряются мягко, пропорцией и минимальной шириной:
-полсотни рамок достались со старого сайта разнокалиберными, и переделать их некому.
-Видео меряется точно — оно печётся с нуля по той самой строке рецепта.
+Отсюда же требование к тексту отказа: он должен говорить, что именно не так
+(«ждали 16:9, приехало 4:3»), иначе печь придётся наугад.
 
-Общее у обеих — требование к тексту отказа: он должен говорить, что именно не так
-(«ждали 16:9, приехало 4:3»), иначе печь придётся наугад. Сайт не конвертирует.
+Когда появится лекторий, эта таблица переедет в общее место и станет отдаваться
+пекарне ручкой `GET /intake/spec/` — чтобы рецепт существовал в одном экземпляре.
 """
 
 from collections import namedtuple
 
 from django.core.exceptions import ValidationError
 
-from intake import mp4, spec
-
+from . import mp4
 from .models import CosmeticItem
 
 # ratio — ширина / высота; tolerance — насколько можно ошибиться (доля).
-Spec = namedtuple("Spec", "ratio min_width max_bytes tolerance")
+# video — можно ли этому виду быть анимированным видео и с каким потолком веса и длины.
+Spec = namedtuple("Spec", "ratio min_width max_bytes tolerance video video_bytes seconds")
 
 K = CosmeticItem.Kind
 MB = 1024 * 1024
 
 SPECS = {
     # Рамки достались готовыми и разнокалиберными, поэтому только квадрат и потолок веса.
-    K.AVATAR_FRAME: Spec(1 / 1, 112, 6 * MB, 0.02),
+    # Видео им нельзя: нужен прозрачный проём под лицо (см. CosmeticItem.video).
+    K.AVATAR_FRAME: Spec(1 / 1, 112, 6 * MB, 0.02, video=False, video_bytes=0, seconds=0),
     # Шапка тянется на всю ширину карточки профиля (768) при высоте 128.
-    K.PROFILE_HEADER: Spec(6 / 1, 768, 4 * MB, 0.02),
+    K.PROFILE_HEADER: Spec(6 / 1, 768, 4 * MB, 0.02, video=True, video_bytes=2 * MB, seconds=8),
     # Фон кроется по всей контентной области, поэтому обычные пропорции экрана.
-    K.PROFILE_BACKGROUND: Spec(16 / 9, 1280, 6 * MB, 0.05),
-}
-
-# Вид вещи → рецепт в общей спеке. Кого здесь нет, тому видео не бывает: рамке нужен
-# прозрачный проём под лицо, а прозрачного видео, играющего везде, не существует.
-VIDEO = {
-    K.PROFILE_HEADER: "cosmetic-header",
-    K.PROFILE_BACKGROUND: "cosmetic-background",
+    K.PROFILE_BACKGROUND: Spec(16 / 9, 1280, 6 * MB, 0.05, video=True, video_bytes=8 * MB, seconds=8),
 }
 
 
@@ -53,21 +47,19 @@ def human_ratio(ratio):
 
 def check(kind, width, height, size):
     """Причина отказа строкой или None. Ничего не открывает и не читает — только цифры."""
-    # Локальная зовётся rule, а не spec: имя spec занято общей спекой из intake,
-    # и затенить её здесь значило бы поставить мину следующей правке.
-    rule = SPECS.get(kind)
-    if rule is None:
+    spec = SPECS.get(kind)
+    if spec is None:
         return None
 
     if not height:
         return "не удалось прочитать размеры картинки"
     got = width / height
-    if abs(got - rule.ratio) > rule.ratio * rule.tolerance:
-        return f"ждали пропорции {human_ratio(rule.ratio)}, приехало {width}×{height} ({human_ratio(got)})"
-    if width < rule.min_width:
-        return f"слишком мелко: ждали ширину от {rule.min_width}, приехало {width}"
-    if size > rule.max_bytes:
-        return f"файл тяжелее {rule.max_bytes // MB} МБ ({size // MB} МБ)"
+    if abs(got - spec.ratio) > spec.ratio * spec.tolerance:
+        return f"ждали пропорции {human_ratio(spec.ratio)}, приехало {width}×{height} ({human_ratio(got)})"
+    if width < spec.min_width:
+        return f"слишком мелко: ждали ширину от {spec.min_width}, приехало {width}"
+    if size > spec.max_bytes:
+        return f"файл тяжелее {spec.max_bytes // 1024 // 1024} МБ ({size // 1024 // 1024} МБ)"
     return None
 
 
@@ -81,23 +73,38 @@ def validate(kind, upload):
 def check_video(kind, upload):
     """Причина отказа по видеофайлу или None.
 
-    Заголовок читаем сами (`intake.mp4`), а сверяем общей `spec.check` — той же, что
-    у пекарни. Сайт файл не трогает и не чинит: не по спеке — перепечь его должен тот,
-    у кого видеокарта, а для этого в отказе обязано быть написано, ЧТО не так.
+    Читаем заголовок mp4 и сверяем со спекой. Сайт файл не трогает и не чинит: если
+    он не по спеке, перепечь его должен тот, у кого видеокарта, — а для этого в отказе
+    обязано быть написано, ЧТО именно не так.
     """
-    if kind not in SPECS:
+    spec = SPECS.get(kind)
+    if spec is None:
         return None
-    recipe = spec.RECIPES.get(VIDEO.get(kind, ""))
-    if recipe is None:
+    if not spec.video:
         return f"{CosmeticItem.Kind(kind).label} видео не бывает — только картинка"
     if not upload.name.lower().endswith(".mp4"):
         return "ждали mp4: он играет везде, включая айфоны"
+    if upload.size > spec.video_bytes:
+        return f"видео тяжелее {spec.video_bytes // MB} МБ ({upload.size // MB} МБ)"
 
     try:
         info = mp4.probe(upload.file)
     except mp4.Broken as error:
         return str(error)
-    return spec.check(recipe, info, upload.size)
+
+    if not info["faststart"]:
+        # Оглавление (moov) в конце файла играть не запрещает: браузер догадается
+        # дозапросить хвост по Range, и наша раздача Range умеет. Но это лишний круг
+        # до первого кадра, а у nginx он ещё и тянется целым слайсом в 1 МБ ради
+        # четырёх килобайт индекса. Чинится ремуксом без перекодировки — отказываем.
+        return "нет faststart: оглавление в конце файла. Перепеки с -movflags +faststart"
+    if info["audio"]:
+        return "звуковая дорожка лишняя — это фон под текстом, перепеки с -an"
+    if problem := check(kind, info["width"], info["height"], 0):
+        return problem
+    if info["seconds"] > spec.seconds:
+        return f"длиннее {spec.seconds} с ({info['seconds']:.1f} с)"
+    return None
 
 
 def validate_video(kind, upload):

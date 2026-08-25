@@ -205,34 +205,9 @@ document.addEventListener("alpine:init", () => {
 
   // Форма с файлами: выбор, лимиты, прямая загрузка в R2 и общий прогресс. Висит на самой
   // форме — оттуда видно и htmx-события, и инпут. Лимиты приезжают из attachments/uploads.py.
-  // Многочастная загрузка. Три части разом: одна не выбирает канал целиком, а больше —
-  // это лишние повторы при обрыве. Ссылки берём порциями: на 16 ГБ частей тысяча,
-  // и все разом — полмегабайта ответа и лишний риск, что они протухнут по дороге.
-  const PARALLEL = 3;
-  const PART_BATCH = 24;
-  const PART_TRIES = 4;
-  const pause = (ms) => new Promise((done) => setTimeout(done, ms));
-
-  // Помним начатую загрузку, чтобы после обрыва не лить гигабайты заново. Ключ — по
-  // самому файлу: имя, размер и время правки. У разных файлов эта тройка совпасть может,
-  // но правка файла меняет время, так что на практике этого хватает — на том же держатся
-  // и готовые библиотеки возобновляемой загрузки.
-  const resumeKey = (file) => `upload:${file.name}:${file.size}:${file.lastModified}`;
-  const recallUpload = (file) => {
-    try { return localStorage.getItem(resumeKey(file)) || ""; } catch { return ""; }
-  };
-  const rememberUpload = (file, token) => {
-    try { localStorage.setItem(resumeKey(file), token); } catch { /* приватный режим */ }
-  };
-  const forgetUpload = (file) => {
-    try { localStorage.removeItem(resumeKey(file)); } catch { /* приватный режим */ }
-  };
-
-  Alpine.data("fileForm", (config = {}, saved = []) => ({
+  Alpine.data("fileForm", ({ maxSize = 0, forbidden = [], direct = false, signUrl = "" } = {}, saved = []) => ({
     items: [], // { file, name, size, percent, done, token } — он же и список на экране
-    flying: new Set(), // XHR в полёте: по ним отменяем загрузку
-    sending: new Map(), // номер части → сколько её байт уже ушло, для шкалы
-    token: null, // начатая многочастная загрузка: по ней доводим отмену до хранилища
+    request: null, // текущий XHR: по нему отменяем загрузку
     cancelled: false,
     // marked заводим сразу: на неизвестном ключе :disabled внутри x-for ведёт себя непредсказуемо.
     saved: saved.map((file) => ({ ...file, marked: false })),
@@ -261,7 +236,6 @@ document.addEventListener("alpine:init", () => {
     // Тот же отказ, что и на сервере, но до отправки: незачем гнать гигабайт впустую.
     problem(file) {
       const extension = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "";
-      const { forbidden = [], maxSize = 0 } = config;
       if (forbidden.includes(extension)) return `«${file.name}» — такой тип файла загружать нельзя`;
       if (maxSize && file.size > maxSize) return `«${file.name}» больше ${humanSize(maxSize)}`;
       return null;
@@ -299,12 +273,12 @@ document.addEventListener("alpine:init", () => {
     async beforeSend(event) {
       if (this.percent !== null) return event.preventDefault(); // уже льём, второй раз не начинаем
       const pending = this.items.filter((item) => !item.done);
-      if (!config.direct || !pending.length) return; // некуда или нечего — обычная отправка
+      if (!direct || !pending.length) return; // некуда или нечего — обычная отправка
       event.preventDefault();
 
       this.errors = [];
       this.cancelled = false;
-      this.flying.clear();
+      this.request = null;
       this.begin();
       this.sent = 0;
       const total = pending.reduce((sum, item) => sum + item.file.size, 0);
@@ -314,7 +288,9 @@ document.addEventListener("alpine:init", () => {
           // а без проверки загрузка поехала бы дальше как ни в чём не бывало.
           if (this.cancelled) throw new Error("Загрузка отменена");
           item.percent = 0;
-          const token = await this.send(item, total);
+          const { url, token } = await this.sign(item.file);
+          if (this.cancelled) throw new Error("Загрузка отменена");
+          await this.put(url, item, total);
           this.sent += item.file.size;
           // Помечаем сразу: повторная отправка после ошибки на следующем файле
           // не должна залить этот вторым экземпляром.
@@ -326,7 +302,7 @@ document.addEventListener("alpine:init", () => {
       } catch (error) {
         this.errors = this.cancelled ? [] : [error.message];
         for (const item of pending) if (!item.done) item.percent = null;
-        this.flying.clear();
+        this.request = null;
         this.end();
         return; // форму не отправляем: книга без файлов никому не нужна
       }
@@ -353,162 +329,44 @@ document.addEventListener("alpine:init", () => {
       event.detail.issueRequest(true);
     },
 
-    // Маленький файл — одним PUT, большой — частями. Возвращает токен для формы.
-    async send(item, total) {
-      if (config.partsFrom && item.file.size >= config.partsFrom) return this.sendParts(item, total);
-      const { url, token } = await this.ask(config.signUrl, { name: item.file.name, size: item.file.size });
-      if (this.cancelled) throw new Error("Загрузка отменена");
-      await this.putWhole(url, item, total);
-      return token;
-    },
-
-    async ask(url, body) {
-      const response = await fetch(url, {
+    async sign(file) {
+      const response = await fetch(signUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRFToken": this.$el.querySelector("[name=csrfmiddlewaretoken]").value,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ name: file.name, size: file.size }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Не удалось получить ссылку на загрузку");
       return data;
     },
 
-    putWhole(url, item, total) {
-      return this.put(url, item.file, {
-        onProgress: (loaded) => {
-          item.percent = Math.round((loaded / item.file.size) * 100);
-          this.percent = Math.round(((this.sent + loaded) / total) * 100);
-        },
-        broken: `Не удалось загрузить «${item.name}»`,
-      });
-    },
-
-    // Общая отдача куска в хранилище. Возвращает ETag — для части он и есть расписка,
-    // без которой объект потом не собрать.
-    put(url, blob, { onProgress, broken, tag = false }) {
+    put(url, item, total) {
       return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
-        this.flying.add(request);
-        const finish = (fn, value) => { this.flying.delete(request); fn(value); };
+        this.request = request;
         request.open("PUT", url);
-        request.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
-        request.onload = () => {
-          if (request.status >= 300) {
-            return finish(reject, new Error(`Хранилище ответило ${request.status}`));
-          }
-          const etag = request.getResponseHeader("ETag");
-          // Без ETag часть не пришить к объекту. Заголовок приходит всегда, а вот ЧИТАТЬ
-          // его браузер даёт, только если бакет разрешил (ExposeHeaders: ETag в CORS).
-          // Молчать тут нельзя: иначе загрузка гигабайтов кончается непонятно чем.
-          if (tag && !etag) {
-            return finish(reject, new Error("Хранилище не отдало ETag части — в CORS бакета нужен ExposeHeaders: ETag"));
-          }
-          finish(resolve, etag);
+        request.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          item.percent = Math.round((e.loaded / e.total) * 100);
+          this.percent = Math.round(((this.sent + e.loaded) / total) * 100);
         };
-        request.onerror = () => finish(reject, new Error(broken));
-        request.onabort = () => finish(reject, new Error("Загрузка отменена"));
-        request.send(blob);
+        request.onload = () =>
+          request.status < 300 ? resolve() : reject(new Error(`Хранилище ответило ${request.status}`));
+        request.onerror = () => reject(new Error(`Не удалось загрузить «${item.name}»`));
+        request.onabort = () => reject(new Error("Загрузка отменена"));
+        request.send(item.file);
       });
-    },
-
-    // ── частями ──────────────────────────────────────────────────────────────
-    async sendParts(item, total) {
-      const file = item.file;
-      const started = await this.ask(config.startUrl, {
-        name: file.name, size: file.size, resume: recallUpload(file),
-      });
-      rememberUpload(file, started.token);
-      this.token = started.token; // по нему отмена доводится до хранилища
-
-      const step = started.partSize;
-      const count = Math.max(1, Math.ceil(file.size / step));
-      const parts = new Map(Object.entries(started.done).map(([number, tag]) => [Number(number), tag]));
-      const todo = [];
-      for (let number = 1; number <= count; number += 1) if (!parts.has(number)) todo.push(number);
-
-      // Уже лежащее в хранилище — это уже отданные байты, и шкала не должна начинаться
-      // с нуля: человек, продолживший после обрыва, решил бы, что всё зря.
-      let settled = (count - todo.length) * step;
-      this.sending.clear();
-      const progress = () => {
-        const inflight = [...this.sending.values()].reduce((sum, bytes) => sum + bytes, 0);
-        const loaded = Math.min(file.size, settled + inflight);
-        item.percent = Math.round((loaded / file.size) * 100);
-        this.percent = Math.round(((this.sent + loaded) / total) * 100);
-      };
-      progress();
-
-      while (todo.length) {
-        if (this.cancelled) throw new Error("Загрузка отменена");
-        const batch = todo.splice(0, PART_BATCH);
-        const { urls } = await this.ask(config.partsUrl, { token: started.token, numbers: batch });
-        await this.pool(batch, async (number) => {
-          const slice = file.slice((number - 1) * step, Math.min(number * step, file.size));
-          const tag = await this.putPart(urls[number], slice, number, progress);
-          parts.set(number, tag);
-          this.sending.delete(number);
-          settled += slice.size;
-          progress();
-        });
-      }
-
-      const done = await this.ask(config.finishUrl, {
-        token: started.token, parts: Object.fromEntries(parts),
-      });
-      forgetUpload(file);
-      this.token = null;
-      return done.token;
-    },
-
-    // Несколько частей разом, но не все: канал один, а каждая незавершённая часть
-    // при обрыве переливается заново.
-    async pool(numbers, work) {
-      const queue = [...numbers];
-      const runner = async () => {
-        while (queue.length) {
-          if (this.cancelled) throw new Error("Загрузка отменена");
-          await work(queue.shift());
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(PARALLEL, queue.length) }, runner));
-    },
-
-    // Часть повторяем сама по себе: на сорока минутах отдачи одна сорвётся почти
-    // наверняка, и ронять из-за неё весь файл — значит не иметь возобновления вовсе.
-    async putPart(url, slice, number, progress) {
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          this.sending.set(number, 0);
-          return await this.put(url, slice, {
-            onProgress: (loaded) => { this.sending.set(number, loaded); progress(); },
-            broken: `Часть ${number} не доехала`,
-            tag: true,
-          });
-        } catch (error) {
-          this.sending.delete(number);
-          progress();
-          if (this.cancelled || attempt >= PART_TRIES) throw error;
-          await pause(attempt * 1000); // каждый раз ждём дольше: сеть могла и лечь
-        }
-      }
     },
 
     // Залитые файлы остаются: они уже в хранилище. Прерванная отдача может доехать
     // и всё равно (байты браузер отдал) — такую сироту убирает clean_uploads.
-    //
-    // Начатую многочастную бросаем НА СТОРОНЕ ХРАНИЛИЩА: её части занимают место
-    // и стоят денег, а продолжать её человек уже не собирается — он нажал «отмена».
     cancel() {
       this.cancelled = true;
-      for (const request of this.flying) request.abort();
-      this.flying.clear();
-      if (this.token) {
-        this.ask(config.abortUrl, { token: this.token }).catch(() => {});
-        this.token = null;
-      }
+      this.request?.abort();
+      this.request = null;
     },
 
     begin() {
@@ -836,88 +694,6 @@ document.addEventListener("alpine:init", () => {
       this.watcher?.disconnect();
     },
   }));
-
-  // Библиотека HLS общая на страницу и грузится один раз: обещание запоминаем, иначе
-  // два плеера на одной странице потянули бы её дважды.
-  let hlsLibrary = null;
-  const loadHls = (src) => {
-    if (window.Hls) return Promise.resolve(true);
-    hlsLibrary ||= new Promise((done) => {
-      const tag = document.createElement("script");
-      tag.src = src;
-      tag.onload = () => done(true);
-      tag.onerror = () => done(false);
-      document.head.append(tag);
-    });
-    return hlsLibrary;
-  };
-
-  Alpine.data("lecturePlayer", (src) => {
-    // Плеер и счётчик — ЗДЕСЬ, в замыкании, а не в данных компонента. Alpine оборачивает
-    // данные в Proxy, а hls.js разбирает поток в Worker и шлёт туда свои объекты через
-    // postMessage — прокси структурно не клонируется, и разбор падает сразу же:
-    // «Failed to execute 'postMessage' on 'Worker': #<Object> could not be cloned».
-    // Видно это только в браузере: тесты и статический разбор такое пропускают.
-    let player = null;
-    let rescues = 0;
-
-    return {
-      problem: "",
-
-      async init() {
-        const video = this.$refs.video;
-
-        // Библиотеку тянем, только если её есть на чём запускать: на айфоне MediaSource
-        // нет вовсе (там любой браузер — Safari внутри), hls.js бесполезен, и полмегабайта
-        // телефон качал бы впустую. Проверяем ДО загрузки, а не после.
-        //
-        // Догружаем сами, а не тегом в шапке: тег пришлось бы ставить ДО ядра Alpine
-        // (иначе к init() библиотеки ещё нет), и каждая страница с плеером была бы
-        // обязана про это помнить. Забыли — чёрный прямоугольник без объяснений.
-        const library = "MediaSource" in window && await loadHls(this.$el.dataset.library);
-        if (library && window.Hls.isSupported()) {
-          player = new window.Hls();
-          player.on(window.Hls.Events.ERROR, (_, data) => this.rescue(data));
-          player.loadSource(src);
-          player.attachMedia(video);
-          return;
-        }
-
-        // Родной HLS — запасной путь, а не первый. Так советует и сама библиотека:
-        // `canPlayType` отвечает «maybe» даже там, где своего HLS на деле нет (поймали
-        // на движке хрома), а родной плеер не умеет ни пережить обрыв, ни рассказать
-        // о нём. На айфоне же выбора нет, и там эта ветка единственная рабочая.
-        if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = src;
-          return;
-        }
-        this.problem = "Не удалось загрузить проигрыватель. Обнови страницу.";
-      },
-
-      // Лекцию смотрят час с лишним, и за это время сеть моргнёт наверняка. Обрыв и сбой
-      // декодера библиотека умеет пережить, если её попросить, — но не бесконечно: без
-      // счётчика безнадёжный случай крутился бы в цикле, добивая и сеть, и батарею.
-      rescue(data) {
-        if (!data.fatal) return;
-        const kinds = window.Hls.ErrorTypes;
-        if (rescues < 3 && data.type === kinds.NETWORK_ERROR) {
-          rescues += 1;
-          return player.startLoad();
-        }
-        if (rescues < 3 && data.type === kinds.MEDIA_ERROR) {
-          rescues += 1;
-          return player.recoverMediaError();
-        }
-        this.problem = "Видео оборвалось. Обнови страницу.";
-        player.destroy();
-        player = null;
-      },
-
-      destroy() {
-        player?.destroy();
-      },
-    };
-  });
 
   Alpine.data("avatarPick", (saved = "", limit = 2000000) => {
     // Всё, чего не касается разметка, держим ЗДЕСЬ, а не в данных компонента: Alpine
