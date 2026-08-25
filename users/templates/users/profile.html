@@ -3,13 +3,29 @@
 
 {% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
 
+{% block page_background %}
+{% if background %}
+{% comment %}
+  Фон кроет всю контентную область, кроме меню слева, и не уезжает при прокрутке.
+  Поверх — вуаль под цвет темы: в светлой тёмная картинка во всю ширину спорила бы
+  с остальной страницей, в тёмной хватает лёгкого притемнения ради читаемости.
+  Карточки под фоном становятся полупрозрачными (panel-glass): на телефоне колонка
+  занимает всю ширину, и без этого фона не было бы видно вовсе.
+{% endcomment %}
+<div class="fixed inset-0 lg:left-64 -z-10 pointer-events-none select-none">
+  {% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}
+  <div class="veil"></div>
+</div>
+{% endif %}
+{% endblock %}
+
 {% block content %}
 <div class="w-full max-w-3xl mx-auto flex flex-col gap-4">
 
   {# ===== Шапка: фото, имя, контакты ===== #}
-  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+  <section class="panel{% if background %} panel-glass{% endif %} overflow-hidden">
     {% if header %}
-    <div class="h-24 sm:h-32"><img src="{{ header.image|media }}" alt="{{ header.name }}" class="w-full h-full object-cover"></div>
+    <div class="h-24 sm:h-32">{% include "cosmetics/_art.html" with item=header css="w-full h-full object-cover" only %}</div>
     {% else %}
     <div class="h-24 sm:h-32 bg-brand-gradient opacity-20 dark:opacity-30"></div>
     {% endif %}
@@ -38,6 +54,8 @@
           <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {% if person.team %}{{ person.team.get_grade_str }} · {{ person.team.number }}{% else %}Без группы{% endif %}
           </p>
+          {# Пустой статус не показываем вовсе — «пользователь ничего не указал» это шум #}
+          {% if person.status %}<p class="text-sm mt-1 break-words">{{ person.status }}</p>{% endif %}
         </div>
 
         {% if own %}
@@ -61,7 +79,7 @@
   <div class="grid gap-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_260px]">
 
     {# ===== Вклад в сайт ===== #}
-    <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    <section class="panel{% if background %} panel-glass{% endif %} p-5">
       <h2 class="font-bold mb-4">Вклад в сайт</h2>
 
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -88,7 +106,7 @@
     </section>
 
     {# ===== Кошелёк ===== #}
-    <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    <section class="panel{% if background %} panel-glass{% endif %} p-5">
       <h2 class="font-bold mb-4">КН-токены</h2>
       {# TODO: своя SVG-иконка валюты вместо fa-cent-sign #}
       <p class="text-3xl font-bold text-accent tabular-nums">{% coins person %} <i class="fa-solid fa-cent-sign text-2xl"></i></p>
@@ -114,7 +132,7 @@
 
   {# Инвентарь — только свой: чужой сундук это витрина «вот чего у тебя нет» #}
   {% if own %}
-  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+  <section class="panel{% if background %} panel-glass{% endif %} p-5">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
       <h2 class="font-bold">Инвентарь</h2>
       <span class="text-xs text-slate-400">{{ items|length }} шт.</span>
@@ -134,6 +152,7 @@
         {% if own_item.equipped %}<input type="hidden" name="kind" value="{{ own_item.kind }}">{% endif %}
         <button type="submit" title="{{ own_item.item.name }}" class="group block text-left">
           {% include "cosmetics/_tile.html" with item=own_item.item on=own_item.equipped only %}
+          {# Состояние живёт ВНУТРИ плитки: лишняя строка под одной из них ломала ряд #}
           <span class="block mt-1.5 text-[11px] leading-tight truncate {% if own_item.equipped %}text-accent font-medium{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ own_item.item.name }}</span>
         </button>
       </form>
@@ -147,7 +166,7 @@
 
   {# Устройства в самом низу: это не витрина, а страховка «зашёл с чужого компьютера и забыл выйти» #}
   {% if own %}
-  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+  <section class="panel{% if background %} panel-glass{% endif %} p-5">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
       <h2 class="font-bold">Активные сессии</h2>
       <span class="text-xs text-slate-400">видно только вам</span>

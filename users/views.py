@@ -93,6 +93,7 @@ def profile(request, pk):
         "devices": _devices(request) if own else [],
         "worn": on.get(CosmeticItem.Kind.AVATAR_FRAME),
         "header": on.get(CosmeticItem.Kind.PROFILE_HEADER),
+        "background": on.get(CosmeticItem.Kind.PROFILE_BACKGROUND),
         # Инвентарь — только свой: чужой сундук это витрина «вот чего у тебя нет».
         "items": inventory(person) if own else [],
     })

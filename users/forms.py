@@ -149,15 +149,22 @@ class ProfileForm(forms.ModelForm):
 
     class Meta:
         model = User
-        fields = ("birthday", "phone", "tg_page", "vk_page", "mailing_allowed")
+        fields = ("status", "birthday", "phone", "tg_page", "vk_page", "mailing_allowed")
         labels = {
+            "status": "Статус",
             "birthday": "День рождения",
             "phone": "Телефон",
             "tg_page": "Телеграм",
             "vk_page": "ВКонтакте",
             "mailing_allowed": "Получать письма с сайта",
         }
+        help_texts = {"status": "Одна строка под именем — видна всем"}
         widgets = {"birthday": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")}
+
+    def clean_status(self):
+        """Одна строка значит одна: переносы и лишние пробелы схлопываем сами, иначе
+        человек растянет подпись на полстраницы и сломает шапку профиля соседям в списках."""
+        return " ".join(self.cleaned_data["status"].split())
 
     def clean_photo_file(self):
         upload = self.cleaned_data["photo_file"]

@@ -7,13 +7,11 @@
 это хеши, поэтому им ставится «Рамка N» и «обычная»: переименовать удобнее в админке,
 где видно саму картинку.
 
-Сама анимация кладётся КАК ЕСТЬ, в исходном формате. Рядом сохраняется обложка —
-один кадр, для админки и будущих витрин. Кадр берётся НЕ первый: у половины рамок
-анимация начинается с пустоты, и обложкой оказался бы прозрачный квадрат.
+Файл кладётся КАК ЕСТЬ, в исходном формате: пережатие в анимированный WebP экономит
+38%, но оно лоссИ, и на пиксельных рамках это видно.
 """
 
 import sqlite3
-from io import BytesIO
 from pathlib import Path
 
 from django.core.files.base import ContentFile
@@ -22,9 +20,6 @@ from django.core.management.base import BaseCommand, CommandError
 from PIL import Image, ImageSequence
 
 from cosmetics.models import CosmeticItem
-
-# Сторона обложки — та же, что у исходников со старого сайта. Сама анимация не трогается.
-SIDE = 224
 
 
 class Command(BaseCommand):
@@ -108,60 +103,28 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f"  имя занято, пропускаю: {name}"))
             return 0
         try:
-            animated, still, frames = self.convert(source)
+            animated, frames = self.convert(source)
         except OSError as error:
             self.stdout.write(self.style.ERROR(f"  не открылась {source.name}: {error}"))
             return 0
 
         mark = "обновлено" if item else "перенесено"
-        self.stdout.write(
-            f"  {name:22} {rarity:10} {frames:>4} кадр. "
-            f"{len(animated) // 1024:>5} КБ + {len(still) // 1024} КБ обложка · {mark}"
-        )
+        self.stdout.write(f"  {name:22} {rarity:10} {frames:>4} кадр. {len(animated) // 1024:>5} КБ · {mark}")
         if self.apply:
-            self.store(item or CosmeticItem(name=name, rarity=rarity, source=origin), source, animated, still)
+            self.store(item or CosmeticItem(name=name, rarity=rarity, source=origin), source, animated)
         return 1
 
-    def store(self, item, source, animated, still):
-        """Записать файлы. У обновляемой вещи прежние блобы снимаем сами: подменённое
-        поле про них уже не помнит, и в хранилище остались бы сироты."""
+    def store(self, item, source, animated):
+        """Записать файл. У обновляемой вещи прежний блоб снимаем сами: подменённое
+        поле про него уже не помнит, и в хранилище остался бы сирота."""
         if item.pk:
             item.image.delete(save=False)
-            item.still.delete(save=False)
         item.image.save(f"{source.stem}{source.suffix.lower()}", ContentFile(animated), save=False)
-        item.still.save(f"{source.stem}-still.png", ContentFile(still), save=False)
         item.save()
 
     def convert(self, source):
-        """Анимация как есть + обложка одним кадром.
-
-        Пережатие APNG в анимированный WebP экономило 40% (34.1 → 20.6 МБ), но WebP
-        лоссИ, и на пиксельных рамках потери видны глазом. Тринадцати мегабайт не стоят.
-        """
+        """Анимация уезжает КАК ЕСТЬ, в исходном формате. Пережатие пробовали дважды:
+        анимированный WebP экономит 38%, но он лоссИ и на пиксельных рамках это видно."""
         with Image.open(source) as image:
-            frames = [_square(frame.convert("RGBA")) for frame in ImageSequence.Iterator(image)]
-
-        return source.read_bytes(), _bytes(_cover(frames), "PNG", optimize=True), len(frames)
-
-
-def _square(frame):
-    """Обложку приводим к общей стороне. Почти все рамки и так 224×224 — тогда не трогаем
-    вовсе, чтобы не размывать пиксельные интерполяцией на ровном месте."""
-    return frame if frame.size == (SIDE, SIDE) else frame.resize((SIDE, SIDE), Image.LANCZOS)
-
-
-def _cover(frames):
-    """Кадр для обложки — самый видимый.
-
-    Первый брать нельзя: у половины рамок анимация начинается с пустоты, и обложкой
-    оказался бы прозрачный квадрат. Считаем СУММУ непрозрачности, а не число заметных
-    точек: у мягких свечений («PULSE [RED]») альфа везде низкая, и по порогу такой
-    кадр не отличался бы от пустого.
-    """
-    return max(frames, key=lambda frame: sum(frame.getchannel("A").get_flattened_data()))
-
-
-def _bytes(image, fmt, **options):
-    buffer = BytesIO()
-    image.save(buffer, format=fmt, **options)
-    return buffer.getvalue()
+            frames = sum(1 for _ in ImageSequence.Iterator(image))
+        return source.read_bytes(), frames

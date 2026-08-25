@@ -8,14 +8,16 @@ from .beta import CLOSED
 def beta(request):
     """Плашка «бета» в шапке и гашение пунктов, ведущих в закрытое.
 
-    `profile_locked` считаем по тому же списку, что и сам замок, а не отдельным флагом:
-    иначе, открыв профиль, легко забыть про пункт меню — и он останется серым.
+    `locked` — словарь по именам урлов (`{% if locked.shop %}`), и составлен он из того же
+    списка, что и сам замок: иначе, открыв раздел, легко забыть про пункт меню и оставить
+    его серым при работающей странице.
     """
     user = getattr(request, "user", None)
     staff = bool(user and user.is_authenticated and user.is_staff)
+    shut = settings.BETA and not staff
     return {
         "beta": settings.BETA,
-        "profile_locked": settings.BETA and not staff and "profile" in CLOSED,
+        "locked": {name: True for name in CLOSED} if shut else {},
     }
 
 

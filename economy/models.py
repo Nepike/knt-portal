@@ -44,6 +44,13 @@ class BalanceLog(models.Model):
         DOWNLOAD = "download", "скачивания твоих файлов"
         WALL = "wall", "пиксели на Стене"
         MODERATION = "moderation", "проверка чужих работ"
+        PURCHASE = "purchase", "покупки в магазине"
+
+    # Что можно записать руками из админки. Список разрешённого, а не запрещённого:
+    # новая причина по умолчанию окажется машинной, и это правильная сторона ошибки.
+    # Награду руками писать нельзя — строка без ключа зачтётся как «уже выплачено»
+    # и человек недополучит; покупку пишет магазин вместе с выдачей вещи.
+    BY_HAND = frozenset({Reason.MANUAL})
 
     wallet = models.ForeignKey(
         Wallet, verbose_name="кошелёк", on_delete=models.CASCADE, related_name="entries",

@@ -1,0 +1,60 @@
+{% extends "core/base.html" %}
+
+{% block title %}Магазин{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-3xl mx-auto flex flex-col gap-4" x-data="{ open: false }" @keydown.escape.window="open = false">
+
+  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <h1 class="text-xl font-bold">Магазин</h1>
+      <span class="ml-auto text-sm text-slate-500 dark:text-slate-400">
+        на счету <span class="font-bold text-accent tabular-nums">{{ coins }}</span> <i class="fa-solid fa-cent-sign text-xs text-accent"></i>
+      </span>
+    </div>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mt-2">
+      Токены капают за материалы, книги, отзывы, скачивания твоих файлов и клетки на Стене.
+      Купленное падает в <a href="{% url 'profile' request.user.pk %}" class="text-accent hover:underline">инвентарь</a> — надеть можно там.
+    </p>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+    {# Порядок блоков и ступеней задаёт запрос (cosmetics.shop.on_sale) — regroup режет ПОДРЯД ИДУЩИЕ #}
+    {% regroup items by kind as slots %}
+    {% for slot in slots %}
+    <h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 mb-3 {% if not forloop.first %}mt-8{% endif %}">{{ slot.list.0.slot_title }}</h2>
+    <div class="grid gap-3 slot-{{ slot.grouper }}">
+      {% for item in slot.list %}
+      {% comment %}
+        Нажатие открывает карточку товара — там предпросмотр, цена и сама кнопка покупки.
+        Купить в один клик из сетки нельзя намеренно: трата необратима, а плитка мелкая.
+      {% endcomment %}
+      <button type="button" class="group block text-left" title="{{ item.name }}"
+              hx-get="{% url 'item_card' item.pk %}" hx-target="#offer" @click="open = true">
+        {% include "cosmetics/_tile.html" with item=item only %}
+        <span class="block mt-1.5 text-[11px] leading-tight truncate text-slate-500 dark:text-slate-400">{{ item.name }}</span>
+        {% if item.owned %}
+        <span class="block text-[11px] leading-tight font-medium text-emerald-500"><i class="fa-solid fa-check"></i> в инвентаре</span>
+        {% else %}
+        <span class="block text-[11px] leading-tight font-medium tabular-nums {% if item.short %}text-slate-400{% else %}text-accent{% endif %}"
+              {% if item.short %}title="Не хватает {{ item.short }}"{% endif %}>
+          {{ item.cost }} <i class="fa-solid fa-cent-sign text-[9px]"></i>
+        </span>
+        {% endif %}
+      </button>
+      {% endfor %}
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Пока пусто.</p>
+    {% endfor %}
+  </section>
+
+  {# Окно товара. Содержимое приезжает по htmx, поэтому здесь только рамка и заглушка. #}
+  <div x-show="open" x-cloak x-transition.opacity @click.self="open = false"
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div id="offer" class="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl">
+      <p class="p-6 text-sm text-slate-400">Загрузка…</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

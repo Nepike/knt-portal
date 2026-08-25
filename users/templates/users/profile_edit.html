@@ -28,6 +28,7 @@
         <p class="text-xs text-slate-400 mt-1.5">Имя, группу и почту меняет администратор — напиши в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>.</p>
       </div>
 
+      {% include "core/inputs.html" with field=form.status %}
       {% include "core/inputs.html" with field=form.birthday %}
       {% include "core/inputs.html" with field=form.phone %}
       {% include "core/inputs.html" with field=form.tg_page %}

@@ -21,7 +21,7 @@ from core.models import Subject, Term
 from materials.models import Material
 
 from .forms import AVATAR_PX, MAX_AVATAR_DATA
-from .models import User, UserSession
+from .models import STATUS_MAX, User, UserSession
 from .sessions import REFRESH, SEEN_KEY
 
 
@@ -262,6 +262,31 @@ class ProfileEditTests(TestCase):
 
         self.assertContains(response, "только гифки")
         self.assertFalse(self.person.photo)
+
+    def test_the_status_is_saved_and_shown_to_everyone(self):
+        self.post(status="Сплю на парах")
+
+        self.assertEqual(self.person.status, "Сплю на парах")
+        stranger = Client()
+        stranger.force_login(make_user("other@t.local"))
+        self.assertContains(stranger.get(reverse("profile", args=[self.person.pk])), "Сплю на парах")
+
+    def test_the_status_stays_one_line(self):
+        # Иначе подпись растянется на полстраницы и разъедет шапку профиля.
+        self.post(status="  первая \n\n  вторая  ")
+
+        self.assertEqual(self.person.status, "первая вторая")
+
+    def test_a_status_longer_than_the_line_is_refused(self):
+        self.post(status="я" * (STATUS_MAX + 1))
+
+        self.assertEqual(self.person.status, "")
+
+    def test_an_empty_status_shows_nothing_at_all(self):
+        """«Пользователь не указал статус» — это шум, а не сведения."""
+        page = self.client.get(reverse("profile", args=[self.person.pk])).content.decode()
+
+        self.assertNotIn("татус", page)
 
     def test_links_are_reduced_to_handles(self):
         # Люди приносят ссылку целиком, а шаблон приклеивает её к адресу второй раз.

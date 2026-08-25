@@ -246,9 +246,9 @@ class HtmxVaryTests(TestCase):
 
 @override_settings(BETA=True)
 class BetaLockTests(TestCase):
-    """Закрыт ровно один раздел — профиль со всем, что к нему прицеплено.
+    """Закрыта геймификация: профиль со всем, что к нему прицеплено, и магазин.
 
-    Решение пользователя: открывать его не по частям, а разом с геймификацией.
+    Решение пользователя: открывать не по частям, а разом — когда будут ещё кейсы и значки.
     """
 
     def setUp(self):
@@ -276,9 +276,15 @@ class BetaLockTests(TestCase):
         self.assertEqual(self.client.post(reverse("session_end")).status_code, 403)
         self.assertEqual(self.client.post(reverse("item_unequip")).status_code, 403)
 
+    def test_the_shop_is_closed_together_with_the_profile(self):
+        # Покупать, не видя купленного в профиле, нечего — открываться им только вместе.
+        self.assertEqual(self.client.get(reverse("shop")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("item_buy", args=[1])).status_code, 403)
+
     def test_staff_walks_everywhere(self):
         self.client.force_login(self.staff)
         self.assertEqual(self.client.get(reverse("profile", args=[self.staff.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("shop")).status_code, 200)
 
     def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
         self.client.logout()
@@ -293,20 +299,23 @@ class BetaLockTests(TestCase):
     def test_switching_beta_off_opens_everything(self):
         self.assertEqual(self.client.get(reverse("profile", args=[self.reader.pk])).status_code, 200)
 
-    def test_the_account_menu_does_not_offer_a_page_that_is_closed(self):
-        """Пункт «Профиль» гасим, а не прячем — как и разделы в меню слева."""
+    def test_the_menu_does_not_offer_a_page_that_is_closed(self):
+        """Пункты гасим, а не прячем — пусть видно, что раздел есть и никуда не делся."""
         page = self.client.get(reverse("material_list")).content.decode()
 
         self.assertIn("Профиль", page)
+        self.assertIn("Магазин", page)
         self.assertNotIn(reverse("profile", args=[self.reader.pk]), page)
+        self.assertNotIn(f'href="{reverse("shop")}"', page)
 
-    def test_staff_still_gets_the_link(self):
-        # Флаг считается по тому же списку, что и замок, значит и исключение для
+    def test_staff_still_gets_the_links(self):
+        # Словарь locked собран из того же списка, что и замок, значит и исключение для
         # персонала должно совпадать: иначе пункт серый, а страница открывается.
         self.client.force_login(self.staff)
         page = self.client.get(reverse("material_list")).content.decode()
 
         self.assertIn(reverse("profile", args=[self.staff.pk]), page)
+        self.assertIn(f'href="{reverse("shop")}"', page)
 
 
 @override_settings(BETA=True)

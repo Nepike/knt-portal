@@ -53,18 +53,21 @@ def worn(user, kind=CosmeticItem.Kind.AVATAR_FRAME):
     return outfit(user).get(kind)
 
 
+def rarity_rank(field="rarity"):
+    """Ступень числом — для сортировки. В базе редкость строка, и алфавит ставил бы
+    legendary между epic и mythical, поэтому порядок приходится задавать запросом."""
+    return Case(
+        *[When(**{field: value}, then=step) for step, value in enumerate(CosmeticItem.RARITY_ORDER)],
+        default=0, output_field=IntegerField(),
+    )
+
+
 def inventory(user):
     """Инвентарь блоками: сперва вид вещи, внутри — от обычной к редкой.
 
-    Ранг считаем в запросе: разметка группирует подряд идущие (`regroup`), и порядок
-    обязан приехать из базы готовым. По самой редкости сортировать нельзя — в базе это
-    строка, и алфавит ставит legendary между epic и mythical.
+    Порядок обязан приехать из базы готовым: разметка группирует подряд идущие (`regroup`).
     """
-    rank = Case(
-        *[When(item__rarity=value, then=step) for step, value in enumerate(CosmeticItem.RARITY_ORDER)],
-        default=0, output_field=IntegerField(),
-    )
     return (
         UserItem.objects.filter(user=user).select_related("item")
-        .annotate(rank=rank).order_by("kind", "rank", "item__name")
+        .annotate(rank=rarity_rank("item__rarity")).order_by("kind", "rank", "item__name")
     )

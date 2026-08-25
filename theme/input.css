@@ -174,10 +174,35 @@ html { color-scheme: light; }
      шапка вытянутая 6:1. Общий квадрат для всех сплющивал бы шапку в кашу, а
      object-contain оставлял бы вокруг неё пустоту в половину плитки.
      Классами, а не утилитами в разметке: имя вида приезжает из базы строкой. */
+  /* Вещь бывает и картинкой, и видео (cosmetics/_art.html) — форму задаём обоим. */
   .slot-avatar_frame { @apply grid-cols-3 sm:grid-cols-5 lg:grid-cols-6; }
-  .slot-avatar_frame img { @apply aspect-square; }
+  .slot-avatar_frame :is(img, video) { @apply aspect-square; }
   .slot-profile_header { @apply grid-cols-1 sm:grid-cols-2; }
-  .slot-profile_header img { @apply aspect-[6/1] object-cover rounded-md; }
+  .slot-profile_header :is(img, video) { @apply aspect-[6/1] object-cover rounded-md; }
+  .slot-profile_background { @apply grid-cols-2 sm:grid-cols-3; }
+  .slot-profile_background :is(img, video) { @apply aspect-video object-cover rounded-md; }
+
+  /* Карточка страницы профиля. Отдельным классом, потому что под косметическим фоном
+     она становится полупрозрачной: иначе на телефоне фона не видно вовсе — колонка
+     занимает всю ширину, и полей по бокам, где он проглядывал бы, там нет. */
+  .panel { @apply rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900; }
+  .panel-glass { @apply bg-white/75 dark:bg-slate-900/75 backdrop-blur-md border-white/70 dark:border-white/10; }
+
+  /* Вуаль поверх косметического фона.
+
+     В тёмной теме достаточно притемнить: картинка и так в своей среде. В светлой
+     белая пелена превращала любой тёмный фон в серую муть — узнать в нём горы или
+     небо было нельзя. Поэтому здесь не заливка, а подъём яркости с насыщением:
+     картинка светлеет до уровня страницы, но остаётся картинкой. */
+  .veil {
+    @apply absolute inset-0;
+    background: color-mix(in oklab, var(--color-slate-50) 20%, transparent);
+    backdrop-filter: brightness(1.9) saturate(1.35);
+  }
+  .dark .veil {
+    background: color-mix(in oklab, var(--color-slate-950) 55%, transparent);
+    backdrop-filter: none;
+  }
 
   /* Плитка косметики: картинка на плашке своей ступени. Одна на инвентарь и магазин.
      Цвет ступени приезжает одной переменной, всё остальное считается от неё — новая
@@ -189,16 +214,23 @@ html { color-scheme: light; }
     --rarity: var(--color-slate-400);
     --glow: 0%;  /* свечение внутри плашки */
     --halo: 0%;  /* ореол вокруг неё */
+    --on: transparent;  /* заливка «надето», слоем поверх плашки */
     --plate-top: #fff;
     --plate-bottom: var(--color-slate-400);
     @apply relative block rounded-xl border-2 p-1.5 overflow-hidden;
     @apply transition duration-200 group-hover:-translate-y-0.5;
     border-color: color-mix(in oklab, var(--rarity) 75%, transparent);
     background-image:
+      linear-gradient(0deg, var(--on), var(--on)),
       radial-gradient(120% 78% at 50% 118%, color-mix(in oklab, var(--rarity) var(--glow), transparent), transparent 70%),
       linear-gradient(165deg, var(--plate-top), var(--plate-bottom));
     box-shadow: 0 0 14px -3px color-mix(in oklab, var(--rarity) var(--halo), transparent);
   }
+
+  /* Надетая вещь. Заливкой, а не вторым кольцом: кольцо спорило с рамкой ступени,
+     и на плитке оказывалось две границы разного смысла. Переменной, чтобы не
+     переписывать весь background-image ради одного слоя. */
+  .rarity-on { --on: color-mix(in oklab, var(--color-accent) 14%, transparent); }
   .dark .rarity {
     --plate-top: var(--color-slate-600);
     --plate-bottom: var(--color-slate-900);
@@ -209,7 +241,7 @@ html { color-scheme: light; }
     @apply absolute inset-x-0 bottom-0 h-1;
     background: linear-gradient(90deg, transparent, var(--rarity) 14%, var(--rarity) 86%, transparent);
   }
-  .rarity img { @apply relative; }  /* иначе блик мифической лёг бы поверх самой рамки */
+  .rarity :is(img, video) { @apply relative; }  /* иначе блик мифической лёг бы поверх вещи */
 
   /* Свечение включается только с эпической: два десятка обычных вещей, светящихся
      разом, — это ёлка, а не витрина. */
@@ -219,8 +251,13 @@ html { color-scheme: light; }
   .rarity-legendary { --rarity: var(--color-amber-400);  --glow: 50%; --halo: 55%; }
   .rarity-mythical  { --rarity: var(--color-rose-400);   --glow: 62%; --halo: 75%; }
 
-  /* Мифических на весь сайт четыре — блик по плашке им и оставим. */
-  .rarity-mythical::before {
+  /* Цвет ступени словами: подпись «эпическая» в карточке товара. Класс `.rarity-<ступень>`
+     ставится и без `.rarity` — он только объявляет переменную. */
+  .rarity-ink { color: var(--rarity); }
+
+  /* Мифических на весь сайт четыре — блик по плашке им и оставим. Селектор с `.rarity`:
+     иначе блик уехал бы и на подпись, у которой стоит только цвет ступени. */
+  .rarity.rarity-mythical::before {
     content: "";
     position: absolute;
     top: -2rem;
@@ -237,7 +274,7 @@ html { color-scheme: light; }
   }
   @media (prefers-reduced-motion: reduce) {
     .rarity { @apply group-hover:translate-y-0; }
-    .rarity-mythical::before { animation: none; }
+    .rarity.rarity-mythical::before { animation: none; }
   }
 
   /* Тост: карточка с цветной иконкой по типу (цвет задаёт JS в components.js). */

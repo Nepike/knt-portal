@@ -81,7 +81,8 @@
           <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
+          <a {% if not locked.shop %}href="{% url 'shop' %}"{% endif %}
+             class="nav-link {% if locked.shop %}nav-link-disabled{% elif request.resolver_match.url_name == 'shop' %}nav-link-active{% endif %}"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
             None — не модератор, ссылки быть не должно; 0 — модератор, но очередь пуста.
@@ -130,8 +131,8 @@
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
             {# Пункт гасим, а не прячем — по той же house-rule, что и разделы в меню слева #}
-            <a {% if not profile_locked %}href="{% url 'profile' request.user.pk %}"{% endif %}
-               class="flex items-center gap-1 px-3 py-2 rounded {% if profile_locked %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
+            <a {% if not locked.profile %}href="{% url 'profile' request.user.pk %}"{% endif %}
+               class="flex items-center gap-1 px-3 py-2 rounded {% if locked.profile %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
             {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
             <form method="post" action="{% url 'logout' %}">
@@ -146,6 +147,9 @@
   {# h-lvh по той же причине, что и у панели: затемнение не должно обрываться выше края окна #}
   <div x-show="sidebar" x-cloak @click="sidebar = false" class="fixed inset-x-0 top-0 h-lvh z-35 bg-black/40 lg:hidden"></div>
 
+  {# Косметический фон профиля: подложка под всю контентную область #}
+  {% block page_background %}{% endblock %}
+
   {# h-dvh вместо min-h-dvh (чат, стена) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
   <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
     {# Страницы, которые сами про бету и рассказывают, блок гасят — см. core/support.html #}
@@ -158,7 +162,12 @@
     </div>
     {% endif %}
     {% endblock %}
-    <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+    {% comment %}
+      Шапка полупрозрачная с размытием — заодно с подвалом, чтобы косметический фон
+      профиля был виден и сверху, а не обрезался полосой. На страницах без фона цвет
+      тот же, что у самой страницы, поэтому разницы не видно.
+    {% endcomment %}
+    <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/70 backdrop-blur-md">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
         {# TODO (notifications) #}

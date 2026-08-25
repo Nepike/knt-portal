@@ -146,8 +146,9 @@ class AdminGrantTests(TestCase):
         self.assertContains(response, "на балансе только 0")
         self.assertEqual(BalanceLog.objects.filter(wallet=self.wallet).count(), 0)
 
-    def test_reasons_of_the_recount_are_not_offered_by_hand(self):
-        """Иначе строка без ключа зачлась бы как «уже выплачено» — см. rewards.AUTOMATIC."""
+    def test_only_manual_reasons_are_offered_by_hand(self):
+        """Награда руками — это строка без ключа, она зачлась бы как «уже выплачено»;
+        покупку пишет магазин вместе с выдачей вещи. См. BalanceLog.BY_HAND."""
         offered = {value for value, _ in GrantForm().fields["reason"].choices}
         self.assertEqual(offered, {MANUAL})
 
@@ -388,13 +389,15 @@ class RecountCommandTests(TestCase):
         self.assertEqual(BalanceLog.objects.count(), was)
         self.assertEqual(wallet_of(self.user).balance, rewards.WELCOME)
 
-    def test_reset_wipes_the_journal_before_counting(self):
-        credit(self.user, 5000, MANUAL)  # выдача вручную тоже уйдёт — так и задумано
+    def test_it_only_adds_and_never_takes_away(self):
+        """Сноса журнала у команды нет: после открытия магазина он вернул бы токены
+        за покупки, оставив людям и вещи."""
+        credit(self.user, 5000, MANUAL)
+        spend(self.user, 600, BalanceLog.Reason.PURCHASE, key="item:1")
 
-        self.run_it("--reset", "--apply")
+        self.run_it("--apply")
 
-        self.assertEqual(wallet_of(self.user).balance, rewards.WELCOME)
-        self.assertEqual(BalanceLog.objects.filter(reason=MANUAL).count(), 0)
+        self.assertEqual(wallet_of(self.user).balance, 4400 + rewards.WELCOME)
 
     def test_an_inactive_person_is_skipped(self):
         User.objects.filter(pk=self.user.pk).update(is_active=False)

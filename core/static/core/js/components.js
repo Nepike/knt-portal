@@ -673,6 +673,28 @@ document.addEventListener("alpine:init", () => {
   // второй запрос, ни разбор исходника на сервере. Значение обновляем после каждого
   // движения, чтобы не ловить отправку формы посреди асинхронной работы канваса.
   const AVATAR_PX = 512;
+  // Видео вещи в витрине: источник подставляем, только когда плитка попала в экран.
+  // Не ради трафика — Safari на телефоне держит считанные видеодекодеры разом, и
+  // десяток автоплеев его роняет. До подстановки видно постер, ждать ничего не надо.
+  Alpine.data("lazyVideo", () => ({
+    watcher: null,
+
+    init() {
+      const video = this.$el;
+      this.watcher = new IntersectionObserver(([entry]) => {
+        if (!entry.isIntersecting) return video.pause();
+        if (!video.src) video.src = video.dataset.src;
+        video.play().catch(() => {}); // автоплей могли запретить — останется постер
+      }, { rootMargin: "300px" });
+      this.watcher.observe(video);
+    },
+
+    // Наблюдатель держит элемент ссылкой — без этого узел не соберётся после htmx-подмены.
+    destroy() {
+      this.watcher?.disconnect();
+    },
+  }));
+
   Alpine.data("avatarPick", (saved = "", limit = 2000000) => {
     // Всё, чего не касается разметка, держим ЗДЕСЬ, а не в данных компонента: Alpine
     // оборачивает свои данные в Proxy, а drawImage подсунутый вместо Image прокси

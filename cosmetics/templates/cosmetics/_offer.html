@@ -1,0 +1,76 @@
+{% load attachment_extras %}
+{% comment %}
+  Карточка товара: как вещь будет выглядеть на тебе, сколько стоит и кнопка покупки.
+  Приезжает по htmx в окно на странице магазина, поэтому это кусок, а не страница.
+
+  Предпросмотр — уменьшенный профиль, собранный ТЕМИ ЖЕ классами, что настоящая
+  страница (те же 120/96 у аватара, тот же наезд -mt-12): иначе он показывал бы не то,
+  что человек получит. Вместо содержимого — серые полосы: это макет, а не профиль.
+{% endcomment %}
+<div class="relative p-6">
+  <button type="button" @click="open = false" aria-label="Закрыть"
+          class="absolute top-3 right-3 w-8 h-8 rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+    <i class="fa-solid fa-xmark"></i>
+  </button>
+
+  <h2 class="text-lg font-bold pr-8">{{ item.name }}</h2>
+  <p class="text-sm rarity-{{ item.rarity }} rarity-ink font-medium">{{ item.get_rarity_display }} · {{ item.slot_title|lower }}</p>
+  {% if item.note %}<p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ item.note }}</p>{% endif %}
+
+  <div class="relative mt-4 rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-800/50 p-4">
+    {% if background %}
+    {# Фон и вуаль ровно те же, что на настоящей странице — иначе предпросмотр врёт #}
+    <span class="absolute inset-0">{% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}</span>
+    <div class="veil"></div>
+    {% endif %}
+    <div class="relative rounded-xl overflow-hidden border {% if background %}border-white/70 dark:border-white/10 bg-white/75 dark:bg-slate-900/75 backdrop-blur-md{% else %}border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900{% endif %}">
+      <div class="h-24">
+        {% if header %}
+        {% include "cosmetics/_art.html" with item=header css="w-full h-full object-cover" only %}
+        {% else %}
+        <div class="w-full h-full bg-brand-gradient opacity-20 dark:opacity-30"></div>
+        {% endif %}
+      </div>
+      <div class="px-4 pb-4">
+        <div class="relative -mt-12 flex items-end gap-3">
+          {% if frame %}
+            {% include "core/_avatar.html" with person=request.user box="w-30 h-30" text="text-3xl" worn=frame only %}
+          {% else %}
+            {% include "core/_avatar.html" with person=request.user box="w-24 h-24 rounded-[22%]" text="text-3xl" frame="p-1" only %}
+          {% endif %}
+          <div class="min-w-0 pb-1">
+            <p class="font-bold leading-tight truncate">{{ request.user.name }} {{ request.user.surname }}</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">{% if request.user.team %}{{ request.user.team.get_grade_str }} · {{ request.user.team.number }}{% else %}Без группы{% endif %}</p>
+          </div>
+        </div>
+        {# Серые полосы вместо содержимого: это макет страницы, а не сама страница #}
+        <div class="flex flex-col gap-2 mt-4">
+          <span class="block h-2.5 w-2/3 rounded-full bg-slate-200 dark:bg-slate-700"></span>
+          <span class="block h-2.5 w-1/2 rounded-full bg-slate-200 dark:bg-slate-700"></span>
+        </div>
+      </div>
+    </div>
+    <p class="relative text-xs text-slate-400 text-center mt-3">так это увидят на твоей странице</p>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-3 mt-5">
+    {% if owned %}
+    <p class="text-sm font-medium text-emerald-500"><i class="fa-solid fa-check"></i> Уже в инвентаре</p>
+    <a href="{% url 'profile' request.user.pk %}" class="btn btn-ghost ml-auto">Надеть в профиле</a>
+    {% else %}
+    <span class="text-sm text-slate-500 dark:text-slate-400">
+      на счету <span class="font-bold text-accent tabular-nums">{{ coins }}</span> <i class="fa-solid fa-cent-sign text-xs text-accent"></i>
+    </span>
+    {% if short %}
+    <button type="button" disabled class="btn btn-primary ml-auto">Не хватает {{ short }} <i class="fa-solid fa-cent-sign text-xs"></i></button>
+    {% else %}
+    {# Отдельного «точно?» тут нет: это окно и есть подтверждение — вещь показана, цена названа #}
+    <form method="post" action="{% url 'item_buy' item.pk %}" class="ml-auto">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary"><i class="fa-solid fa-cart-shopping"></i>Купить за {{ item.cost }} <i class="fa-solid fa-cent-sign text-xs"></i></button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+  <p class="text-xs text-slate-400 mt-3">Токены за покупку не возвращаются. Вещь остаётся у тебя навсегда.</p>
+</div>

@@ -12,6 +12,9 @@ from django.utils import timezone
 from attachments.storage import media_storage, random_key
 
 
+STATUS_MAX = 140
+
+
 def photo_upload_to(instance, filename):
     return random_key("avatars", filename)
 
@@ -49,6 +52,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     must_change_password = models.BooleanField("сменить пароль при входе", default=True)
 
     photo = models.ImageField("фото", upload_to=photo_upload_to, storage=media_storage, null=True, blank=True)
+    # Одна строка, а не биография: строка встаёт под именем без отдельного блока, влезает
+    # в будущую карточку по наведению, и её легко окинуть взглядом при модерации.
+    # Полотно текста со ссылками на закрытом сайте курса пришлось бы читать целиком.
+    status = models.CharField("статус", max_length=STATUS_MAX, blank=True)
     birthday = models.DateField("дата рождения", null=True, blank=True)
     phone = models.CharField("телефон", max_length=30, blank=True)
     vk_page = models.CharField("VK (без https://vk.com/)", max_length=50, blank=True)

@@ -1,0 +1,19 @@
+{% load attachment_extras %}
+{% comment %}
+  Картинка вещи — одним куском на весь сайт: есть видео, рисуем <video>, нет — <img>.
+  Правило одно и живёт здесь, чтобы плитка, карточка товара и сама страница профиля
+  не разошлись в том, как показывают одну и ту же вещь.
+
+  Ждёт item и css (классы картинки). lazy — подставлять источник только когда плитка
+  попадёт в экран: Safari на телефоне держит считанные видеодекодеры разом, и десяток
+  автоплеев его уронит. Постер при этом виден сразу, ждать ничего не надо.
+
+  playsinline обязателен: без него iOS открывает видео на весь экран вместо фона.
+{% endcomment %}
+{% if item.video %}
+<video {% if lazy %}x-data="lazyVideo" data-src="{{ item.video|media }}"{% else %}src="{{ item.video|media }}" autoplay{% endif %}
+       poster="{{ item.image|media }}" muted loop playsinline preload="none"
+       class="{{ css }}"></video>
+{% else %}
+<img src="{{ item.image|media }}" alt="" loading="lazy" decoding="async" class="{{ css }}">
+{% endif %}

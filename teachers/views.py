@@ -148,6 +148,6 @@ def review_vote(request, pk, vote):
         mine.add(request.user)
         other.remove(request.user)
     # Награда автору, не голосующему. Снятый лайк её не отнимает — как и удалённый
-    # материал: sync только доначисляет, вниз пересчитывает лишь recount_tokens --reset.
+    # материал: sync только доначисляет, вниз пересчёта нет вовсе.
     rewards.sync(review.author)
     return review_card(request, pk)

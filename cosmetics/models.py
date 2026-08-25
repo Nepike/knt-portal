@@ -19,7 +19,9 @@ class CosmeticItem(models.Model):
     class Kind(models.TextChoices):
         AVATAR_FRAME = "avatar_frame", "рамка аватара"
         PROFILE_HEADER = "profile_header", "шапка профиля"
-        # TODO (M5): значок под именем — новому виду нужна и своя плитка (.slot-* в input.css)
+        PROFILE_BACKGROUND = "profile_background", "фон профиля"
+        # TODO (M5): значок под именем. Новому виду нужны своя плитка (.slot-* в input.css)
+        # и своя строка в cosmetics/specs.py — иначе загрузят что попало.
 
     class Rarity(models.TextChoices):
         """Ступени со старого сайта. Подписи там были матерные — смысл сохранён, слова нет."""
@@ -34,21 +36,41 @@ class CosmeticItem(models.Model):
     # «legendary» оказывался бы между «epic» и «mythical». Отсюда явный порядок.
     RARITY_ORDER = (Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY, Rarity.MYTHICAL)
 
+    # Цена по ступени. Проставлять её каждой из полусотни вещей руками незачем — редкость
+    # ровно про это и есть. Цифры от начислений: медиана заработанного 510, а 127 человек
+    # из 324 получат только стартовые 500, и им должно хватать на первую обычную вещь.
+    RARITY_PRICE = {
+        Rarity.COMMON: 250,
+        Rarity.RARE: 600,
+        Rarity.EPIC: 1200,
+        Rarity.LEGENDARY: 2500,
+        Rarity.MYTHICAL: 5000,
+    }
+
     name = models.CharField("название", max_length=100, unique=True)
     kind = models.CharField("вид", max_length=20, choices=Kind.choices, default=Kind.AVATAR_FRAME, db_index=True)
     rarity = models.CharField("редкость", max_length=20, choices=Rarity.choices, default=Rarity.COMMON, db_index=True)
     note = models.CharField("описание", max_length=200, blank=True)
 
-    # Анимация и один кадр из неё. Второй нужен спискам: в инвентаре предметов десятки,
-    # и сорок анимированных картинок разом — это мегабайты и подтормаживающая страница.
-    image = models.ImageField("анимация", upload_to=frame_upload_to, storage=media_storage)
-    still = models.ImageField("кадр", upload_to=frame_upload_to, storage=media_storage)
+    # `image` — «как вещь выглядит картинкой»: у рамки это сама APNG-анимация, у шапки
+    # и фона — постер. `video` необязателен и старше: есть он — рисуем <video>, нет — <img>.
+    #
+    # Видео только у непрозрачных вещей. Прозрачного, работающего везде, не существует:
+    # VP9 умеет альфу, но её не декодирует Safari; HEVC с альфой умеет только Safari.
+    # Ради картинки 224×224 это не окупается, поэтому рамки остаются APNG.
+    image = models.ImageField("картинка", upload_to=frame_upload_to, storage=media_storage)
+    video = models.FileField("видео", upload_to=frame_upload_to, storage=media_storage, blank=True)
 
     # Откуда вещь взялась: «legacy:14», «file:9f3c….png», «generated:Ночь». По нему
     # повторный импорт узнаёт уже перенесённое. По имени узнавать нельзя: половине рамок
     # имя придумываем мы сами — на втором заходе придумали бы другое и разложили дважды.
     source = models.CharField("источник", max_length=120, blank=True)
     created = models.DateTimeField("добавлена", default=timezone.now)
+
+    sold = models.BooleanField("продаётся", default=True)
+    price = models.PositiveIntegerField(
+        "своя цена", null=True, blank=True, help_text="пусто — по редкости",
+    )
 
     class Meta:
         verbose_name = "предмет"
@@ -64,6 +86,17 @@ class CosmeticItem(models.Model):
     def __str__(self):
         return f"{self.name} ({self.get_rarity_display()})"
 
+    @property
+    def cost(self):
+        """Сколько стоит. Неизвестная ступень — самая дорогая: ошибиться в сторону
+        «дорого» не страшно, в сторону «даром» — раздать полбакета."""
+        if self.price is not None:
+            return self.price
+        return self.RARITY_PRICE.get(self.rarity, self.RARITY_PRICE[self.Rarity.MYTHICAL])
+
+    def slot_title(self):
+        return slot_heading(self.kind)
+
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         # Вид продублирован в UserItem, и правка вида в админке обязана поехать следом,
@@ -73,12 +106,17 @@ class CosmeticItem(models.Model):
             self.owners.exclude(kind=self.kind).update(kind=self.kind, equipped=False)
 
 
-# Заголовок блока в инвентаре. Не get_kind_display: там название вещи в единственном
-# числе («рамка аватара»), а над блоком нужна множественная подпись.
 SLOT_TITLES = {
     CosmeticItem.Kind.AVATAR_FRAME: "Рамки аватара",
     CosmeticItem.Kind.PROFILE_HEADER: "Шапки профиля",
+    CosmeticItem.Kind.PROFILE_BACKGROUND: "Фоны профиля",
 }
+
+
+def slot_heading(kind):
+    """Подпись блока в инвентаре и в витрине. Не get_kind_display(): там название вещи
+    в единственном числе («рамка аватара»), а над блоком нужна множественная."""
+    return SLOT_TITLES.get(kind, "Прочее")
 
 
 class UserItem(models.Model):
@@ -110,8 +148,7 @@ class UserItem(models.Model):
         return f"{self.user}: {self.item}"
 
     def slot_title(self):
-        """Подпись блока, в который вещь попадёт в инвентаре."""
-        return SLOT_TITLES.get(self.kind, self.get_kind_display())
+        return slot_heading(self.kind)
 
     def save(self, *args, **kwargs):
         self.kind = self.item.kind  # предмет уже загружен везде, откуда сюда приходят
