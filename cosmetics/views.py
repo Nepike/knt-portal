@@ -25,12 +25,16 @@ def item_equip(request, pk):
 
 @require_POST
 def item_unequip(request):
-    """Снять надетое в слоте. Вид приходит из формы — слотов уже два."""
+    """Снять надетое в слоте. Вид приходит из формы — слотов уже три.
+
+    Неизвестный вид — значит, запрос пришёл не с нашей страницы: подставлять вместо него
+    рамку нельзя, человек снял бы не то. Молча уходим в профиль, как и session_end.
+    """
     kind = request.POST.get("kind")
     if kind not in CosmeticItem.Kind.values:
-        kind = CosmeticItem.Kind.AVATAR_FRAME
-    unequip(request.user, kind)
-    messages.success(request, "Снято")
+        return redirect("profile", pk=request.user.pk)
+    if unequip(request.user, kind):
+        messages.success(request, "Снято")
     return redirect("profile", pk=request.user.pk)
 
 
@@ -50,12 +54,21 @@ def shop(request):
     return render(request, "cosmetics/shop.html", {"items": items, "coins": coins})
 
 
+# Свой предпросмотр на каждый вид вещи: рамку и шапку надо видеть вблизи, а фон —
+# картой всей страницы, потому что он и кроется по всей странице. Один общий шаблон
+# обслуживал бы кого-то плохо. Новому виду — своя строка и свой файл в preview/.
+PREVIEWS = {
+    CosmeticItem.Kind.AVATAR_FRAME: "cosmetics/preview/card.html",
+    CosmeticItem.Kind.PROFILE_HEADER: "cosmetics/preview/card.html",
+    CosmeticItem.Kind.PROFILE_BACKGROUND: "cosmetics/preview/page.html",
+}
+
+
 def item_card(request, pk):
     """Карточка товара для окна магазина: предпросмотр, цена, кнопка.
 
-    Предпросмотр — это профиль целиком с надетой вещью: покупаемая занимает свой слот,
-    остальные показываем нынешние. Иначе человек не увидит, как покупка уживётся с тем,
-    что у него уже надето.
+    Покупаемая вещь занимает свой слот, остальные показываем нынешние. Иначе человек
+    не увидит, как покупка уживётся с тем, что у него уже надето.
     """
     item = get_object_or_404(CosmeticItem, pk=pk, sold=True)
     wallet = getattr(request.user, "wallet", None)
@@ -63,6 +76,7 @@ def item_card(request, pk):
     on = outfit(request.user)
     return render(request, "cosmetics/_offer.html", {
         "item": item,
+        "preview": PREVIEWS.get(item.kind, "cosmetics/preview/card.html"),
         "coins": coins,
         "owned": UserItem.objects.filter(user=request.user, item=item).exists(),
         "short": max(item.cost - coins, 0),

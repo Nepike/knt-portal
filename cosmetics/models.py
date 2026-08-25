@@ -54,12 +54,22 @@ class CosmeticItem(models.Model):
 
     # `image` — «как вещь выглядит картинкой»: у рамки это сама APNG-анимация, у шапки
     # и фона — постер. `video` необязателен и старше: есть он — рисуем <video>, нет — <img>.
+    # Оба поля у одной вещи, а не два предмета: постер виден в те доли секунды, пока
+    # видео не готово, и в витрине до подстановки источника. Поэтому постер обязан быть
+    # КАДРОМ ЭТОГО ЖЕ видео — от чужой картинки виден скачок (проверить это нечем,
+    # держится на команде из docs/media-pipeline.md).
     #
     # Видео только у непрозрачных вещей. Прозрачного, работающего везде, не существует:
     # VP9 умеет альфу, но её не декодирует Safari; HEVC с альфой умеет только Safari.
     # Ради картинки 224×224 это не окупается, поэтому рамки остаются APNG.
-    image = models.ImageField("картинка", upload_to=frame_upload_to, storage=media_storage)
-    video = models.FileField("видео", upload_to=frame_upload_to, storage=media_storage, blank=True)
+    image = models.ImageField(
+        "картинка", upload_to=frame_upload_to, storage=media_storage,
+        help_text="у анимированной вещи — первый кадр её видео",
+    )
+    video = models.FileField(
+        "видео", upload_to=frame_upload_to, storage=media_storage, blank=True,
+        help_text="mp4 по спеке, испечённый снаружи — сайт не конвертирует",
+    )
 
     # Откуда вещь взялась: «legacy:14», «file:9f3c….png», «generated:Ночь». По нему
     # повторный импорт узнаёт уже перенесённое. По имени узнавать нельзя: половине рамок
@@ -98,11 +108,14 @@ class CosmeticItem(models.Model):
         return slot_heading(self.kind)
 
     def save(self, *args, **kwargs):
+        # Новой вещи владельцев ещё нет, и запрос ниже ей незачем: `self.pk` после
+        # super().save() уже стоит всегда и отличить создание от правки не помог бы.
+        fresh = self._state.adding
         super().save(*args, **kwargs)
         # Вид продублирован в UserItem, и правка вида в админке обязана поехать следом,
         # иначе вещь останется в чужом блоке инвентаря и займёт не тот слот. Снимаем
         # заодно: в новом слоте у человека уже может быть надето своё.
-        if self.pk:
+        if not fresh:
             self.owners.exclude(kind=self.kind).update(kind=self.kind, equipped=False)
 
 

@@ -13,7 +13,7 @@
       {% if item.synopsis %}<p class="text-sm text-slate-500 dark:text-slate-400 line-clamp-2">{{ item.synopsis }}</p>{% endif %}
       <p class="text-xs text-slate-400 mt-1">
         {{ item.subject.name }} · {{ item.year }}
-        · {% if item.uploader %}{{ item.uploader.name }} {{ item.uploader.surname }}{% else %}аноним{% endif %}
+        · {% if item.uploader %}{{ item.uploader.full_name }}{% else %}аноним{% endif %}
         · {{ item.created|date:"j E, H:i" }}
         · {{ item.files.count }} {{ item.files.count|plural:"файл,файла,файлов" }}
       </p>

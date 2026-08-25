@@ -315,6 +315,13 @@ def material_edit(request, pk=None):
             form.save_m2m()
             sync_files(request, material)
             sync_images(request, material)
+            # Модератор, публикуя своё новое или отклонённое, идёт МИМО material_review,
+            # где награда и дописывается. Без этого вызова токены за работу ждали бы
+            # следующего входа в систему — и человек решал бы, что их не дали вовсе.
+            if material.is_published:
+                rewards.sync(material.uploader)
+                if request.user != material.uploader:
+                    rewards.sync(request.user)  # ему — за разобранную чужую работу
 
             if material.is_pending and not moderator:
                 notify(MODERATION, "telegram/material_pending.html", {

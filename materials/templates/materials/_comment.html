@@ -18,7 +18,7 @@
     <a href="{% url 'profile' c.author_id %}">{% include "core/_avatar.html" with person=c.author box="w-9 h-9 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-xs" only %}</a>
     <div class="min-w-0 flex-1">
       <p class="font-medium text-sm leading-tight">
-        <a href="{% url 'profile' c.author_id %}" class="hover:text-accent transition-colors">{{ c.author.name }} {{ c.author.surname }}</a>
+        <a href="{% url 'profile' c.author_id %}" class="hover:text-accent transition-colors">{{ c.author.full_name }}</a>
       </p>
       {% if c.author.team %}<p class="text-xs text-slate-400 mt-0.5">{{ c.author.team.get_grade_str }}</p>{% endif %}
     </div>
@@ -33,7 +33,7 @@
   {% if c.addressee %}
   <a href="#comment-{{ c.addressee.pk }}" class="inline-flex items-center gap-1 mt-2 text-sm text-accent hover:underline">
     <i class="fa-solid fa-reply text-xs"></i>
-    {% if c.addressee.hide_author %}Аноним{% else %}{{ c.addressee.author.name }} {{ c.addressee.author.surname }}{% endif %}
+    {% if c.addressee.hide_author %}Аноним{% else %}{{ c.addressee.author.full_name }}{% endif %}
   </a>
   {% endif %}
 

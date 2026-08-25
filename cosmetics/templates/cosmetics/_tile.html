@@ -2,17 +2,22 @@
   Плитка вещи — картинка на плашке своей редкости. Общая для инвентаря и магазина,
   поэтому кнопка и подпись остаются снаружи: нажатие у них разное.
 
-  Ждёт item; on — надето, тогда плитка заливается акцентом и в углу галочка.
+  Ждёт item; on — надето: галочка в углу и ярлык, выходящий из нижнего края плашки.
+  Оба цветом своей ступени — это два знака одного состояния, разные цвета были бы шумом.
+
+  Обёртка не лишняя: плашка обрезает всё, что вылезает за её края (иначе блик мифической
+  разъезжался бы по странице), и внутри неё ярлык не смог бы выйти наружу. Класс ступени
+  стоит на обоих: на плашке он красит её саму, на обёртке — объявляет цвет для ярлыка.
 
   Анимации тяжёлые (все рамки вместе — 34.7 МБ), но подменять их обложкой нельзя:
   ассортимент смотрят глазами, а на телефоне наведения нет вовсе. Спасает `loading=lazy`
   у картинок и подстановка по видимости у видео (см. cosmetics/_art.html), плюс вечный
   кеш: ключи в хранилище не переиспользуются, второй раз вещь не скачивается.
 {% endcomment %}
-<span class="rarity rarity-{{ item.rarity }}{% if on %} rarity-on{% endif %}">
-  {% include "cosmetics/_art.html" with item=item lazy=True css="w-full transition-transform duration-200 group-hover:scale-105" only %}
-  {% if on %}
-  <span class="absolute z-10 top-1 right-1 w-5 h-5 rounded-full bg-accent text-white dark:text-slate-950 text-[10px] flex items-center justify-center shadow"
-        title="Надета"><i class="fa-solid fa-check"></i></span>
-  {% endif %}
+<span class="rarity-slot rarity-{{ item.rarity }}">
+  <span class="rarity rarity-{{ item.rarity }}">
+    {% include "cosmetics/_art.html" with item=item lazy=True css="w-full transition-transform duration-200 group-hover:scale-105" only %}
+    {% if on %}<span class="rarity-check" aria-hidden="true"><i class="fa-solid fa-check"></i></span>{% endif %}
+  </span>
+  {% if on %}<span class="rarity-tag">надето</span>{% endif %}
 </span>

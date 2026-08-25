@@ -3,6 +3,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import mkdtemp
 
+from django.contrib.admin import site
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
@@ -17,10 +18,12 @@ from economy.services import NotEnoughFunds, credit, wallet_of
 from users.models import User
 
 from . import mp4, specs
+from .admin import CosmeticItemAdmin
 from .forms import CosmeticItemForm
 from .models import CosmeticItem, UserItem
 from .services import NotOwned, equip, grant, inventory, outfit, unequip, worn
 from .shop import AlreadyOwned, NotForSale, buy, on_sale
+from .views import PREVIEWS
 
 MANUAL = BalanceLog.Reason.MANUAL
 
@@ -612,6 +615,19 @@ class OfferTests(TestCase):
 
         self.assertEqual(self.card(self.frame).status_code, 404)
 
+    def test_each_kind_gets_its_own_preview(self):
+        """Рамку и шапку надо видеть вблизи, фон — картой всей страницы. Один общий
+        предпросмотр обслуживал бы кого-то плохо."""
+        background = make_frame("Бездна", R.COMMON, CosmeticItem.Kind.PROFILE_BACKGROUND)
+
+        self.assertTemplateUsed(self.card(self.frame), "cosmetics/preview/card.html")
+        self.assertTemplateUsed(self.card(self.header), "cosmetics/preview/card.html")
+        self.assertTemplateUsed(self.card(background), "cosmetics/preview/page.html")
+
+    def test_every_kind_on_sale_has_a_preview_of_its_own(self):
+        """Новый вид вещи без своей строки в PREVIEWS молча уехал бы в чужой шаблон."""
+        self.assertEqual(set(PREVIEWS), set(CosmeticItem.Kind.values))
+
 
 class ImportTests(TestCase):
     """Перенос рамок: чтение файлов и превращение APNG в лёгкую пару «анимация + обложка»."""
@@ -653,3 +669,105 @@ class ImportTests(TestCase):
         self.run_it("--apply")
 
         self.assertEqual(CosmeticItem.objects.count(), 1)
+
+
+class AdminFormTests(TestCase):
+    """Админка — единственная дверь для анимированных вещей: витрину и профиль они
+    получают уже принятыми. Дверь эта была закрыта — поля `video` в наборе не было."""
+
+    def test_the_video_field_is_reachable(self):
+        self.assertIn("video", CosmeticItemAdmin(CosmeticItem, site).get_fields(None))
+
+    def test_a_replaced_file_does_not_stay_in_the_bucket(self):
+        """Блоб снимается вместе с записью (post_delete в attachments/storage.py),
+        но при ЗАМЕНЕ ссылка на прежний пропадала, а сам он оставался сиротой."""
+        item = make_frame("Замена")
+        was = item.image.name
+
+        form = CosmeticItemForm(
+            {"name": "Замена", "kind": CosmeticItem.Kind.AVATAR_FRAME, "rarity": R.COMMON, "sold": True},
+            {"image": _png((224, 224))},
+            instance=CosmeticItem.objects.get(pk=item.pk),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertFalse(item.image.storage.exists(was))
+        self.assertTrue(CosmeticItem.objects.get(pk=item.pk).image.storage.exists(
+            CosmeticItem.objects.get(pk=item.pk).image.name))
+
+    def test_an_untouched_file_survives_an_edit(self):
+        item = make_frame("Тихая")
+        was = item.image.name
+
+        form = CosmeticItemForm(
+            {"name": "Новое имя", "kind": CosmeticItem.Kind.AVATAR_FRAME, "rarity": R.COMMON, "sold": True},
+            instance=CosmeticItem.objects.get(pk=item.pk),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertTrue(item.image.storage.exists(was))
+
+    def test_a_cleared_video_does_not_stay_in_the_bucket(self):
+        item = make_frame("Была живой", R.RARE, CosmeticItem.Kind.PROFILE_BACKGROUND)
+        item.video.save("fon.mp4", make_mp4(), save=True)
+        was = item.video.name
+
+        form = CosmeticItemForm(
+            {"name": "Была живой", "kind": CosmeticItem.Kind.PROFILE_BACKGROUND,
+             "rarity": R.RARE, "sold": True, "video-clear": "on"},
+            instance=CosmeticItem.objects.get(pk=item.pk),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertFalse(item.video.storage.exists(was))
+
+
+class UnequipTests(TestCase):
+    def setUp(self):
+        self.user = make_user()
+        self.client.force_login(self.user)
+
+    def test_a_bogus_slot_takes_nothing_off(self):
+        """Подставлять вместо неизвестного вида рамку нельзя: человек снял бы не то."""
+        item = make_frame("Пламя")
+        equip(self.user, grant(self.user, item).item)
+
+        self.client.post(reverse("item_unequip"), {"kind": "кто-то подставил"})
+
+        self.assertEqual(worn(self.user), item)
+
+    def test_taking_off_an_empty_slot_does_not_claim_it_did_something(self):
+        response = self.client.post(reverse("item_unequip"), {"kind": CosmeticItem.Kind.PROFILE_HEADER}, follow=True)
+
+        self.assertNotIn("Снято", [str(m) for m in response.context["messages"]])
+
+
+class TileTests(TestCase):
+    """Надетое видно ярлыком по низу плитки — цветом своей ступени. Ни кольца (спорило
+    с рамкой ступени), ни заливки (глушила саму вещь)."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.client.force_login(self.user)
+
+    def test_the_worn_thing_carries_a_tag_and_a_check_and_the_rest_do_not(self):
+        on = make_frame("Надетая", R.EPIC)
+        off = make_frame("Лежит", R.EPIC)
+        equip(self.user, grant(self.user, on).item)
+        grant(self.user, off)
+
+        page = self.client.get(reverse("profile", args=[self.user.pk])).content.decode()
+
+        self.assertEqual(page.count("rarity-tag"), 1)
+        self.assertEqual(page.count("rarity-check"), 1)
+        self.assertNotIn("rarity-on", page)  # прежняя заливка убрана целиком
+
+    def test_an_empty_inventory_points_at_the_shop(self):
+        """Единственное место, откуда человеку и правда некуда деться, кроме магазина."""
+        page = self.client.get(reverse("profile", args=[self.user.pk])).content.decode()
+
+        self.assertIn(reverse("shop"), page)
+        self.assertIn("В магазин", page)

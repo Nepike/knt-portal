@@ -1,7 +1,7 @@
 {% extends "core/base.html" %}
 {% load chat_extras %}
 
-{% block title %}{% if chat %}{% if other %}{{ other.name }} {{ other.surname }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
+{% block title %}{% if chat %}{% if other %}{{ other.full_name }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
 
 {# Мессенджер ровно на экран: скроллится лента, не страница. На мобиле — без полей и подвала #}
 {% block wrapper_class %}h-dvh{% endblock %}
@@ -31,7 +31,7 @@
       <a href="{% url 'chat_list' %}" class="lg:hidden text-slate-400 hover:text-accent" aria-label="К списку"><i class="fa-solid fa-arrow-left"></i></a>
       {% if chat.kind == "dm" and other %}
       <a href="{% url 'profile' other.pk %}" class="min-w-0 hover:opacity-80 transition-opacity">
-        <p class="font-semibold text-sm truncate">{{ other.name }} {{ other.surname }}</p>
+        <p class="font-semibold text-sm truncate">{{ other.full_name }}</p>
         <p class="text-xs text-slate-400">{{ other.team.get_grade_str|default:"личные сообщения" }}</p>
       </a>
       {% else %}
@@ -178,13 +178,13 @@
           <a href="{% url 'profile' ms.user_id %}" class="flex items-center gap-3 min-w-0 flex-1">
             {% include "core/_avatar.html" with person=ms.user box="w-10 h-10 rounded-[22%]" text="text-sm" only %}
             <span class="min-w-0 flex-1">
-              <span class="block text-sm font-medium truncate">{{ ms.user.name }} {{ ms.user.surname }}{% if ms.user_id == user.pk %} <span class="text-xs font-normal text-slate-400">(вы)</span>{% endif %}</span>
+              <span class="block text-sm font-medium truncate">{{ ms.user.full_name }}{% if ms.user_id == user.pk %} <span class="text-xs font-normal text-slate-400">(вы)</span>{% endif %}</span>
               {% if ms.user.team %}<span class="block text-xs text-slate-400">{{ ms.user.team.get_grade_str }}</span>{% endif %}
             </span>
           </a>
           {% if ms.is_admin %}<span class="text-xs text-accent shrink-0">{% if chat.kind == "course" %}куратор{% else %}админ{% endif %}</span>{% endif %}
           {% if chat.kind == "group" and membership.is_admin and ms.user_id != user.pk %}
-          <form method="post" action="{% url 'chat_remove_member' chat.pk ms.user_id %}" onsubmit="return confirm('Исключить {{ ms.user.name }} {{ ms.user.surname }}?')">
+          <form method="post" action="{% url 'chat_remove_member' chat.pk ms.user_id %}" onsubmit="return confirm('Исключить {{ ms.user.full_name }}?')">
             {% csrf_token %}
             <button type="submit" class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-500" aria-label="Исключить"><i class="fa-solid fa-xmark"></i></button>
           </form>

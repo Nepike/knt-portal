@@ -131,6 +131,12 @@ def book_edit(request, pk=None):
             book.save()
             form.save_m2m()
             sync_files(request, book)
+            # Модератор, публикуя своё новое или отклонённое, идёт МИМО book_review,
+            # где награда и дописывается (то же было и у материалов).
+            if book.is_published:
+                rewards.sync(book.uploader)
+                if request.user != book.uploader:
+                    rewards.sync(request.user)
 
             # Своими же правками модерацию не дёргаем: книга и так лежит в её очереди.
             if book.is_pending and not moderator:

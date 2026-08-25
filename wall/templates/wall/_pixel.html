@@ -1,5 +1,5 @@
 <div data-mine="{{ mine|yesno:'1,0' }}" data-owner="{{ owner.pk|default:'' }}"
-     data-owner-name="{% if owner %}{{ owner.name }} {{ owner.surname }}{% endif %}" class="space-y-3">
+     data-owner-name="{% if owner %}{{ owner.full_name }}{% endif %}" class="space-y-3">
   <p class="text-sm text-slate-400">Клетка {{ x }}, {{ y }}</p>
 
   {% for event in events %}
@@ -8,7 +8,7 @@
           style="background: {{ event.shade.hex }}"></span>
     <div class="min-w-0 flex-1 truncate">
       {% if event.user %}
-        <a href="{% url 'profile' event.user.pk %}" class="font-medium hover:text-accent">{{ event.user.name }} {{ event.user.surname }}</a>
+        <a href="{% url 'profile' event.user.pk %}" class="font-medium hover:text-accent">{{ event.user.full_name }}</a>
       {% else %}
         <span class="text-slate-400">кто-то, кого уже нет</span>
       {% endif %}

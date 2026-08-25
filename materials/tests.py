@@ -634,3 +634,65 @@ class CommentTests(TestCase):
         body = self.client.get(self.material.get_absolute_url()).content.decode()
         self.assertIn("Аноним", body)
         self.assertNotIn("Иванов", body.split("Обсуждение")[1])
+
+
+class SelfPublishRewardTests(TestCase):
+    """Модератор, публикуя работу своей же правкой, идёт МИМО material_review — там
+    награда и дописывалась. Токенов не было до следующего входа в систему, и человек
+    решал, что их не дали вовсе."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.moderator = make_user("m@t.local")
+        cls.moderator.user_permissions.add(
+            Permission.objects.get(codename="change_material", content_type__app_label="materials")
+        )
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+
+    def paid(self, user):
+        from economy.models import BalanceLog
+
+        return sum(
+            BalanceLog.objects.filter(
+                wallet__user=user, reason=BalanceLog.Reason.MATERIAL,
+            ).values_list("amount", flat=True)
+        )
+
+    def test_a_moderator_is_paid_for_a_material_published_right_away(self):
+        from economy import rewards
+
+        self.client.force_login(self.moderator)
+
+        self.client.post(reverse("material_new"), {
+            "title": "Механика", "subject": self.subject.pk, "year": 2025, "text": "конспект",
+        })
+
+        self.assertTrue(Material.objects.get().is_published)
+        self.assertEqual(self.paid(self.moderator), rewards.MATERIAL)
+
+    def test_a_student_still_waits_for_the_decision(self):
+        student = make_user("s@t.local")
+        self.client.force_login(student)
+
+        with mock.patch("materials.views.notify"):
+            self.client.post(reverse("material_new"), {
+                "title": "Механика", "subject": self.subject.pk, "year": 2025, "text": "конспект",
+            })
+
+        self.assertTrue(Material.objects.get().is_pending)
+        self.assertEqual(self.paid(student), 0)
+
+    def test_editing_an_already_published_material_pays_nothing_twice(self):
+        from economy import rewards
+
+        self.client.force_login(self.moderator)
+        self.client.post(reverse("material_new"), {
+            "title": "Механика", "subject": self.subject.pk, "year": 2025, "text": "конспект",
+        })
+        material = Material.objects.get()
+
+        self.client.post(reverse("material_edit", args=[material.pk]), {
+            "title": "Механика и не только", "subject": self.subject.pk, "year": 2025, "text": "конспект",
+        })
+
+        self.assertEqual(self.paid(self.moderator), rewards.MATERIAL)

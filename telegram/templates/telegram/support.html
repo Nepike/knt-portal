@@ -9,4 +9,4 @@
 
 <blockquote>{{ text }}</blockquote>
 
-<b>От:</b> {% if author %}<a href="{{ profile_url }}">{{ author.name }} {{ author.surname }}</a>{% if author.tg_page %} · <a href="https://t.me/{{ author.tg_page|cut:"@" }}">телеграм</a>{% elif author.vk_page %} · <a href="https://vk.com/{{ author.vk_page }}">вконтакте</a>{% endif %}{% else %}гость · {{ contact }}{% endif %}
+<b>От:</b> {% if author %}<a href="{{ profile_url }}">{{ author.full_name }}</a>{% if author.tg_page %} · <a href="https://t.me/{{ author.tg_page|cut:"@" }}">телеграм</a>{% elif author.vk_page %} · <a href="https://vk.com/{{ author.vk_page }}">вконтакте</a>{% endif %}{% else %}гость · {{ contact }}{% endif %}

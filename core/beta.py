@@ -28,6 +28,7 @@ CLOSED = {
     "session_end",
     "item_equip",
     "item_unequip",
+    "wallet",
     # Магазин — та же геймификация: покупать, не видя купленного в профиле, нечего.
     "shop",
     "item_card",

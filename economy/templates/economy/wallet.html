@@ -1,0 +1,28 @@
+{% extends "core/base.html" %}
+{% load economy_extras text_extras %}
+
+{% block title %}История кошелька{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-3xl mx-auto flex flex-col gap-4">
+
+  <section class="panel p-5">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <h1 class="text-xl font-bold">История кошелька</h1>
+      <a href="{% url 'profile' request.user.pk %}" class="ml-auto text-sm text-accent hover:underline">
+        <i class="fa-solid fa-arrow-left text-xs"></i> В профиль
+      </a>
+    </div>
+    <p class="text-3xl font-bold text-accent tabular-nums mt-3">{% coins request.user %} <i class="fa-solid fa-cent-sign text-2xl"></i></p>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mt-2">
+      {{ page.paginator.count }} {{ page.paginator.count|plural:"операция,операции,операций" }} · видно только вам
+    </p>
+  </section>
+
+  <section class="panel p-5">
+    <ul class="flex flex-col divide-y divide-slate-100 dark:divide-slate-800">
+      {% include "economy/_entries.html" %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

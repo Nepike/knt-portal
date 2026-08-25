@@ -317,15 +317,103 @@ class RewardTests(TestCase):
 
         self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE)
 
+    def downloaded(self, *counts):
+        material = self.material()
+        for number, count in enumerate(counts):
+            File.objects.create(
+                material=material, name=f"f{number}", file=f"f{number}.pdf",
+                size=1, uploader=self.user, downloads=count,
+            )
+
     def test_downloads_are_capped_per_file(self):
         # Счётчик лежит на файле, кто скачал — нигде: без потолка накрутка окупалась бы.
         over = rewards.DOWNLOAD_CAP * rewards.DOWNLOADS_PER_COIN * 10
-        material = self.material()
-        File.objects.create(material=material, name="a", file="a.pdf", size=1, uploader=self.user, downloads=over)
-        File.objects.create(material=material, name="b", file="b.pdf", size=1, uploader=self.user, downloads=over)
+        self.downloaded(over, over)
         rewards.sync(self.user)
 
         self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_CAP * 2)
+
+    def test_downloads_of_different_files_add_up(self):
+        """Награда не на файл: иначе журнал зарастал столбиком «+1 скачивают
+        «Программа.pdf»» — 20562 строки на боевых данных."""
+        each = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN // 2  # по половине порции
+        self.downloaded(each, each)
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH)
+        self.assertEqual(BalanceLog.objects.filter(reason=BalanceLog.Reason.DOWNLOAD).count(), 1)
+
+    def rows(self, reason):
+        return list(
+            BalanceLog.objects.filter(wallet__user=self.user, reason=reason)
+            .order_by("id").values_list("key", "amount")
+        )
+
+    def test_every_batch_gets_its_own_line_of_exactly_one_batch(self):
+        """Строка журнала — запись о случившемся, она не должна расти. Ключ у порции
+        её номер, поэтому четыре полусотни это четыре строки по 50, а не одна на 200."""
+        step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        self.downloaded(step, step, step, step)  # ровно четыре порции
+
+        rewards.sync(self.user)
+
+        self.assertEqual(self.rows(BalanceLog.Reason.DOWNLOAD), [
+            ("1", rewards.DOWNLOAD_BATCH), ("2", rewards.DOWNLOAD_BATCH),
+            ("3", rewards.DOWNLOAD_BATCH), ("4", rewards.DOWNLOAD_BATCH),
+        ])
+
+    def test_an_already_written_line_never_changes(self):
+        """Даже если человек не заходил полгода и набежало сразу четыре порции —
+        прежние строки остаются как были, новые приписываются следом."""
+        step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        self.downloaded(step)
+        rewards.sync(self.user)
+        first = self.rows(BalanceLog.Reason.DOWNLOAD)
+
+        File.objects.filter(uploader=self.user).update(downloads=step)
+        self.downloaded(step, step, step)
+        rewards.sync(User.objects.get(pk=self.user.pk))
+
+        after = self.rows(BalanceLog.Reason.DOWNLOAD)
+        self.assertEqual(after[:1], first)  # первая строка не тронута
+        self.assertEqual(len(after), 4)
+        self.assertEqual({amount for _, amount in after}, {rewards.DOWNLOAD_BATCH})
+
+    def test_the_wall_pays_a_line_per_batch_too(self):
+        WallProfile.objects.create(user=self.user, painted=rewards.WALL_BATCH * 3)
+
+        rewards.sync(self.user)
+
+        self.assertEqual(self.rows(BalanceLog.Reason.WALL), [
+            ("1", rewards.WALL_BATCH), ("2", rewards.WALL_BATCH), ("3", rewards.WALL_BATCH),
+        ])
+
+    def test_downloads_pay_in_batches(self):
+        step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        self.downloaded(step - 5)  # порог не взят
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), 0)
+
+        File.objects.filter(uploader=self.user).update(downloads=step + 5)
+        rewards.sync(User.objects.get(pk=self.user.pk))
+
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH)
+
+    def test_the_remainder_is_not_lost_it_waits(self):
+        """Остаток ниже порога не пропадает: он копится и уходит следующей порцией.
+
+        Файлов тут два, потому что порция равна потолку на файл: одним больше 50 токенов
+        не заработать, и полторы порции набираются только вдвоём.
+        """
+        step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        self.downloaded(step, step // 2)  # порция с половиной
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH)
+
+        File.objects.filter(uploader=self.user, name="f1").update(downloads=step)
+        rewards.sync(User.objects.get(pk=self.user.pk))
+
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH * 2)
 
     def test_the_wall_pays_in_batches(self):
         profile = WallProfile.objects.create(user=self.user, painted=rewards.WALL_BATCH + 3)
@@ -405,3 +493,170 @@ class RecountCommandTests(TestCase):
         self.run_it("--apply")
 
         self.assertEqual(BalanceLog.objects.count(), 0)
+
+
+class WalletPageTests(TestCase):
+    """Полная история кошелька. Отдельная страница нужна была профилю: там влезает
+    десяток последних операций, а по журналу человек ищет конкретную."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.client.force_login(self.user)
+
+    def test_it_shows_the_journal(self):
+        credit(self.user, 50, BalanceLog.Reason.MATERIAL, note="Конспект по матанализу", key="1")
+
+        page = self.client.get(reverse("wallet")).content.decode()
+
+        self.assertIn("Конспект по матанализу", page)
+        self.assertIn("+50", page)
+
+    def test_it_does_not_show_anybody_elses(self):
+        stranger = make_user("other@t.local")
+        credit(stranger, 50, BalanceLog.Reason.MATERIAL, note="Чужая работа", key="1")
+
+        page = self.client.get(reverse("wallet")).content.decode()
+
+        self.assertNotIn("Чужая работа", page)
+
+    def test_an_empty_journal_is_not_an_error(self):
+        """Вход начисляет стартовые, поэтому пустой журнал наяву почти не встречается —
+        но страница обязана открываться и без него, а не падать на пустом списке."""
+        BalanceLog.objects.all().delete()
+
+        response = self.client.get(reverse("wallet"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Операций пока не было", response.content.decode())
+
+    def test_the_next_batch_arrives_without_the_page_around_it(self):
+        for number in range(60):
+            credit(self.user, 1, BalanceLog.Reason.MATERIAL, note=f"работа {number}", key=str(number))
+
+        page = self.client.get(reverse("wallet"), {"page": 2}, headers={"HX-Request": "true"}).content.decode()
+
+        self.assertIn("работа 0", page)  # самые старые — на второй странице
+        self.assertNotIn("<html", page)
+
+    def test_the_profile_links_to_it_and_stops_at_the_limit(self):
+        from users.views import RECENT
+
+        for number in range(RECENT + 2):
+            credit(self.user, 1, BalanceLog.Reason.MATERIAL, note=f"работа {number}", key=str(number))
+
+        page = self.client.get(reverse("profile", args=[self.user.pk])).content.decode()
+
+        self.assertEqual(page.count("работа "), RECENT)
+        self.assertIn(reverse("wallet"), page)
+
+    def test_short_history_does_not_pretend_there_is_more(self):
+        credit(self.user, 1, BalanceLog.Reason.MATERIAL, note="одна работа", key="1")
+
+        page = self.client.get(reverse("profile", args=[self.user.pk])).content.decode()
+
+        self.assertNotIn("Вся история …", page)
+
+
+class RegroupMigrationTests(TestCase):
+    """Миграция 0006: пофайловые строки «скачивают» пересобираются в строки-порции.
+
+    Без неё прежние ключи `download|<файл>` не зачлись бы против новых `download|1`,
+    `download|2`… и sync заплатил бы всем повторно — всю сумму целиком.
+    """
+
+    def run_migration(self):
+        """Зовём саму функцию миграции, а не гоняем migrate: проверять надо ровно то,
+        что поедет на бой, но на данных, заведённых в тесте."""
+        import importlib
+
+        from django.apps import apps
+
+        module = importlib.import_module("economy.migrations.0006_collapse_download_entries")
+        module.regroup(apps, None)
+
+    def journal(self, user):
+        return list(
+            BalanceLog.objects.filter(wallet__user=user).order_by("id")
+            .values_list("reason", "key", "amount", "balance_after")
+        )
+
+    def downloads(self, user):
+        return [(key, amount) for reason, key, amount, _ in self.journal(user) if reason == "download"]
+
+    def test_small_change_becomes_the_first_unfinished_batch(self):
+        """Двадцать токенов на три файла — это ещё не порция. Складываем их в первую,
+        и следующий пересчёт допишет её до полной полусотни, а не заплатит заново."""
+        user = make_user()
+        credit(user, 500, BalanceLog.Reason.WELCOME)
+        for number, amount in ((7, 3), (9, 11), (12, 6)):
+            credit(user, amount, BalanceLog.Reason.DOWNLOAD, note=f"скачивают «{number}»", key=str(number))
+        was = wallet_of(user).balance
+
+        self.run_migration()
+
+        self.assertEqual(self.downloads(user), [("1", 3 + 11 + 6)])
+        self.assertEqual(wallet_of(user).balance, was)  # баланс не тронут
+
+    def test_a_big_history_becomes_lines_of_one_batch_each(self):
+        user = make_user()
+        for number in range(6):  # шесть файлов по потолку = 300 токенов = шесть порций
+            credit(user, rewards.DOWNLOAD_CAP, BalanceLog.Reason.DOWNLOAD, key=str(number))
+
+        self.run_migration()
+
+        self.assertEqual(
+            self.downloads(user),
+            [(str(number), rewards.DOWNLOAD_BATCH) for number in range(1, 7)],
+        )
+
+    def test_lines_keep_their_place_in_the_ledger(self):
+        """Строки переписываются поверх старых, а не создаются заново: журнал идёт
+        по номеру строки, и новые уехали бы в конец, притворившись сегодняшними."""
+        user = make_user()
+        for number in range(4):
+            credit(user, rewards.DOWNLOAD_CAP, BalanceLog.Reason.DOWNLOAD, key=str(number))
+        credit(user, 50, BalanceLog.Reason.MATERIAL, key="1")  # операция ПОСЛЕ скачиваний
+        was = [row[0] for row in self.journal(user)]
+
+        self.run_migration()
+
+        self.assertEqual([row[0] for row in self.journal(user)], was)
+
+    def test_balance_after_stays_consistent_down_the_ledger(self):
+        user = make_user()
+        credit(user, 500, BalanceLog.Reason.WELCOME)
+        credit(user, 10, BalanceLog.Reason.DOWNLOAD, key="1")
+        credit(user, 50, BalanceLog.Reason.MATERIAL, key="1")  # строка МЕЖДУ скачиваниями
+        credit(user, 20, BalanceLog.Reason.DOWNLOAD, key="2")
+
+        self.run_migration()
+
+        running = 0
+        for _, _, amount, after in self.journal(user):
+            running += amount
+            self.assertEqual(after, running)
+
+    def test_nobody_is_paid_twice_afterwards(self):
+        user = make_user()
+        material = Material.objects.create(
+            title="Механика", year=2025, uploader=user, status=Material.Status.APPROVED,
+            subject=Subject.objects.create(name="Физика", dative="физике", accusative="физику"),
+        )
+        step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        for number in range(2):
+            File.objects.create(
+                material=material, name=f"f{number}", file=f"f{number}.pdf",
+                size=1, uploader=user, downloads=step,
+            )
+        # Как платил старый код: по строке на файл, по потолку на каждый.
+        for number in range(2):
+            credit(user, rewards.DOWNLOAD_CAP, BalanceLog.Reason.DOWNLOAD, key=str(number + 1))
+
+        self.run_migration()
+        rewards.sync(User.objects.get(pk=user.pk))  # заодно допишет стартовые и материал
+
+        # Скачивания второй раз не оплачены: сумма та же, что заплатил старый код.
+        self.assertEqual(
+            self.downloads(user),
+            [("1", rewards.DOWNLOAD_BATCH), ("2", rewards.DOWNLOAD_BATCH)],
+        )

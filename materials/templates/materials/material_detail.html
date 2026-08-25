@@ -81,7 +81,7 @@
 
     <p class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400">
       Добавил{% if material.hide_uploader or not material.uploader %} аноним{% else %}
-      <a href="{% url 'profile' material.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ material.uploader.name }} {{ material.uploader.surname }}</a>{% endif %}
+      <a href="{% url 'profile' material.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ material.uploader.full_name }}</a>{% endif %}
       · {{ material.created|date:"j E Y" }}
     </p>
   </article>

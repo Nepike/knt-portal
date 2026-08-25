@@ -13,12 +13,12 @@
 
   {# Набор атрибутов = набор прав: нет data-edit-url — нет пункта «Изменить» #}
   <div class="max-w-[75%] rounded-2xl px-3 py-1.5 {% if own %}bg-accent text-white dark:text-slate-950{% else %}bg-slate-100 dark:bg-slate-800{% endif %}"
-       {% if not m.deleted %}data-msg="{{ m.id }}" data-author="{{ m.author.name }} {{ m.author.surname }}"
+       {% if not m.deleted %}data-msg="{{ m.id }}" data-author="{{ m.author.full_name }}"
        data-preview="{{ m.text|truncatechars:60 }}" data-react-url="{% url 'message_react' m.pk %}"
        {% if own %}data-edit-url="{% url 'message_edit' m.pk %}" {% endif %}
        {% if own or is_chat_admin %}data-del-url="{% url 'message_delete' m.pk %}"{% endif %}{% endif %}>
     {% if not own and chat.kind != "dm" %}
-    <a href="{% url 'profile' m.author_id %}" class="text-xs font-semibold text-accent hover:underline">{{ m.author.name }} {{ m.author.surname }}</a>
+    <a href="{% url 'profile' m.author_id %}" class="text-xs font-semibold text-accent hover:underline">{{ m.author.full_name }}</a>
     {% endif %}
 
     {% if m.reply_to %}

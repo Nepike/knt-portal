@@ -14,7 +14,7 @@
 
   <div class="min-w-0 flex-1">
     <p class="font-medium text-sm truncate">
-      {% if item.other %}{{ item.other.name }} {{ item.other.surname }}{% else %}{{ item.chat.title }}{% endif %}
+      {% if item.other %}{{ item.other.full_name }}{% else %}{{ item.chat.title }}{% endif %}
     </p>
     <p class="text-xs text-slate-400 truncate">
       {% with last=item.chat.last_message %}

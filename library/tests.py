@@ -438,3 +438,48 @@ class BookEditTests(TestCase):
         self.create(self.author)
         book = Book.objects.get(title="Механика")
         self.assertEqual(self.client.get(reverse("book_delete", args=[book.pk])).status_code, 405)
+
+
+class SelfPublishRewardTests(TestCase):
+    """То же, что у материалов: модератор, публикуя книгу своей же правкой, идёт мимо
+    book_review, где награда и дописывалась."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = make_user("a@t.local")
+        cls.moderator = make_user("m@t.local")
+        cls.moderator.user_permissions.add(
+            Permission.objects.get(codename="change_book", content_type__app_label="library")
+        )
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+        cls.term = Term.objects.create(number=1)
+
+    def create(self, user):
+        self.client.force_login(user)
+        return self.client.post(reverse("book_new"), {
+            "title": "Механика", "authors": "Ландау Л. Д.", "year": "2004",
+            "subjects": [self.subject.pk], "terms": [self.term.pk], "files": [upload()],
+        })
+
+    def paid(self, user):
+        from economy.models import BalanceLog
+
+        return sum(
+            BalanceLog.objects.filter(
+                wallet__user=user, reason=BalanceLog.Reason.BOOK,
+            ).values_list("amount", flat=True)
+        )
+
+    def test_a_moderator_is_paid_for_a_book_published_right_away(self):
+        from economy import rewards
+
+        self.create(self.moderator)
+
+        self.assertTrue(Book.objects.get(title="Механика").is_published)
+        self.assertEqual(self.paid(self.moderator), rewards.BOOK)
+
+    def test_a_student_still_waits_for_the_decision(self):
+        self.create(self.author)
+
+        self.assertTrue(Book.objects.get(title="Механика").is_pending)
+        self.assertEqual(self.paid(self.author), 0)

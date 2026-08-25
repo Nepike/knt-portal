@@ -64,7 +64,7 @@
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-slate-400 dark:text-slate-500">
         <span class="inline-flex items-center gap-1.5">
           <i class="fa-solid fa-user"></i>
-          {% if material.hide_uploader or not material.uploader %}Аноним{% else %}{{ material.uploader.name }} {{ material.uploader.surname }}{% endif %}
+          {% if material.hide_uploader or not material.uploader %}Аноним{% else %}{{ material.uploader.full_name }}{% endif %}
         </span>
         {% if material.files_count %}
         <span class="inline-flex items-center gap-1.5">

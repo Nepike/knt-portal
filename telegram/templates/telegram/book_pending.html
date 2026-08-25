@@ -5,4 +5,4 @@
 {% endif %}{% if book.subjects.all %}<b>Предметы:</b> {% for subject in book.subjects.all %}{{ subject.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
 {% endif %}{% if book.terms.all %}<b>Семестры:</b> {% for term in book.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
 {% endif %}{% if book.year %}<b>Год:</b> {{ book.year }} · {% endif %}<b>Файлов:</b> {{ book.files.count }}
-<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if book.hide_uploader %} · на сайте анонимно{% endif %}
+<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.full_name }}{% if book.hide_uploader %} · на сайте анонимно{% endif %}

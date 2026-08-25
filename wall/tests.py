@@ -727,7 +727,7 @@ class ViewTests(TestCase):
     def test_the_pixel_card_names_the_author(self):
         put(self.user, self.board, 1, 1)
         response = self.card(1, 1)
-        self.assertContains(response, "Иван Иванов")
+        self.assertContains(response, "Иванов Иван")
         self.assertContains(response, "закрасил")
         self.assertContains(response, 'data-mine="1"')
 

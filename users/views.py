@@ -75,21 +75,28 @@ def _contributions(person, full):
     }
 
 
+RECENT = 7  # операций в кошельке на странице профиля, дальше — «вся история»
+
+
 def profile(request, pk):
-    # TODO (M5): фон профиля и значки — когда будет что рисовать
+    # TODO (M5): значки — когда будет что рисовать
     person = get_object_or_404(
         User.objects.select_related("team", "wallet"), pk=pk, is_active=True,
     )
     own = person.pk == request.user.pk
     wallet = getattr(person, "wallet", None)
     on = outfit(person)
+    # Берём на одну больше, чем покажем: так видно, есть ли что смотреть дальше,
+    # и это тот же запрос, а не второй ради count().
+    entries = list(wallet.entries.all()[: RECENT + 1]) if wallet and own else []
     return render(request, "users/profile.html", {
         "person": person,
         "own": own,
         "stats": _contributions(person, full=own),
         # История трат и список устройств — только свои: по ним видно и что человек
         # покупал, и откуда он заходит.
-        "entries": wallet.entries.all()[:6] if wallet and own else [],
+        "entries": entries[:RECENT],
+        "more": len(entries) > RECENT,
         "devices": _devices(request) if own else [],
         "worn": on.get(CosmeticItem.Kind.AVATAR_FRAME),
         "header": on.get(CosmeticItem.Kind.PROFILE_HEADER),

@@ -8,11 +8,14 @@
   попадёт в экран: Safari на телефоне держит считанные видеодекодеры разом, и десяток
   автоплеев его уронит. Постер при этом виден сразу, ждать ничего не надо.
 
+  Без lazy видео на странице одно и оно главное (фон, шапка) — preload=auto, чтобы
+  постер мелькнул как можно короче. С lazy наоборот: качать до попадания в экран нечего.
+
   playsinline обязателен: без него iOS открывает видео на весь экран вместо фона.
 {% endcomment %}
 {% if item.video %}
-<video {% if lazy %}x-data="lazyVideo" data-src="{{ item.video|media }}"{% else %}src="{{ item.video|media }}" autoplay{% endif %}
-       poster="{{ item.image|media }}" muted loop playsinline preload="none"
+<video {% if lazy %}x-data="lazyVideo" data-src="{{ item.video|media }}" preload="none"{% else %}src="{{ item.video|media }}" autoplay preload="auto"{% endif %}
+       poster="{{ item.image|media }}" muted loop playsinline
        class="{{ css }}"></video>
 {% else %}
 <img src="{{ item.image|media }}" alt="" loading="lazy" decoding="async" class="{{ css }}">

@@ -384,7 +384,7 @@ class SupportFormTests(TestCase):
         })
         self.assertIn("Добавьте тёмную тему", text)
         self.assertIn("https://knt-mipt.ru/users/1/", text)
-        self.assertIn("Иван Петров", text)
+        self.assertIn("Петров Иван", text)
         self.assertIn("https://t.me/ivan", text)
         # Почты в чате быть не должно, а страницы, с которой пришли, — тем более:
         # она попадала туда из referer и сбивала с толку.
@@ -398,7 +398,7 @@ class SupportFormTests(TestCase):
 
     def test_without_any_contacts_the_message_is_just_shorter(self):
         text = render_to_string("telegram/support.html", {"author": self.user, "topic": "Другое", "text": "?"})
-        self.assertIn("Иван Петров", text)
+        self.assertIn("Петров Иван", text)
         self.assertNotIn("t.me", text)
         self.assertNotIn("vk.com", text)
 

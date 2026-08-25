@@ -21,7 +21,7 @@
         выдать себя за другого. Поля этих в форме нет вовсе (users/forms.py).
       {% endcomment %}
       <div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 px-4 py-3">
-        <p class="font-medium text-sm">{{ user.name }} {{ user.surname }}{% if user.patronymic %} {{ user.patronymic }}{% endif %}</p>
+        <p class="font-medium text-sm">{{ user.full_name }}{% if user.patronymic %} {{ user.patronymic }}{% endif %}</p>
         {% if user.team %}<p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ user.team.get_grade_str }} · {{ user.team.number }}</p>{% endif %}
         {# break-words, а не break-all: почта — одно длинное слово, и рвать её посреди имени незачем, пока строка не переполнена #}
         <p class="text-sm text-slate-500 dark:text-slate-400 break-words">{{ user.email }}</p>

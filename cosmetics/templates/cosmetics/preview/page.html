@@ -1,0 +1,79 @@
+{% comment %}
+  Предпросмотр фона — уменьшенная КАРТА ВСЕЙ СТРАНИЦЫ, а не одна карточка профиля:
+  фон кроется по всей контентной области, и в тесной рамке вокруг карточки от него
+  была видна одна полоска. Внешняя коробка держит пропорции окна браузера, внутри
+  по центру идёт колонка контента — та же доля ширины (75%), что и на живой странице.
+
+  Все размеры внутри — доли от настоящих (768px колонки), отсюда и странные числа:
+  аватар 120px это 15.6% ширины колонки, наезд на шапку 48px — 6.25%. Иначе
+  предпросмотр показывал бы не то, что человек получит.
+
+  Рамке и шапке этот шаблон не достаётся: в таком масштабе их не разглядеть, у них
+  свой (preview/card.html). Выбор по виду вещи живёт в cosmetics/views.py.
+{% endcomment %}
+<div class="relative aspect-[3/2] rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800">
+  {% if background %}
+  <span class="absolute inset-0">{% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}</span>
+  {% endif %}
+
+  <div class="absolute inset-0 flex justify-center pt-[3%]">
+    {% comment %}
+      Отступы фиксированные: процентный gap в колоночном флексе считается от высоты, а она auto.
+      shrink-0 у блоков обязателен: высота коробки задана, и без него флекс сжимал карточку
+      профиля в ноль, лишь бы поместить остальное. Что не влезло — обрезается краем, ровно
+      как на живой странице обрезается сгибом экрана.
+    {% endcomment %}
+    <div class="w-[75%] flex flex-col gap-1.5 [&>*]:shrink-0">
+
+      {# Карточка профиля: шапка, аватар с рамкой, имя #}
+      <div class="rounded-lg overflow-hidden {% if background %}panel-glass{% else %}panel{% endif %}">
+        <div class="aspect-[6/1]">
+          {% if header %}
+          {% include "cosmetics/_art.html" with item=header css="w-full h-full object-cover" only %}
+          {% else %}
+          <div class="w-full h-full bg-brand-gradient opacity-20 dark:opacity-30"></div>
+          {% endif %}
+        </div>
+        <div class="px-[3%] pb-[3%]">
+          <div class="relative -mt-[6.25%] flex items-end gap-2">
+            {% if frame %}
+              {% include "core/_avatar.html" with person=request.user box="w-[15.6%] aspect-square" text="text-xs" worn=frame only %}
+            {% else %}
+              {% include "core/_avatar.html" with person=request.user box="w-[12.5%] aspect-square rounded-[22%]" text="text-xs" frame="p-0.5" only %}
+            {% endif %}
+            <div class="min-w-0 pb-[1%]">
+              <p class="text-xs font-bold leading-tight truncate">{{ request.user.full_name }}</p>
+              <p class="text-[9px] leading-tight text-slate-500 dark:text-slate-400">{% if request.user.team %}{{ request.user.team.get_grade_str }} · {{ request.user.team.number }}{% else %}Без группы{% endif %}</p>
+            </div>
+          </div>
+          <span class="block h-1.5 w-1/2 rounded-full bg-slate-300/70 dark:bg-slate-600/70 mt-[2.5%]"></span>
+        </div>
+      </div>
+
+      {# Ниже — «вклад» и «токены», как на живой странице: 1fr и узкая колонка справа #}
+      <div class="grid grid-cols-[minmax(0,1fr)_34%] gap-1.5">
+        <div class="rounded-lg p-[4%] flex flex-col gap-2 {% if background %}panel-glass{% else %}panel{% endif %}">
+          <span class="block h-1.5 w-1/3 rounded-full bg-slate-300/70 dark:bg-slate-600/70"></span>
+          <span class="block h-1.5 w-full rounded-full bg-slate-200/70 dark:bg-slate-700/70"></span>
+          <span class="block h-1.5 w-4/5 rounded-full bg-slate-200/70 dark:bg-slate-700/70"></span>
+          <span class="block h-1.5 w-2/3 rounded-full bg-slate-200/70 dark:bg-slate-700/70"></span>
+        </div>
+        <div class="rounded-lg p-[7%] flex flex-col gap-2 {% if background %}panel-glass{% else %}panel{% endif %}">
+          <span class="block h-2 w-2/3 rounded-full bg-accent/40"></span>
+          <span class="block h-1.5 w-full rounded-full bg-slate-200/70 dark:bg-slate-700/70"></span>
+          <span class="block h-1.5 w-3/4 rounded-full bg-slate-200/70 dark:bg-slate-700/70"></span>
+        </div>
+      </div>
+
+      {# И инвентарь: без него карта обрывалась на середине, а фон снизу пустовал #}
+      <div class="rounded-lg p-[2.5%] {% if background %}panel-glass{% else %}panel{% endif %}">
+        <span class="block h-1.5 w-1/4 rounded-full bg-slate-300/70 dark:bg-slate-600/70"></span>
+        <div class="grid grid-cols-6 gap-1.5 mt-2">
+          {% for _ in "123456" %}
+          <span class="block aspect-square rounded bg-slate-200/70 dark:bg-slate-700/70"></span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

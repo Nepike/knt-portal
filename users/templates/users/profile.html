@@ -1,20 +1,19 @@
 {% extends "core/base.html" %}
 {% load attachment_extras economy_extras %}
 
-{% block title %}{{ person.name }} {{ person.surname }}{% endblock %}
+{% block title %}{{ person.full_name }}{% endblock %}
 
 {% block page_background %}
 {% if background %}
 {% comment %}
   Фон кроет всю контентную область, кроме меню слева, и не уезжает при прокрутке.
-  Поверх — вуаль под цвет темы: в светлой тёмная картинка во всю ширину спорила бы
-  с остальной страницей, в тёмной хватает лёгкого притемнения ради читаемости.
-  Карточки под фоном становятся полупрозрачными (panel-glass): на телефоне колонка
-  занимает всю ширину, и без этого фона не было бы видно вовсе.
+  Картинку не трогаем ничем: вуаль пробовали и убрали — она превращала любой тёмный
+  фон в муть, а поднятая яркость выжигала цвета. Читаемость держат сами карточки:
+  под фоном они полупрозрачные (panel-glass), на телефоне колонка занимает всю
+  ширину, и без этого фона не было бы видно вовсе.
 {% endcomment %}
 <div class="fixed inset-0 lg:left-64 -z-10 pointer-events-none select-none">
   {% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}
-  <div class="veil"></div>
 </div>
 {% endif %}
 {% endblock %}
@@ -50,12 +49,10 @@
 
         <div class="w-full sm:w-auto sm:flex-1 min-w-0 pb-0.5">
           {# TODO (M5 profiles): значки-медальки строкой под именем #}
-          <h1 class="text-xl font-bold leading-tight break-words">{{ person.name }} {{ person.surname }}{% if person.patronymic %} {{ person.patronymic }}{% endif %}</h1>
+          <h1 class="text-xl font-bold leading-tight break-words">{{ person.formal_name }}</h1>
           <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {% if person.team %}{{ person.team.get_grade_str }} · {{ person.team.number }}{% else %}Без группы{% endif %}
           </p>
-          {# Пустой статус не показываем вовсе — «пользователь ничего не указал» это шум #}
-          {% if person.status %}<p class="text-sm mt-1 break-words">{{ person.status }}</p>{% endif %}
         </div>
 
         {% if own %}
@@ -64,6 +61,17 @@
         <a href="{% url 'dm_start' person.pk %}" class="btn btn-primary shrink-0"><i class="fa-solid fa-paper-plane"></i>Написать</a>
         {% endif %}
       </div>
+
+      {% comment %}
+        Статус ушёл из блока с именем ВНИЗ, и это не только про красоту: имя выровнено
+        по нижнему краю аватара, а тот заходит на шапку. Третья строка растила блок
+        вверх, и имя упиралось прямо в шапку — теперь между ними воздух.
+        Пустой не показываем вовсе: «пользователь ничего не указал» это шум. Кавычка
+        нужна, иначе строка читается как ещё одно поле, а не как слова человека о себе.
+      {% endcomment %}
+      {% if person.status %}
+      <p class="mt-4 text-sm break-words"><i class="fa-solid fa-quote-left text-[10px] text-slate-400 mr-1.5 align-[0.15em]"></i>{{ person.status }}</p>
+      {% endif %}
 
       <div class="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-sm">
         <a href="mailto:{{ person.email }}" class="hover:text-accent transition-colors break-all"><i class="fa-solid fa-envelope text-slate-400 mr-1.5"></i>{{ person.email }}</a>
@@ -76,7 +84,8 @@
     </div>
   </section>
 
-  <div class="grid gap-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_260px]">
+  {# Колонка кошелька шире, чем нужно цифре: в ней живут длинные подписи операций #}
+  <div class="grid gap-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem]">
 
     {# ===== Вклад в сайт ===== #}
     <section class="panel{% if background %} panel-glass{% endif %} p-5">
@@ -113,15 +122,27 @@
 
       {% if own %}
         {% if entries %}
-        <ul class="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-sm">
+        {% comment %}
+          Последние операции, а не вся история: полная живёт на своей странице.
+          Подпись переносится, но не больше двух строк: из «лайки на отзыве о…» без
+          хвоста не понять, за что заплатили, а материал с названием в двести знаков
+          растягивал карточку на пол-экрана. Дальше — троеточие, целиком видно в истории.
+          break-words обязателен: без него одно длинное слово без пробелов (а такие
+          названия бывают) вылезало из колонки боком.
+        {% endcomment %}
+        <p class="text-xs text-slate-400 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">Последние операции</p>
+        <ul class="flex flex-col gap-2 mt-2 text-sm">
           {% for entry in entries %}
           <li class="flex items-baseline gap-2">
             <span class="font-medium tabular-nums shrink-0 {% if entry.amount > 0 %}text-emerald-500{% else %}text-slate-400{% endif %}">{{ entry.amount|stringformat:"+d" }}</span>
-            <span class="min-w-0 flex-1 truncate text-slate-500 dark:text-slate-400">{{ entry.note|default:entry.get_reason_display }}</span>
+            <span class="min-w-0 flex-1 line-clamp-2 break-words text-slate-500 dark:text-slate-400">{{ entry.note|default:entry.get_reason_display }}</span>
             <span class="shrink-0 text-xs text-slate-400">{{ entry.created|date:"j M" }}</span>
           </li>
           {% endfor %}
         </ul>
+        <a href="{% url 'wallet' %}" class="inline-block mt-3 text-sm text-accent hover:underline">
+          Вся история{% if more %} …{% endif %} <i class="fa-solid fa-arrow-right text-xs"></i>
+        </a>
         {% else %}
         <p class="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-sm text-slate-400">Операций пока не было.</p>
         {% endif %}
@@ -153,13 +174,18 @@
         <button type="submit" title="{{ own_item.item.name }}" class="group block text-left">
           {% include "cosmetics/_tile.html" with item=own_item.item on=own_item.equipped only %}
           {# Состояние живёт ВНУТРИ плитки: лишняя строка под одной из них ломала ряд #}
-          <span class="block mt-1.5 text-[11px] leading-tight truncate {% if own_item.equipped %}text-accent font-medium{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ own_item.item.name }}</span>
+          {# mt-2.5, а не поменьше: из нижнего края плашки выходит ярлык «надето» #}
+          <span class="block mt-2.5 text-[11px] leading-tight truncate {% if own_item.equipped %}text-accent font-medium{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ own_item.item.name }}</span>
         </button>
       </form>
       {% endfor %}
     </div>
     {% empty %}
-    <p class="text-sm text-slate-400">Пусто. Рамки появятся в магазине — он на подходе.</p>
+    {# Кнопкой, а не ссылкой в тексте: отсюда человеку и правда некуда деться, кроме магазина #}
+    <div class="text-center py-6">
+      <p class="text-sm text-slate-400">Пусто. Рамки аватара, шапки и фоны профиля покупаются за токены.</p>
+      <a href="{% url 'shop' %}" class="btn btn-primary mt-3"><i class="fa-solid fa-basket-shopping"></i>В магазин</a>
+    </div>
     {% endfor %}
   </section>
   {% endif %}

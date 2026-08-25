@@ -81,8 +81,23 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name_plural = "пользователи"
         ordering = ["id"]
 
+    @property
+    def full_name(self):
+        """Как человека называют на сайте: сперва фамилия.
+
+        Свойством, а не парой полей в каждом шаблоне: подпись стоит под каждым
+        материалом, отзывом и сообщением, и раньше порядок жил в двух десятках мест —
+        поменять его разом было нельзя, а разъехаться легко.
+        """
+        return f"{self.surname} {self.name}"
+
+    @property
+    def formal_name(self):
+        """Фамилия Имя Отчество — для страницы профиля, где отчество и уместно."""
+        return f"{self.full_name} {self.patronymic}".strip()
+
     def __str__(self):
-        return f"{self.name} {self.surname} ({self.email})"
+        return f"{self.full_name} ({self.email})"
 
 
 class UserSession(models.Model):

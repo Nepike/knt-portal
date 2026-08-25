@@ -1,0 +1,45 @@
+{% comment %}
+  Предпросмотр рамки и шапки — карточка профиля в натуральную величину.
+
+  Уменьшать её тут нельзя: сама вещь и есть товар, разглядывать её надо вблизи.
+  У фона наоборот — он кроется по всей странице, и ему нужна карта целиком
+  (preview/page.html). Выбор шаблона по виду вещи живёт в cosmetics/views.py.
+
+  Классы те же, что на живой странице (h-24 шапка, пара 120/96 у аватара, наезд
+  -mt-12) — поэтому предпросмотр не может разойтись с тем, что человек получит.
+
+  Фон под карточкой — НЫНЕШНИЙ надетый: видно, как покупка уживётся с уже надетым.
+{% endcomment %}
+<div class="relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 p-4">
+  {% if background %}
+  <span class="absolute inset-0">{% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}</span>
+  {% endif %}
+
+  <div class="relative rounded-xl overflow-hidden {% if background %}panel-glass{% else %}panel{% endif %}">
+    <div class="h-24">
+      {% if header %}
+      {% include "cosmetics/_art.html" with item=header css="w-full h-full object-cover" only %}
+      {% else %}
+      <div class="w-full h-full bg-brand-gradient opacity-20 dark:opacity-30"></div>
+      {% endif %}
+    </div>
+    <div class="px-4 pb-4">
+      <div class="relative -mt-12 flex items-end gap-3">
+        {% if frame %}
+          {% include "core/_avatar.html" with person=request.user box="w-30 h-30" text="text-3xl" worn=frame only %}
+        {% else %}
+          {% include "core/_avatar.html" with person=request.user box="w-24 h-24 rounded-[22%]" text="text-3xl" frame="p-1" only %}
+        {% endif %}
+        <div class="min-w-0 pb-1">
+          <p class="font-bold leading-tight truncate">{{ request.user.full_name }}</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">{% if request.user.team %}{{ request.user.team.get_grade_str }} · {{ request.user.team.number }}{% else %}Без группы{% endif %}</p>
+        </div>
+      </div>
+      {# Серые полосы вместо содержимого: это макет страницы, а не сама страница #}
+      <div class="flex flex-col gap-2 mt-4">
+        <span class="block h-2.5 w-2/3 rounded-full bg-slate-200 dark:bg-slate-700"></span>
+        <span class="block h-2.5 w-1/2 rounded-full bg-slate-200 dark:bg-slate-700"></span>
+      </div>
+    </div>
+  </div>
+</div>

@@ -188,22 +188,6 @@ html { color-scheme: light; }
   .panel { @apply rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900; }
   .panel-glass { @apply bg-white/75 dark:bg-slate-900/75 backdrop-blur-md border-white/70 dark:border-white/10; }
 
-  /* Вуаль поверх косметического фона.
-
-     В тёмной теме достаточно притемнить: картинка и так в своей среде. В светлой
-     белая пелена превращала любой тёмный фон в серую муть — узнать в нём горы или
-     небо было нельзя. Поэтому здесь не заливка, а подъём яркости с насыщением:
-     картинка светлеет до уровня страницы, но остаётся картинкой. */
-  .veil {
-    @apply absolute inset-0;
-    background: color-mix(in oklab, var(--color-slate-50) 20%, transparent);
-    backdrop-filter: brightness(1.9) saturate(1.35);
-  }
-  .dark .veil {
-    background: color-mix(in oklab, var(--color-slate-950) 55%, transparent);
-    backdrop-filter: none;
-  }
-
   /* Плитка косметики: картинка на плашке своей ступени. Одна на инвентарь и магазин.
      Цвет ступени приезжает одной переменной, всё остальное считается от неё — новая
      ступень это две строки, а не пять правил в четырёх шаблонах.
@@ -214,23 +198,44 @@ html { color-scheme: light; }
     --rarity: var(--color-slate-400);
     --glow: 0%;  /* свечение внутри плашки */
     --halo: 0%;  /* ореол вокруг неё */
-    --on: transparent;  /* заливка «надето», слоем поверх плашки */
-    --plate-top: #fff;
+    --plate-top: var(--color-white);
     --plate-bottom: var(--color-slate-400);
     @apply relative block rounded-xl border-2 p-1.5 overflow-hidden;
-    @apply transition duration-200 group-hover:-translate-y-0.5;
     border-color: color-mix(in oklab, var(--rarity) 75%, transparent);
     background-image:
-      linear-gradient(0deg, var(--on), var(--on)),
       radial-gradient(120% 78% at 50% 118%, color-mix(in oklab, var(--rarity) var(--glow), transparent), transparent 70%),
       linear-gradient(165deg, var(--plate-top), var(--plate-bottom));
     box-shadow: 0 0 14px -3px color-mix(in oklab, var(--rarity) var(--halo), transparent);
   }
 
-  /* Надетая вещь. Заливкой, а не вторым кольцом: кольцо спорило с рамкой ступени,
-     и на плитке оказывалось две границы разного смысла. Переменной, чтобы не
-     переписывать весь background-image ради одного слоя. */
-  .rarity-on { --on: color-mix(in oklab, var(--color-accent) 14%, transparent); }
+  /* Обёртка плитки. Нужна ради ярлыка «надето»: он выходит за нижний край плашки, а та
+     обрезает всё лишнее (иначе блик мифической разъезжался бы по странице). Подъём при
+     наведении переехал сюда же — иначе плитка поднималась бы, а ярлык оставался внизу. */
+  .rarity-slot { @apply relative block transition duration-200 group-hover:-translate-y-0.5; }
+
+  /* Ярлык «надето» — язычок, выходящий из нижнего края плашки, цветом своей ступени.
+     Ни кольца, ни заливки: кольцо спорило с рамкой ступени (две границы разного
+     смысла), а заливка глушила саму вещь. Ярлык же читается словом и не трогает картинку.
+
+     Чернила — та же ступень, затемнённая до почти чёрного: белый текст пропадал бы
+     на легендарной (amber-400), а тёмный держит контраст на всех пяти цветах. */
+  .rarity-tag {
+    @apply absolute z-10 left-1/2 bottom-0 -translate-x-1/2 translate-y-1/3;
+    @apply px-2 py-0.5 rounded shadow-sm;
+    @apply text-[9px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap;
+    background: var(--rarity);
+    color: color-mix(in oklab, var(--rarity) 18%, black);
+  }
+
+  /* Галочка в углу — второй знак того же состояния, поэтому цвет и чернила те же, что
+     у ярлыка. Она внутри плашки, за края не выходит, и обрезка ей не мешает. */
+  .rarity-check {
+    @apply absolute z-10 top-1 right-1 w-5 h-5 rounded-full shadow-sm;
+    @apply flex items-center justify-center text-[10px];
+    background: var(--rarity);
+    color: color-mix(in oklab, var(--rarity) 18%, black);
+  }
+
   .dark .rarity {
     --plate-top: var(--color-slate-600);
     --plate-bottom: var(--color-slate-900);

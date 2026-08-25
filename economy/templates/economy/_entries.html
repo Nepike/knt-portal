@@ -1,0 +1,33 @@
+{% comment %}
+  Порция операций. Отдельным куском, потому что следующие подтягиваются маячком
+  по htmx и приезжают без страницы вокруг — как в материалах и библиотеке.
+
+  Причина показана рядом с подписью, а не вместо: подпись говорит, ЗА ЧТО заплатили
+  («лайки на отзыве о Иванове»), причина — по какому правилу. Баланс после операции
+  лежит в журнале готовым, досчитывать ленту не нужно.
+{% endcomment %}
+{% for entry in entries %}
+<li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-3 first:pt-0 last:pb-0">
+  {# min-, а не фиксированная: столбик выровнен, но начисление вручную бывает в девять цифр #}
+  <span class="min-w-16 shrink-0 text-right font-bold tabular-nums {% if entry.amount > 0 %}text-emerald-500{% else %}text-rose-500{% endif %}">{{ entry.amount|stringformat:"+d" }}</span>
+  <span class="min-w-0 flex-1 basis-40">
+    {# Подпись целиком: за полным названием и приходят сюда. break-words — от слов без пробелов #}
+    <span class="block text-sm break-words">{{ entry.note|default:entry.get_reason_display }}</span>
+    {% if entry.note %}<span class="block text-xs text-slate-400">{{ entry.get_reason_display }}</span>{% endif %}
+  </span>
+  <span class="shrink-0 text-right">
+    <span class="block text-xs text-slate-400">{{ entry.created|date:"j E Y, H:i" }}</span>
+    <span class="block text-xs text-slate-400">стало {{ entry.balance_after }} <i class="fa-solid fa-cent-sign text-[9px]"></i></span>
+  </span>
+</li>
+{% empty %}
+<li class="py-3 text-sm text-slate-400">Операций пока не было.</li>
+{% endfor %}
+
+{% if page.has_next %}
+{# маячок: попал в зону видимости — подтянул следующую порцию #}
+<li class="py-4 text-center text-slate-400"
+    hx-get="{% querystring page=page.next_page_number %}" hx-trigger="intersect once" hx-swap="outerHTML">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</li>
+{% endif %}

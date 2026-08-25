@@ -60,7 +60,7 @@
 
     <p class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400">
       Добавил{% if book.hide_uploader or not book.uploader %} аноним{% else %}
-      <a href="{% url 'profile' book.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ book.uploader.name }} {{ book.uploader.surname }}</a>{% endif %}
+      <a href="{% url 'profile' book.uploader.pk %}" class="hover:text-slate-600 dark:hover:text-slate-300">{{ book.uploader.full_name }}</a>{% endif %}
       · {{ book.created|date:"j E Y" }}
     </p>
   </article>

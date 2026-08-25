@@ -7,4 +7,4 @@
 {% if material.terms.all %}<b>Семестры:</b> {% for term in material.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
 {% endif %}{% if material.teachers.all %}<b>Преподаватели:</b> {% for teacher in material.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
 {% endif %}<b>Год:</b> {{ material.year }} · <b>Файлов:</b> {{ material.files.count }}
-<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.name }} {{ editor.surname }}{% if material.hide_uploader %} · на сайте анонимно{% endif %}
+<b>{% if created %}Загрузил{% else %}Правил{% endif %}:</b> {{ editor.full_name }}{% if material.hide_uploader %} · на сайте анонимно{% endif %}
