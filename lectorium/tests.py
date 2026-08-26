@@ -1,13 +1,14 @@
 from unittest import mock
+from uuid import uuid4
 
 from django.contrib.auth.models import Permission
+from django.contrib.messages import get_messages
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from attachments.storage import file_storage
-from attachments.tests import fake_storage
-from attachments.uploads import sign_upload
+from attachments.uploads import adopt_token
 from core.models import Subject
 from intake.models import MediaJob
 from users.models import User
@@ -118,6 +119,25 @@ class DetailTests(LectoriumTests):
         self.assertIsNone(page.context["lecture"])
         self.assertNotIn("lecturePlayer", page.content.decode())
 
+    def test_a_record_still_in_the_oven_does_not_open_a_player(self):
+        """Ссылку на запись пересылают, а обработка идёт час. Папки набора у неё ещё нет,
+        и плеер получил бы адрес в никуда вместо честного «обрабатывается»."""
+        waiting = Lecture.objects.create(playlist=self.playlist, title="Свежая", order=9, prefix="")
+
+        page = self.open(lecture=waiting.pk)
+
+        self.assertEqual(page.context["lecture"], self.playlist.lectures.first())
+        self.assertContains(page, "обрабатывается")
+
+    def test_a_playlist_of_nothing_but_unbaked_records_shows_no_player(self):
+        fresh = self.make_playlist("Свежий", lectures=0)
+        Lecture.objects.create(playlist=fresh, title="Ждёт", order=0, prefix="")
+
+        page = self.client.get(fresh.get_absolute_url())
+
+        self.assertIsNone(page.context["lecture"])
+        self.assertContains(page, "обрабатываются")
+
 
 class ReviewTests(LectoriumTests):
     def setUp(self):
@@ -227,15 +247,22 @@ class SubmitTests(LectoriumTests):
             status=Playlist.Status.APPROVED,
         )
 
+    def source(self, body=b"raw-video"):
+        """Сырьё так, как оно лежит после прямой загрузки: файл в хранилище плюс токен
+        на него. Класть по-настоящему обязательно — вьюха спрашивает у хранилища,
+        доехало ли, и подписью одной не удовлетворяется."""
+        key = f"uploads/{uuid4().hex}/zapis.mkv"
+        file_storage().save(key, ContentFile(body))
+        return adopt_token(key, "zapis.mkv")
+
     def submit(self, who=None, title="Первая", token=None):
         self.client.force_login(who or self.keeper)
         return self.client.post(reverse("lecture_add", args=[self.playlist.pk]), {
-            "title": title, "uploaded": token if token is not None else sign_upload("zapis.mkv")[1],
+            "title": title, "uploaded": self.source() if token is None else token,
         })
 
     def test_a_record_becomes_a_lecture_and_a_job(self):
-        with mock.patch("attachments.uploads.file_storage", return_value=fake_storage()):
-            self.submit()
+        self.submit()
 
         lecture = self.playlist.lectures.get()
         self.assertEqual(lecture.title, "Первая")
@@ -245,11 +272,29 @@ class SubmitTests(LectoriumTests):
 
     def test_several_records_wait_in_line_together(self):
         """Пустой префикс у всех, кто ждёт очереди: уникальность не должна им мешать."""
-        with mock.patch("attachments.uploads.file_storage", return_value=fake_storage()):
-            self.submit(title="Первая")
-            self.submit(title="Вторая")
+        self.submit(title="Первая")
+        self.submit(title="Вторая")
 
         self.assertEqual(self.playlist.lectures.count(), 2)
+
+    def test_a_record_that_never_reached_the_bucket_is_refused(self):
+        """Подпись честная, файла нет: браузер оборвался на середине заливки. Ловим тут,
+        иначе задание встало бы в очередь и упало у пекарни через час — а человек
+        всё это время считал бы, что дело сделано."""
+        answer = self.submit(token=adopt_token("uploads/пусто/zapis.mkv", "zapis.mkv"))
+
+        self.assertEqual(self.playlist.lectures.count(), 0)
+        self.assertEqual(MediaJob.objects.count(), 0)
+        # Причину человек должен увидеть: молчаливый отказ выглядит как «отправилось».
+        self.assertTrue(any("не доехала" in str(one) for one in get_messages(answer.wsgi_request)))
+
+    def test_a_record_heavier_than_the_limit_is_refused(self):
+        """Размер в подписанной ссылке не участвует: браузер объявляет его до отправки,
+        а положить по ссылке может сколько угодно. Правду знает только хранилище."""
+        with mock.patch("lectorium.views.max_upload_size", return_value=4):
+            self.submit()
+
+        self.assertEqual(self.playlist.lectures.count(), 0)
 
     def test_a_record_without_a_file_is_refused(self):
         self.submit(token="")

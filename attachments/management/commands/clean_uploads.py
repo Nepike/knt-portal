@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from attachments.models import File
 from attachments.storage import file_storage
+from intake.models import MediaJob
 
 PREFIX = "uploads"
 
@@ -19,7 +20,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         storage = file_storage()
         cutoff = timezone.now() - timedelta(days=options["days"])
-        known = set(File.objects.filter(file__startswith=f"{PREFIX}/").values_list("file", flat=True))
+        known = self.needed()
 
         try:
             folders, _ = storage.listdir(PREFIX)
@@ -46,6 +47,28 @@ class Command(BaseCommand):
 
         broken = self.abandoned(storage, cutoff, options["apply"])
         self.stdout.write(self.style.SUCCESS(f"брошенных многочастных загрузок: {broken}"))
+
+    def needed(self):
+        """Ключи, которые нельзя трогать: у них есть хозяин.
+
+        Не только записи `File`. Сырьё лекции хозяина в виде записи не имеет вовсе —
+        оно живёт ключом в задании и ждёт, когда за ним придёт пекарня. Пекарня может
+        стоять выключенной неделю, а «старше суток и не привязан к File» — это ровно
+        описание такого сырья: без этой половины уборка сносила бы его из-под очереди,
+        и лекция падала бы с «нет такого файла» вместо того, чтобы испечься.
+
+        Импорт чужого приложения тут уместен, а в `attachments/uploads.py` — нет:
+        библиотека вложений про лекторий знать не должна, а команда уборки по своей
+        сути обходит ВСЁ хранилище и обязана знать всех, кто в нём что-то держит.
+        """
+        keys = set(File.objects.filter(file__startswith=f"{PREFIX}/").values_list("file", flat=True))
+        # Всё, кроме закрытых: у готового сырьё снимает своя задача сразу после `commit`,
+        # а НЕ вышедшее держим — в админке задание возвращают в очередь, поставив «ждёт»,
+        # и без сырья такой повтор просто упал бы второй раз.
+        keys |= set(
+            MediaJob.objects.exclude(status=MediaJob.Status.DONE).values_list("source", flat=True)
+        )
+        return keys
 
     def abandoned(self, storage, cutoff, apply):
         """Начатые и не собранные многочастные загрузки.

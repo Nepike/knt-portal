@@ -852,6 +852,17 @@ document.addEventListener("alpine:init", () => {
     return hlsLibrary;
   };
 
+  // Выбранное качество помнится между записями: человек с медленным каналом иначе
+  // переставлял бы его на каждой лекции заново. Помним ВЫСОТУ, а не номер дорожки:
+  // номера у разных записей значат разное — у снятой на 720p дорожка всего одна.
+  const QUALITY = "lecture-quality";
+  const remembered = () => {
+    try { return Number(localStorage.getItem(QUALITY)) || 0; } catch { return 0; }
+  };
+  const remember = (height) => {
+    try { localStorage.setItem(QUALITY, height); } catch { /* приватный режим */ }
+  };
+
   Alpine.data("lecturePlayer", (src) => {
     // Плеер и счётчик — ЗДЕСЬ, в замыкании, а не в данных компонента. Alpine оборачивает
     // данные в Proxy, а hls.js разбирает поток в Worker и шлёт туда свои объекты через
@@ -863,6 +874,10 @@ document.addEventListener("alpine:init", () => {
 
     return {
       problem: "",
+      levels: [],   // дорожки для меню качества, сверху вниз
+      choice: -1,   // выбранная дорожка; -1 — автовыбор по скорости связи
+      playing: 0,   // высота дорожки, которая идёт прямо сейчас
+      open: false,  // раскрыто ли меню
 
       async init() {
         const video = this.$refs.video;
@@ -878,6 +893,8 @@ document.addEventListener("alpine:init", () => {
         if (library && window.Hls.isSupported()) {
           player = new window.Hls();
           player.on(window.Hls.Events.ERROR, (_, data) => this.rescue(data));
+          player.on(window.Hls.Events.MANIFEST_PARSED, () => this.gotLevels());
+          player.on(window.Hls.Events.LEVEL_SWITCHED, (_, data) => { this.playing = this.heightOf(data.level); });
           player.loadSource(src);
           player.attachMedia(video);
           return;
@@ -892,6 +909,35 @@ document.addEventListener("alpine:init", () => {
           return;
         }
         this.problem = "Не удалось загрузить проигрыватель. Обнови страницу.";
+      },
+
+      // Дорожки известны только после разбора мастер-манифеста: до него их нет вовсе.
+      // В меню кладём не сами объекты библиотеки, а числа и подписи — данные компонента
+      // Alpine оборачивает в Proxy, и такой объект нельзя вернуть библиотеке обратно.
+      gotLevels() {
+        this.levels = player.levels
+          .map((one, index) => ({ index, height: one.height, label: `${one.height}p` }))
+          .reverse();  // библиотека выдаёт снизу вверх, а в меню привычнее лучшее сверху
+        const wanted = this.levels.find((one) => one.height === remembered());
+        if (wanted) this.pick(wanted.index);
+      },
+
+      heightOf(index) {
+        return player?.levels[index]?.height || 0;
+      },
+
+      // Подпись на кнопке. В автовыборе показываем, что идёт НА САМОМ ДЕЛЕ: одно слово
+      // «Авто» не отвечает на вопрос, ради которого сюда и смотрят.
+      get label() {
+        if (this.choice < 0) return this.playing ? `Авто · ${this.playing}p` : "Авто";
+        return `${this.heightOf(this.choice)}p`;
+      },
+
+      pick(index) {
+        player.currentLevel = index;  // -1 — вернуть автовыбор
+        this.choice = index;
+        this.open = false;
+        remember(index < 0 ? 0 : this.heightOf(index));
       },
 
       // Лекцию смотрят час с лишним, и за это время сеть моргнёт наверняка. Обрыв и сбой
@@ -911,6 +957,7 @@ document.addEventListener("alpine:init", () => {
         this.problem = "Видео оборвалось. Обнови страницу.";
         player.destroy();
         player = null;
+        this.levels = [];  // выбирать качество больше не у чего
       },
 
       destroy() {

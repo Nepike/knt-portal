@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from attachments.media import hls_url, redirect_url
+from attachments.models import human_size
 from attachments.storage import file_storage
 from attachments.uploads import max_upload_size, upload_key, upload_limits
 from intake.models import MediaJob
@@ -59,6 +60,25 @@ def playlist_edit(request, pk=None):
     return render(request, "lectorium/playlist_form.html", {"form": form, "playlist": playlist if pk else None})
 
 
+def _source_problem(user, key):
+    """Причина не принимать это сырьё, или None.
+
+    Спрашиваем ХРАНИЛИЩЕ, а не браузер, и уже после заливки. Размер в подписанной ссылке
+    не участвует: браузер объявляет его до отправки, а положить по ссылке может сколько
+    угодно — это единственное место, где настоящий вес вообще становится известен.
+    Заодно ловится недоехавший файл: иначе задание встало бы в очередь, и человек узнал
+    бы о пропаже через час, из «не обработалась».
+    """
+    try:
+        size = file_storage().size(key)
+    except FileNotFoundError:
+        return "Запись не доехала до хранилища — загрузи её заново."
+    limit = max_upload_size(user)
+    if size > limit:
+        return f"Запись больше {human_size(limit)}."
+    return None
+
+
 @require_POST
 def lecture_add(request, pk):
     """Сдать запись: файл уже в хранилище, здесь заводится лекция и задание на выпечку."""
@@ -70,6 +90,10 @@ def lecture_add(request, pk):
     source = upload_key(request.POST.get("uploaded", ""))
     if not form.is_valid() or not source:
         messages.error(request, "Нужны название и файл записи.")
+        return redirect("playlist_detail", pk=playlist.pk)
+
+    if problem := _source_problem(request.user, source):
+        messages.error(request, problem)
         return redirect("playlist_detail", pk=playlist.pk)
 
     with transaction.atomic():
@@ -97,16 +121,20 @@ def playlist_list(request):
 
 def playlist_detail(request, pk):
     playlist = get_object_or_404(
+        # lectures__job — ради значка «не обработалась» в списке: без него состояние
+        # спрашивалось бы отдельным запросом на каждую необработанную запись.
         _visible(request.user).select_related("subject", "uploader").prefetch_related(
-            "terms", "teachers", "lectures",
+            "terms", "teachers", "lectures", "lectures__job",
         ),
         pk=pk,
     )
     lectures = list(playlist.lectures.all())
-    # Какую смотрим: по номеру из адреса, иначе первую. Номер, а не порядковый индекс —
-    # ссылку на лекцию можно переслать, и она не поедет от вставки новой в середину.
-    chosen = next((one for one in lectures if str(one.pk) == request.GET.get("lecture")), None)
     ready = [one for one in lectures if one.prefix]
+    # Какую смотрим: по номеру из адреса, иначе первую готовую. Номер, а не порядковый
+    # индекс — ссылку на лекцию можно переслать, и она не поедет от вставки новой
+    # в середину. Только из готовых: у необработанной папки набора ещё нет, и плеер
+    # получил бы адрес в никуда вместо честного «обрабатывается».
+    chosen = next((one for one in ready if str(one.pk) == request.GET.get("lecture")), None)
     return render(request, "lectorium/playlist_detail.html", {
         "playlist": playlist,
         "lectures": lectures,
@@ -153,6 +181,10 @@ def check(request):
     problem = manifest = poster = ""
     if key and not key.endswith(".m3u8"):
         problem = "Ключ должен указывать на манифест .m3u8"
+    elif ".." in key.split("/"):
+        # На диске такой ключ роняет хранилище SuspiciousFileOperation, то есть
+        # пятисоткой вместо ответа. Ключ вводят руками, опечатка тут — обычное дело.
+        problem = "Ключ — это путь внутри хранилища, без «..»"
     elif key and not file_storage().exists(key):
         problem = f"В хранилище нет такого куска: {key}"
     elif key:

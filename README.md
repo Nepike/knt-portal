@@ -71,16 +71,18 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-511 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+730 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
-by accident; it also makes Celery eager and lifts the beta gate.
+by accident; it also makes Celery eager and lifts the beta gate. One test builds the static files
+the way the production container does, because a dangling reference inside a vendored `.js` fails
+`collectstatic` and stops the container from starting at all.
 
 ```bash
 python manage.py test
 ```
 
-On the SQLite fallback 499 pass and twelve fail, all of them name search. The cause is SQLite, not
-the code: its `lower()` is ASCII-only, so `lower('Максим')` comes back unchanged while Python has
+On the SQLite fallback about a dozen fail, all of them name search. The cause is SQLite, not the
+code: its `lower()` is ASCII-only, so `lower('Максим')` comes back unchanged while Python has
 already lowercased the query, and `core/search.py` compares the two. PostgreSQL, which the project
 actually runs on, lowercases Cyrillic.
 

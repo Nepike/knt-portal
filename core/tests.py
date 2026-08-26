@@ -1,8 +1,11 @@
+import copy
 import json
+import tempfile
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -474,6 +477,28 @@ class ThrottleTests(SimpleTestCase):
         with patch("core.throttle.cache.add", side_effect=ConnectionError("Redis не отвечает")):
             with self.assertLogs("core.throttle", "ERROR"):
                 self.assertFalse(throttled("t:dead", 1))
+
+
+class StaticBuildTests(SimpleTestCase):
+    """Статика собирается ровно так, как её собирает боевой контейнер.
+
+    В разработке `{% static %}` отдаёт файл как есть, а на бою staticfiles лежит на
+    whitenoise.CompressedManifestStaticFilesStorage: тот дописывает к именам хеш и ради
+    этого ЧИТАЕТ каждый css и js, переписывая ссылки внутри. Ссылка в никуда — и сборка
+    падает целиком, то есть контейнер не поднимается вовсе.
+
+    На это уже наступили: у скачанной hls.min.js в хвосте стояло
+    `//# sourceMappingURL=hls.min.js.map`, а карты рядом не было, — деплой лёг, хотя
+    и тесты, и разработка проходили. Дешевле собрать статику в тестах (пара секунд),
+    чем узнавать об этом с боевого домена.
+    """
+
+    def test_collectstatic_survives_the_production_storage(self):
+        storages = copy.deepcopy(settings.STORAGES)
+        storages["staticfiles"] = {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"}
+        with tempfile.TemporaryDirectory() as room:
+            with override_settings(STORAGES=storages, STATIC_ROOT=room, DEBUG=False):
+                call_command("collectstatic", "--noinput", verbosity=0)
 
 
 class LegacyFileKeyTests(SimpleTestCase):

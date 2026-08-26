@@ -530,6 +530,44 @@ class QueueTests(TestCase):
         # Сырьё больше не нужно: гигабайты, из которых уже всё взяли.
         swept.assert_called_once_with("uploads/abc")
 
+    def test_a_second_attempt_sweeps_away_what_the_first_one_uploaded(self):
+        """Задание вернулось в очередь после упавшей пекарни. Папка у второй попытки
+        новая (класть свежие куски поверх недолитых — значит собрать набор из двух
+        выпечек), а недолитое надо СНЯТЬ: иначе каждая осечка оставляла бы в бакете
+        по гигабайту, которого потом ничем не найти."""
+        first = self.call("intake_plan", token=self.claim()["token"],
+                          manifest=made_manifest()).json()["prefix"]
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+
+        with mock.patch("lectorium.tasks.drop_prefix") as swept, \
+                self.captureOnCommitCallbacks(execute=True):
+            second = self.call("intake_plan", token=self.claim()["token"],
+                               manifest=made_manifest()).json()["prefix"]
+
+        self.assertNotEqual(second, first)
+        swept.assert_called_once_with(first)
+
+    def test_rebaking_a_lecture_sweeps_away_its_previous_set(self):
+        """Задание вернули в очередь руками из админки. Лекция переезжает на новую
+        папку, и старый набор остаётся никому не нужным."""
+        lecture = make_lecture()
+        lecture.prefix = "lectures/старый"
+        lecture.save(update_fields=["prefix"])
+        MediaJob.objects.update(lecture=lecture)
+        token = self.claim()["token"]
+        manifest = made_manifest()
+        prefix = self.call("intake_plan", token=token, manifest=manifest).json()["prefix"]
+
+        with mock.patch("intake.views.under", return_value=stored(prefix, manifest)), \
+                mock.patch("intake.tasks.drop_prefix"), \
+                mock.patch("lectorium.tasks.drop_prefix") as swept, \
+                self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_commit", token=token)
+
+        lecture.refresh_from_db()
+        self.assertEqual(lecture.prefix, prefix)
+        swept.assert_called_once_with("lectures/старый")
+
     def test_a_failure_reaches_the_person(self):
         """Иначе лекция висит «обрабатывается» вечно, и никто не знает почему."""
         token = self.claim()["token"]

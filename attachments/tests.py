@@ -18,6 +18,7 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
+from intake.models import MediaJob
 from library.models import Book
 from users.models import User
 
@@ -342,6 +343,10 @@ class PlayerHeadersTests(TestCase):
         self.assertIn("Range", answer["Access-Control-Allow-Headers"])
 
 
+# Бакет объявляем явно: без него ручки загрузки честно отвечают «прямая загрузка
+# недоступна», и весь этот набор проверял бы только эту ветку. Настоящий R2_BUCKET
+# берётся из .env, а он есть не у каждого, кто запускает тесты.
+@override_settings(R2_BUCKET="knt-files")
 class MultipartTests(TestCase):
     """Многочастная загрузка: сырьё лекции — гигабайты, одним PUT такое не принять,
     а главное — на сорока минутах отдачи связь оборвётся почти наверняка."""
@@ -446,6 +451,26 @@ class MultipartTests(TestCase):
         self.call("upload_abort", token=self.start()["token"])
 
         self.assertEqual(self.api.abort_multipart_upload.call_args.kwargs["UploadId"], "u-1")
+
+    def test_a_body_without_the_asked_for_fields_is_an_answer_not_a_crash(self):
+        """Тело приходит от скрипта в браузере, а скрипт бывает и чужой. Ручка обязана
+        ответить отказом: пятисотка — это уже наша ошибка, а не его."""
+        token = self.start()["token"]
+        broken = [
+            ("upload_parts", {"token": token}),                       # без numbers
+            ("upload_parts", {"token": token, "numbers": "раз-два"}),  # номера не числа
+            ("upload_finish", {"token": token}),                      # без parts
+            ("upload_finish", {"token": token, "parts": ["a"]}),      # parts не словарь
+            ("upload_start", {"name": "x.mkv", "size": "много"}),
+            ("upload_url", {"name": "x.pdf", "size": "много"}),
+        ]
+        for where, body in broken:
+            with self.subTest(where=where, body=body):
+                self.assertEqual(self.call(where, **body).status_code, 400)
+
+    def test_an_abort_without_a_token_is_simply_nothing_to_abort(self):
+        self.assertEqual(self.call("upload_abort").status_code, 200)
+        self.assertFalse(self.api.abort_multipart_upload.called)
 
 
 class UploadLimitTests(TestCase):
@@ -604,6 +629,37 @@ class AdoptUploadTests(TestCase):
         self.assertTrue(storage.exists(attached))  # к нему привязана запись
         self.assertTrue(storage.exists(fresh))  # загружен только что, форма ещё может дойти
         self.assertFalse(storage.exists(forgotten))
+
+    def test_cleanup_leaves_alone_a_recording_still_waiting_for_the_bakery(self):
+        """Сырьё лекции записью `File` не становится вовсе — оно живёт ключом в задании
+        и ждёт, когда за ним придёт пекарня. А пекарня может стоять выключенной неделю:
+        без этой оговорки уборка сносила бы сырьё из-под очереди, и лекция падала бы
+        с «нет такого файла» вместо того, чтобы испечься."""
+        queued = self.put(key="uploads/queued/Лекция.mkv")
+        baked = self.put(key="uploads/baked/Испечённая.mkv")
+        MediaJob.objects.create(recipe="lecture", source=queued)
+        MediaJob.objects.create(recipe="lecture", source=baked, status=MediaJob.Status.DONE)
+
+        storage = file_storage()
+        for key in (queued, baked):
+            os.utime(storage.path(key), (0, 0))
+        call_command("clean_uploads", "--apply", verbosity=0)
+
+        self.assertTrue(storage.exists(queued))
+        # У закрытого задания сырьё снимает своя задача сразу после `commit`; если она
+        # почему-то не доехала, остаток — обычная сирота, за неё эта команда и отвечает.
+        self.assertFalse(storage.exists(baked))
+
+    def test_cleanup_keeps_the_source_of_a_job_that_did_not_work_out(self):
+        """Задание возвращают в очередь из админки — «поставил ждёт, и следующая пекарня
+        возьмёт снова». Без сырья такой повтор просто упал бы второй раз."""
+        key = self.put(key="uploads/failed/Лекция.mkv")
+        MediaJob.objects.create(recipe="lecture", source=key, status=MediaJob.Status.FAILED)
+        os.utime(file_storage().path(key), (0, 0))
+
+        call_command("clean_uploads", "--apply", verbosity=0)
+
+        self.assertTrue(file_storage().exists(key))
 
     def test_order_continues_after_files_sent_through_the_app(self):
         key = self.put()

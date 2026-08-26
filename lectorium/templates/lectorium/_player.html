@@ -14,6 +14,34 @@
          {% if poster %}poster="{{ poster }}"{% endif %}
          class="w-full aspect-video rounded-xl bg-black"></video>
 
+  {% comment %}
+    Выбор качества. Своей кнопки для этого у <video> нет ни в одном браузере: дорожками
+    распоряжается библиотека, а не проигрыватель, — поэтому кнопка наша и лежит поверх
+    видео. Сверху, потому что снизу родные кнопки.
+
+    Появляется, только когда дорожек правда несколько: у записи, снятой на 720p,
+    выбирать не из чего. На айфоне её нет вовсе — там играет сам браузер, и качество
+    он выбирает сам.
+
+    Во весь экран уходит <video>, а не эта обёртка, поэтому там кнопка не видна:
+    качество выбирают до того, как развернуть.
+  {% endcomment %}
+  <div x-show="levels.length > 1" x-cloak @click.outside="open = false"
+       class="absolute top-2 right-2 text-xs">
+    <button type="button" @click="open = !open" x-text="label" aria-label="Качество"
+            class="px-2 py-1 rounded-lg bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition"></button>
+
+    <div x-show="open" x-cloak class="absolute right-0 mt-1 py-1 min-w-24 rounded-lg bg-black/80 backdrop-blur-sm">
+      <button type="button" @click="pick(-1)" :class="{ 'text-accent': choice < 0 }"
+              class="block w-full text-left px-3 py-1 text-white hover:bg-white/15">Авто</button>
+      <template x-for="one in levels" :key="one.index">
+        <button type="button" @click="pick(one.index)" x-text="one.label"
+                :class="{ 'text-accent': choice === one.index }"
+                class="block w-full text-left px-3 py-1 text-white hover:bg-white/15"></button>
+      </template>
+    </div>
+  </div>
+
   <p x-show="problem" x-cloak x-text="problem"
      class="mt-2 text-sm text-rose-600 dark:text-rose-400"></p>
 </div>

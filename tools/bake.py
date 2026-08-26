@@ -68,6 +68,10 @@ DENOISE = "1:2:3:5"
 # маленький, и последовательно две тысячи ушли бы часами на одних рукопожатиях.
 SIGN_BATCH = 200
 UPLOAD_THREADS = 4
+# Попыток на кусок. Кусков у двухчасовой лекции около двух с половиной тысяч, и хоть
+# один ответ по дороге теряется почти наверняка. Без повторов такая осечка стоила бы
+# двадцати минут выпечки и всего залитого: задание закрылось бы «не вышло».
+PUT_TRIES = 4
 
 
 def say(text=""):
@@ -514,10 +518,18 @@ def fetch_source(url, target):
 
 
 def put_file(url, path):
-    request = urllib.request.Request(url, data=path.read_bytes(), method="PUT")
-    with urllib.request.urlopen(request, timeout=120) as answer:
-        if answer.status >= 300:
-            raise OSError(f"хранилище ответило {answer.status} на {path.name}")
+    """Положить один кусок, с повторами. Ссылка живёт часами, так что она переживает
+    и паузу между попытками; пауза растёт, чтобы не добивать и без того плохую связь."""
+    body = path.read_bytes()
+    for attempt in range(1, PUT_TRIES + 1):
+        try:
+            request = urllib.request.Request(url, data=body, method="PUT")
+            with urllib.request.urlopen(request, timeout=120):
+                return
+        except Exception as error:  # noqa: BLE001 — сеть отказывает десятком разных способов
+            if attempt == PUT_TRIES:
+                raise OSError(f"{path.name} не залился за {PUT_TRIES} попытки: {error}") from error
+            time.sleep(2 ** attempt)
 
 
 def upload(site, token, job_token, folder):
@@ -556,7 +568,7 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
     workshop = Path(tempfile.mkdtemp(prefix="bake-"))
     try:
         source = workshop / (job["name"] or "source")
-        say(f"  качаю сырьё…")
+        say("  качаю сырьё…")
         say(f"  сырьё: {human(fetch_source(job['source'], source))}")
 
         out, made = bake_lecture(ffmpeg, encoder, source, job["recipe"], recipe, workshop / "out", denoise)

@@ -20,6 +20,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from attachments.uploads import sign_download, sign_put, under
+from lectorium.tasks import drop_lecture_files
 
 from .models import MediaJob, take
 from .spec import MASTER, POSTER, RECIPES, check_ladder, payload
@@ -158,9 +159,16 @@ def plan(request):
     if problem:
         return JsonResponse({"error": problem}, status=400)
 
+    # Папка всегда новая, даже на повторе: класть свежие куски поверх недолитых —
+    # значит получить набор из двух выпечек, где половина сегментов от прошлой.
+    # А недолитое надо СНЯТЬ, иначе каждая упавшая на заливке пекарня оставляла бы
+    # в бакете по гигабайту, которого потом ничем не найти.
+    stale = job.prefix
     job.prefix = f"lectures/{uuid4().hex}"
     job.manifest = body["manifest"]
     job.save(update_fields=["prefix", "manifest", "updated"])
+    if stale:
+        transaction.on_commit(lambda: drop_lecture_files.delay(stale))
     return JsonResponse({"prefix": job.prefix})
 
 
@@ -217,8 +225,12 @@ def commit(request):
     if problem := _incomplete(job):
         return JsonResponse({"error": problem}, status=400)
 
+    # Прошлый набор этой же лекции — задание могли вернуть в очередь и перепечь.
+    # Тогда лекция переезжает на новую папку, а старая остаётся никому не нужной.
+    replaced = ""
     with transaction.atomic():
         if job.lecture_id:
+            replaced = job.lecture.prefix
             job.lecture.prefix = job.prefix
             job.lecture.duration = int(job.manifest.get("duration") or 0)
             job.lecture.save(update_fields=["prefix", "duration"])
@@ -228,6 +240,8 @@ def commit(request):
     # Сырьё больше не нужно: гигабайты, из которых уже всё взяли.
     source = job.source
     transaction.on_commit(lambda: drop_source.delay(source))
+    if replaced and replaced != job.prefix:
+        transaction.on_commit(lambda: drop_lecture_files.delay(replaced))
     return JsonResponse({"ok": True})
 
 

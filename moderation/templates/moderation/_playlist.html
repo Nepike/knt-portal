@@ -15,7 +15,8 @@
         {{ item.subject.name }} · {{ item.year }}
         · {% if item.uploader %}{{ item.uploader.full_name }}{% else %}аноним{% endif %}
         · {{ item.created|date:"j E, H:i" }}
-        · {{ item.lectures.count }} {{ item.lectures.count|plural:"лекция,лекции,лекций" }}
+        {# Считаем один раз: у обращения к .count запрос свой каждый раз. #}
+        {% with count=item.lectures.count %}· {{ count }} {{ count|plural:"лекция,лекции,лекций" }}{% endwith %}
       </p>
     </div>
   </div>

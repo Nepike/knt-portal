@@ -141,6 +141,18 @@ def _asked(request, *fields):
     return payload if all(field in payload for field in fields) else None
 
 
+def _named(payload):
+    """Имя и размер из запроса, или None, если размер — не число.
+
+    Тело приходит от скрипта в браузере, а скрипт бывает и чужой: без разбора здесь
+    `int("сколько-то")` уронил бы ручку пятисоткой вместо внятного отказа.
+    """
+    try:
+        return str(payload["name"])[:150], int(payload["size"] or 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _refuse(request, name, size):
     """Причина, по которой такой файл принимать нельзя, или None."""
     if problem := check_name(name):
@@ -157,9 +169,10 @@ def upload_url(request):
     if not direct_upload():
         return JsonResponse({"error": "Прямая загрузка недоступна"}, status=409)
     payload = _asked(request, "name", "size")
-    if payload is None:
+    asked = _named(payload) if payload else None
+    if asked is None:
         return HttpResponseBadRequest("Ожидались name и size")
-    name, size = str(payload["name"])[:150], int(payload["size"] or 0)
+    name, size = asked
 
     if problem := _refuse(request, name, size):
         return JsonResponse({"error": problem}, status=400)
@@ -170,11 +183,8 @@ def upload_url(request):
     return JsonResponse({"url": url, "token": token})
 
 
-def _started(request):
-    """Разобранный токен начатой загрузки или None. Ключ и номер загрузки приходят
-    от браузера, и без подписи он мог бы дописаться в чужую."""
-    payload = _asked(request, "token")
-    return multipart(payload["token"]) if payload else None
+def _stale():
+    return JsonResponse({"error": "Загрузка устарела — начни заново"}, status=400)
 
 
 @require_POST
@@ -187,9 +197,10 @@ def upload_start(request):
     if not direct_upload():
         return JsonResponse({"error": "Прямая загрузка недоступна"}, status=409)
     payload = _asked(request, "name", "size")
-    if payload is None:
+    asked = _named(payload) if payload else None
+    if asked is None:
         return HttpResponseBadRequest("Ожидались name и size")
-    name, size = str(payload["name"])[:150], int(payload["size"] or 0)
+    name, size = asked
 
     if problem := _refuse(request, name, size):
         return JsonResponse({"error": problem}, status=400)
@@ -207,10 +218,17 @@ def upload_start(request):
 def upload_parts(request):
     """Ссылки на очередную порцию частей."""
     payload = _asked(request, "token", "numbers")
-    started = _started(request)
+    if payload is None:
+        return HttpResponseBadRequest("Ожидались token и numbers")
+    # Токен разбираем сами: ключ и номер загрузки приходят от браузера, и без подписи
+    # он мог бы дописаться в чужую.
+    started = multipart(payload["token"])
     if started is None:
-        return JsonResponse({"error": "Загрузка устарела — начни заново"}, status=400)
-    numbers = [int(number) for number in payload["numbers"]][:MAX_PARTS]
+        return _stale()
+    try:
+        numbers = [int(number) for number in payload["numbers"]][:MAX_PARTS]
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("numbers — это список номеров частей")
     return JsonResponse({"urls": part_urls(started, numbers)})
 
 
@@ -218,10 +236,15 @@ def upload_parts(request):
 def upload_finish(request):
     """Собрать объект из частей и вернуть токен, который форма пришлёт вместо файла."""
     payload = _asked(request, "token", "parts")
-    started = _started(request)
+    if payload is None:
+        return HttpResponseBadRequest("Ожидались token и parts")
+    started = multipart(payload["token"])
     if started is None:
-        return JsonResponse({"error": "Загрузка устарела — начни заново"}, status=400)
-    parts = {int(number): str(tag) for number, tag in payload["parts"].items()}
+        return _stale()
+    try:
+        parts = {int(number): str(tag) for number, tag in payload["parts"].items()}
+    except (AttributeError, TypeError, ValueError):
+        return HttpResponseBadRequest("parts — это {номер части: etag}")
     if not parts:
         return JsonResponse({"error": "Нечего собирать: ни одной части"}, status=400)
     return JsonResponse({"token": finish_multipart(started, parts)})
@@ -230,7 +253,8 @@ def upload_finish(request):
 @require_POST
 def upload_abort(request):
     """Бросить начатое. Незаконченные части занимают место в бакете и стоят денег."""
-    started = _started(request)
+    payload = _asked(request, "token")
+    started = multipart(payload["token"]) if payload else None
     if started is not None:
         abort_multipart(started)
     return JsonResponse({"ok": True})
