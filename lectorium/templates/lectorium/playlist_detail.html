@@ -5,7 +5,8 @@
 {% block main_width %}max-w-6xl{% endblock %}
 
 {% block content %}
-<a href="{% url 'playlist_list' %}" class="text-sm text-slate-500 hover:text-accent"><i class="fa-solid fa-arrow-left"></i> Лекторий</a>
+{# Не в начало списка, а туда, откуда пришли: подбор приезжает в адресе карточки. #}
+<a href="{{ back_url }}" class="text-sm text-slate-500 hover:text-accent"><i class="fa-solid fa-arrow-left"></i> Лекторий</a>
 
 <div class="grid lg:grid-cols-[minmax(0,1fr)_20rem] gap-6 mt-3">
   <div class="min-w-0">
@@ -13,6 +14,7 @@
       {% include "lectorium/_player.html" with manifest=lecture.manifest_url poster=lecture.poster_url only %}
       <h1 class="text-xl font-bold mt-4 leading-snug">{{ lecture.title }}</h1>
       <p class="text-sm text-slate-400">{{ playlist.title }} · {{ lecture.human_duration }}</p>
+      {% include "lectorium/_reactions.html" %}
     {% else %}
       <div class="aspect-video rounded-xl border border-dashed border-slate-300 dark:border-slate-700
                   flex items-center justify-center text-slate-400 text-center px-6">
@@ -25,11 +27,23 @@
     <p class="mt-3 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-line">{{ playlist.synopsis }}</p>
     {% endif %}
 
-    <p class="mt-3 text-xs text-slate-400">
-      {{ playlist.subject.name }} · {{ playlist.year }}
-      {% for teacher in playlist.teachers.all %} · {{ teacher }}{% endfor %}
-      {% if playlist.uploader %} · выложил {{ playlist.uploader.full_name }}{% endif %}
-    </p>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3 text-xs text-slate-400">
+      <span class="rounded-full bg-accent/10 text-accent px-2.5 py-0.5">{{ playlist.subject.name }}</span>
+      <span>{{ playlist.year }}</span>
+      {% if playlist.terms.all %}
+      <span class="inline-flex items-center gap-1.5">
+        <i class="fa-solid fa-calendar-days"></i>
+        {{ playlist.terms.all|length|plural:"Семестр,Семестры,Семестры" }}
+        {% for term in playlist.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+      </span>
+      {% endif %}
+      {% for teacher in playlist.teachers.all %}
+      <span class="inline-flex items-center gap-1.5"><i class="fa-solid fa-chalkboard-user"></i>{{ teacher }}</span>
+      {% endfor %}
+      {% if playlist.uploader %}
+      <span class="inline-flex items-center gap-1.5"><i class="fa-solid fa-user"></i>выложил {{ playlist.uploader.full_name }}</span>
+      {% endif %}
+    </div>
 
     {% if not playlist.is_published %}
     <div class="mt-4 panel rounded-xl p-4">
@@ -47,37 +61,74 @@
       {% endif %}
     </div>
     {% endif %}
+
+    {% comment %}
+      Обсуждение — у ЗАПИСИ, а не у курса: спрашивают обычно про то, что сейчас на экране.
+      Лента общая с материалами (приложение `comments`), поэтому тут только вставка.
+      Пока ни одна запись не испеклась, обсуждать нечего — и блока нет.
+    {% endcomment %}
+    {% if lecture %}{% include "comments/_comments.html" %}{% endif %}
   </div>
 
   {# Список записей курса. На узком экране уезжает под плеер. #}
   <aside class="panel rounded-2xl p-3 h-fit">
-    <p class="text-sm font-semibold px-1 mb-2">
-      {{ lectures|length }} {{ lectures|length|plural:"запись,записи,записей" }}
-    </p>
+    {% comment %}
+      Шапка списка: чей это курс и сколько в нём записей. Название тут не повтор
+      заголовка страницы — заголовок показывает ОТКРЫТУЮ запись, и без этой строки
+      непонятно, из какого она курса.
+    {% endcomment %}
+    <div class="px-1 mb-3">
+      <p class="font-semibold leading-snug">{{ playlist.title }}</p>
+      <p class="text-xs text-slate-400 mt-0.5">
+        {{ lectures|length }} {{ lectures|length|plural:"запись,записи,записей" }}
+      </p>
+    </div>
+
     <ol class="flex flex-col gap-1">
       {% for one in lectures %}
       <li>
         {% comment %}
           Необработанная запись — не ссылка: смотреть там нечего, а нажатие впустую
-          выглядит поломкой. Вместо длительности показываем, что с ней происходит.
+          выглядит поломкой. И кадра у неё ещё нет — вместо него песочные часы.
         {% endcomment %}
-        <a {% if one.prefix %}href="?lecture={{ one.pk }}"{% endif %}
-           class="flex gap-3 items-center rounded-lg p-2
+        <a {% if one.prefix %}href="?{% if filters %}{{ filters }}&amp;{% endif %}lecture={{ one.pk }}"{% endif %}
+           class="flex gap-2 items-start rounded-lg p-2
                   {% if one.prefix %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}
                   {% if one.pk == lecture.pk %}bg-accent/10{% endif %}">
-          <span class="w-6 text-center text-xs text-slate-400 shrink-0">{{ forloop.counter }}</span>
-          <span class="min-w-0 flex-1">
-            <span class="block text-sm leading-snug line-clamp-2 {% if not one.prefix %}text-slate-400{% endif %}">{{ one.title }}</span>
+          <span class="w-4 pt-6 text-center text-xs text-slate-400 shrink-0">{{ forloop.counter }}</span>
+
+          <span class="relative w-24 shrink-0 aspect-video rounded overflow-hidden bg-slate-200 dark:bg-slate-800">
             {% if one.prefix %}
-              <span class="block text-xs text-slate-400">{{ one.human_duration }}</span>
-            {% elif one.job.status == "failed" %}
-              <span class="block text-xs text-rose-500" title="{{ one.job.note }}">
-                <i class="fa-solid fa-triangle-exclamation"></i> не обработалась
+              <img src="{{ one.poster_url }}" alt="" loading="lazy" class="w-full h-full object-cover">
+              {# Длительность на кадре, а не строкой под названием: так её ищут глазами. #}
+              <span class="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/75 text-white text-[10px] leading-4">
+                {{ one.human_duration }}
               </span>
             {% else %}
-              <span class="block text-xs text-amber-600 dark:text-amber-400">
-                <i class="fa-solid fa-hourglass-half"></i> обрабатывается
+              <span class="w-full h-full flex items-center justify-center text-slate-400">
+                <i class="fa-solid fa-hourglass-half"></i>
               </span>
+            {% endif %}
+          </span>
+
+          <span class="min-w-0 flex-1">
+            {% comment %}
+              Три строки, а не две: у записей одного курса названия отличаются хвостом
+              (дата), и на двух строках теряется как раз он. Три — это ровно высота кадра
+              рядом, так что строка списка от этого не растёт.
+
+              Без `block`: обрезка по строкам ставит свой display, и вместе они спорят —
+              побеждает `block`, и длинное название разъезжается на всю высоту.
+            {% endcomment %}
+            <span class="text-sm leading-snug line-clamp-3 {% if not one.prefix %}text-slate-400{% endif %}">{{ one.title }}</span>
+            {% if not one.prefix %}
+              {% if one.job.status == "failed" %}
+                <span class="block text-xs text-rose-500 mt-0.5" title="{{ one.job.note }}">
+                  <i class="fa-solid fa-triangle-exclamation"></i> {{ one.stage }}
+                </span>
+              {% else %}
+                <span class="block text-xs text-amber-600 dark:text-amber-400 mt-0.5">{{ one.stage }}</span>
+              {% endif %}
             {% endif %}
           </span>
         </a>
@@ -123,6 +174,16 @@
         Загружается частями — если связь оборвётся, продолжится с того же места.
       </p>
     </form>
+
+    {% comment %}
+      Правка курса — здесь же, под сдачей записи: обе кнопки про одно и то же — про
+      содержимое курса, а на левой колонке правка стояла посреди чужого разговора,
+      между описанием и обсуждением. Там же, на форме, записи переименовываются,
+      переставляются и удаляются, и оттуда же сносится курс целиком.
+    {% endcomment %}
+    <a href="{% url 'playlist_edit' playlist.pk %}" class="btn btn-secondary w-full mt-2">
+      <i class="fa-solid fa-pen"></i>Редактировать курс
+    </a>
     {% endif %}
   </aside>
 </div>

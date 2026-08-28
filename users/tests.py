@@ -17,7 +17,9 @@ from django.utils import timezone
 from PIL import Image as PilImage
 
 from attachments.media import media_url
-from core.models import Subject, Term
+from core.models import ALUMNI, Subject, Team, Term
+from economy.models import BalanceLog
+from economy.services import credit, spend
 from materials.models import Material
 
 from .forms import AVATAR_PX, MAX_AVATAR_DATA
@@ -532,3 +534,245 @@ class SessionForCommandTests(TestCase):
         with self.assertLogs(self.LOGGER, "WARNING") as log:
             self.run_command(self.person.email)
         self.assertIn(self.person.email, log.output[0])
+
+
+class StudentListTests(TestCase):
+    """Раздел заведён, чтобы НАЙТИ человека. Топ — приятная добавка, но главное поиск."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.team = Team.objects.create(
+            number="Б05-123", profile="Программирование", course_code="03.03.01",
+            stage="bachelor", year_of_admission=2023,
+        )
+        cls.ivan = cls.person("i@t.local", "Иван", "Иванов", team=cls.team)
+        cls.petr = cls.person("p@t.local", "Пётр", "Петров", team=cls.team)
+        cls.anna = cls.person("a@t.local", "Анна", "Сидорова")
+
+    @staticmethod
+    def person(email, name, surname, **extra):
+        return User.objects.create_user(
+            email=email, name=name, surname=surname, password="pass12345",
+            must_change_password=False, **extra,
+        )
+
+    def setUp(self):
+        self.client.force_login(self.ivan)
+
+    def get(self, **params):
+        return self.client.get(reverse("student_list"), params)
+
+    def earn(self, person, amount):
+        credit(person, amount, BalanceLog.Reason.MATERIAL, key=str(amount))
+
+    def names(self, response):
+        return [person.full_name for person in response.context["people"]]
+
+    def test_the_page_lists_everyone(self):
+        self.assertEqual(self.names(self.get()), ["Иванов Иван", "Петров Пётр", "Сидорова Анна"])
+
+    def test_a_person_is_found_by_name_or_surname(self):
+        self.assertEqual(self.names(self.get(q="Петров")), ["Петров Пётр"])
+        self.assertEqual(self.names(self.get(q="Анна")), ["Сидорова Анна"])
+
+    def test_the_search_puts_the_closest_hit_first(self):
+        """Порядок поиска идёт ПЕРВЫМ ключом, выбранный — после него. По «ван» сначала
+        Ванин, у которого слово в начале фамилии, и только потом Иванов, где оно
+        в середине, — сколько бы Иванов ни заработал (`core.search`)."""
+        vanin = self.person("v@t.local", "Сергей", "Ванин")
+        self.earn(self.ivan, 5000)
+
+        found = self.get(q="ван", sort="contribution")
+
+        self.assertEqual(self.names(found), [vanin.full_name, self.ivan.full_name])
+
+    def test_nobody_found_says_so(self):
+        self.assertContains(self.get(q="Сорокоумов"), "никого не нашлось")
+
+    def test_by_default_the_list_is_alphabetical(self):
+        self.earn(self.anna, 900)
+
+        self.assertEqual(self.names(self.get())[0], "Иванов Иван")
+
+    def test_by_contribution_the_biggest_goes_first(self):
+        # Суммы заведомо больше стартовых: их получает каждый, кто хоть раз вошёл.
+        self.earn(self.anna, 9000)
+        self.earn(self.petr, 5000)
+
+        self.assertEqual(self.names(self.get(sort="contribution")), [
+            "Сидорова Анна", "Петров Пётр", "Иванов Иван",
+        ])
+
+    def test_it_counts_what_was_earned_and_not_what_is_left(self):
+        """Баланс — это заработанное минус потраченное, и топ по нему был бы топом тех,
+        кто ничего не покупает: купил рамку — уехал вниз."""
+        self.earn(self.anna, 900)
+        spend(self.anna, 850, BalanceLog.Reason.PURCHASE)
+        self.earn(self.petr, 100)
+
+        listed = self.get(sort="contribution").context["people"]
+
+        self.assertEqual([person.full_name for person in listed][0], "Сидорова Анна")
+        self.assertEqual(listed[0].earned, 900)
+        self.assertEqual(listed[0].wallet.balance, 50)
+
+    def test_a_junk_sort_does_not_break_the_page(self):
+        self.assertEqual(self.get(sort="; drop table").status_code, 200)
+
+    def test_the_top_shows_who_did_the_most(self):
+        self.earn(self.anna, 9000)
+        self.earn(self.petr, 5000)
+
+        top = self.get().context["top"]
+
+        self.assertEqual([person.full_name for person in top], [
+            "Сидорова Анна", "Петров Пётр", "Иванов Иван",
+        ])
+
+    def test_a_person_who_left_is_not_listed(self):
+        User.objects.filter(pk=self.petr.pk).update(is_active=False)
+
+        self.assertNotIn("Петров Пётр", self.names(self.get()))
+
+    def test_a_row_leads_to_the_profile_and_names_the_group(self):
+        page = self.get().content.decode()
+
+        self.assertIn(reverse("profile", args=[self.ivan.pk]), page)
+        self.assertIn(self.team.number, page)
+        self.assertIn(self.team.get_grade_str(), page)
+        self.assertIn("Без группы", page)  # у Анны группы нет
+
+    def test_an_alumnus_is_not_given_a_made_up_group_number(self):
+        """У служебной группы выпускников номер «000000», и «Выпускник · 000000»
+        читается как поломка."""
+        alumni = Team.objects.create(
+            number="000000", profile="Выпускники", course_code="—",
+            stage="bachelor", year_of_admission=Team.ALUMNI_YEAR,
+        )
+        User.objects.filter(pk=self.anna.pk).update(team=alumni)
+
+        rows = self.get().content.decode().split('id="student-list"')[1]
+
+        self.assertIn("Выпускник", rows)
+        self.assertNotIn(alumni.number, rows)
+
+    def test_the_service_group_is_not_offered_as_a_group(self):
+        """Её номер «000000» ничего не значит, а отбор по ней — это ровно курс
+        «Выпускники», который тут же рядом."""
+        alumni = Team.objects.create(
+            number="000000", profile="Выпускники", course_code="—",
+            stage="bachelor", year_of_admission=Team.ALUMNI_YEAR,
+        )
+
+        listed = self.get().context["form"].fields["team"].queryset
+
+        self.assertIn(self.team, listed)
+        self.assertNotIn(alumni, listed)
+
+    def test_a_live_search_answers_with_the_list_alone(self):
+        chunk = self.client.get(reverse("student_list"), {"q": "Петров"}, headers={"HX-Request": "true"})
+
+        self.assertContains(chunk, "Петров Пётр")
+        self.assertNotContains(chunk, "Поиск студентов")  # шапка страницы не переезжает
+
+    def test_the_course_filter_keeps_only_that_year(self):
+        """Курс нигде не хранится — он считается от года зачисления группы."""
+        older = Team.objects.create(
+            number="Б05-999", profile="Программирование", course_code="03.03.01",
+            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
+        )
+        User.objects.filter(pk=self.petr.pk).update(team=older)
+
+        found = self.get(course=str(self.team.get_grade_level()))
+
+        self.assertEqual(self.names(found), ["Иванов Иван"])
+
+    def test_the_courses_offered_are_the_ones_that_exist(self):
+        """Список не зашит: набор групп меняется каждый год, и «6 курс», за которым
+        никого нет, — предложение, ведущее в пустоту."""
+        offered = [value for value, _ in self.get().context["form"].fields["course"].choices if value]
+
+        self.assertEqual(offered, [str(self.team.get_grade_level())])
+
+    def test_graduates_are_a_bucket_of_their_own(self):
+        alumni = Team.objects.create(
+            number="000000", profile="Выпускники", course_code="—",
+            stage="bachelor", year_of_admission=Team.ALUMNI_YEAR,
+        )
+        User.objects.filter(pk=self.anna.pk).update(team=alumni)
+
+        self.assertEqual(self.names(self.get(course=ALUMNI)), ["Сидорова Анна"])
+
+    def test_the_group_filter_keeps_only_its_members(self):
+        self.assertEqual(self.names(self.get(team=self.team.pk)), ["Иванов Иван", "Петров Пётр"])
+
+    def test_a_group_from_another_course_narrows_to_nothing(self):
+        """Фильтры складываются: курс И группа. Тупик тут честнее, чем молчаливое
+        игнорирование одного из двух."""
+        older = Team.objects.create(
+            number="Б05-999", profile="Программирование", course_code="03.03.01",
+            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
+        )
+
+        found = self.get(course=str(self.team.get_grade_level()), team=older.pk)
+
+        self.assertEqual(self.names(found), [])
+        # И говорим об этом честно: «пока никого» тут читалось бы как «людей нет вовсе».
+        self.assertContains(found, "Под такой подбор никто не попал")
+
+    def test_the_group_list_shrinks_to_the_chosen_course(self):
+        older = Team.objects.create(
+            number="Б05-999", profile="Программирование", course_code="03.03.01",
+            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
+        )
+
+        listed = self.get(course=str(self.team.get_grade_level())).context["form"].fields["team"].queryset
+
+        self.assertIn(self.team, listed)
+        self.assertNotIn(older, listed)
+
+    def test_the_chosen_group_stays_in_the_list_even_off_course(self):
+        """Иначе своего же значения в списке не оказалось бы и сменить его было бы нечем."""
+        older = Team.objects.create(
+            number="Б05-999", profile="Программирование", course_code="03.03.01",
+            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
+        )
+
+        found = self.get(course=str(self.team.get_grade_level()), team=older.pk)
+
+        self.assertIn(older, found.context["form"].fields["team"].queryset)
+
+    def test_junk_in_the_filters_does_not_break_the_page(self):
+        self.assertEqual(self.get(course="; drop table", team="ой").status_code, 200)
+        self.assertEqual(self.names(self.get(course="; drop table")), self.names(self.get()))
+
+    def test_changing_the_course_brings_the_filters_back_with_the_list(self):
+        """Набор групп в селекте после смены курса другой — без oob-замены он остался бы
+        прежним, и в нём предлагались бы чужие группы."""
+        chunk = self.client.get(
+            reverse("student_list"), {"course": str(self.team.get_grade_level())},
+            headers={"HX-Request": "true"},
+        )
+
+        self.assertContains(chunk, 'id="student-filters"')
+        self.assertContains(chunk, "hx-swap-oob")
+        self.assertIn("course=", chunk["HX-Push-Url"])
+
+    def test_loading_the_next_batch_does_not_touch_the_filters(self):
+        """Каждая порция иначе перерисовывала бы селекты — и сбрасывала бы открытый список."""
+        chunk = self.client.get(reverse("student_list"), {"page": 1}, headers={"HX-Request": "true"})
+
+        self.assertNotContains(chunk, "hx-swap-oob")
+
+    def test_the_menu_leads_here_and_lights_up(self):
+        page = self.get()
+
+        self.assertEqual(page.context["section"], "students")
+        self.assertIn(f'href="{reverse("student_list")}"', page.content.decode())
+
+    def test_the_profile_does_not_light_the_section(self):
+        """В профиль приходят отовсюду — из чата, из ленты отзывов; подсвеченные
+        «Студенты» соврали бы про то, откуда человек пришёл."""
+        page = self.client.get(reverse("profile", args=[self.ivan.pk]))
+
+        self.assertEqual(page.context["section"], "")

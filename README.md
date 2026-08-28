@@ -4,9 +4,8 @@ Student portal for КНТ at MIPT, live at [knt-mipt.ru](https://knt-mipt.ru). D
 PostgreSQL, WebSockets over Channels, background work in Celery, deployed as Docker Compose from a
 push to `main`.
 
-> **In active development.** First commit June 2026, still moving. The site is already serving its
-> users on the production domain, with one section held behind a beta gate until the gamification
-> around it is finished (`core/beta.py`). It replaces the first generation of the same site,
+> **In active development.** First commit June 2026, still moving. The site is serving its users on
+> the production domain, every section open. It replaces the first generation of the same site,
 > [knt-portal-legacy](https://github.com/Nepike/knt-portal-legacy) — the `import_legacy*`
 > management commands exist to carry data across.
 
@@ -23,11 +22,13 @@ GitHub Actions
 
 | App | What it holds |
 |---|---|
-| `users` | Custom user model, sessions with a last-seen marker, forced password change on first login |
-| `core` | Shared base: `Moderated` abstract model, subjects, terms, teams, name search, mail, throttling, HTMX middleware |
+| `users` | Custom user model, sessions with a last-seen marker, forced password change on first login, the people directory |
+| `core` | Shared base: `Moderated` abstract model, subjects, terms, teams, name search, list filtering, sidebar sections, mail, throttling, HTMX middleware |
 | `wall` | A pixel canvas in the spirit of r/place — boards, pixels, placements, protected areas, live over WebSockets |
 | `chats` | Chats with membership, messages and reactions, live over WebSockets |
-| `materials` | Uploaded study materials with comments, going through moderation |
+| `materials` | Uploaded study materials, going through moderation |
+| `comments` | Discussion under a material or a lecture: threads, likes, images, anonymity |
+| `bookmarks` | "Come back to this": a mark on a material, book, lecture course or teacher, and the page listing them |
 | `library` | Book catalogue, also moderated |
 | `teachers` | Teacher cards and student reviews |
 | `economy` | Internal currency: a wallet per user, every change written to a ledger |
@@ -55,6 +56,12 @@ worker does the actual SMTP, so a slow mail server never blocks a request. Devel
 delivery backend for one that prints to the console — the message still travels the full path
 through the queue.
 
+**A `beat` container is the alarm clock.** It runs no work of its own, it only drops scheduled
+tasks into the same queue (`CELERY_BEAT_SCHEDULE`). Today that is one job: a nightly
+`clean_uploads --apply` that sweeps abandoned uploads and lecture folders nothing points at.
+Its state file lives in the container's `/tmp` on purpose — the only thing persisting it would
+buy is a catch-up run after a restart, and a storage sweep has nothing to catch up on.
+
 **Files can live in two places.** With R2 credentials set they go to the bucket, and large uploads
 go straight from the browser to it; with the variables empty they land in `media/` on disk, which
 is how development runs so that it never touches the production bucket. `storage_sync` moves what
@@ -71,9 +78,9 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-730 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+856 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
-by accident; it also makes Celery eager and lifts the beta gate. One test builds the static files
+by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails
 `collectstatic` and stops the container from starting at all.
 

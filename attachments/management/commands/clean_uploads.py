@@ -4,14 +4,18 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from attachments.models import File
-from attachments.storage import file_storage
+from attachments.storage import drop_prefix, file_storage
+from attachments.uploads import under
 from intake.models import MediaJob
+from lectorium.models import Lecture
 
 PREFIX = "uploads"
+# Папки готовых наборов HLS: их создаёт приёмка (`intake.views.plan`).
+SETS = "lectures"
 
 
 class Command(BaseCommand):
-    help = "Убирает из хранилища прямые загрузки, к которым так и не привязалась запись File."
+    help = "Убирает из хранилища бесхозное: прямые загрузки без записи File и папки наборов без лекции."
 
     def add_arguments(self, parser):
         parser.add_argument("--days", type=int, default=1, help="не трогать загруженное за последние N дней")
@@ -48,6 +52,9 @@ class Command(BaseCommand):
         broken = self.abandoned(storage, cutoff, options["apply"])
         self.stdout.write(self.style.SUCCESS(f"брошенных многочастных загрузок: {broken}"))
 
+        stray, pieces = self.stray_sets(storage, cutoff, options["apply"])
+        self.stdout.write(self.style.SUCCESS(f"бесхозных наборов: {stray} ({pieces} кусков)"))
+
     def needed(self):
         """Ключи, которые нельзя трогать: у них есть хозяин.
 
@@ -69,6 +76,41 @@ class Command(BaseCommand):
             MediaJob.objects.exclude(status=MediaJob.Status.DONE).values_list("source", flat=True)
         )
         return keys
+
+    def stray_sets(self, storage, cutoff, apply):
+        """Папки готовых наборов, на которые не смотрит ни лекция, ни задание.
+
+        Имя папке даёт `intake.views.plan` и тут же записывает его в задание, поэтому
+        бесхозной она становится только потеряв хозяина: удалили задание в обход сигналов
+        (bulk-delete, правка базы руками) или упавший Redis не донёс уборочную задачу.
+        А весит такая папка гигабайты, и найти её в бакете больше нечем — в базе не
+        осталось ни строки с этим именем.
+
+        Отдельно от `uploads/` не только по месту: там сироту опознают по отсутствию
+        записи `File`, а здесь — по отсутствию сразу двух видов хозяина.
+        """
+        known = set(Lecture.objects.exclude(prefix="").values_list("prefix", flat=True))
+        known |= set(MediaJob.objects.exclude(prefix="").values_list("prefix", flat=True))
+
+        try:
+            folders, _ = storage.listdir(SETS)
+        except FileNotFoundError:
+            return 0, 0  # локальный диск: каталога ещё нет, значит и наборов нет
+
+        found = pieces = 0
+        for folder in folders:
+            prefix = f"{SETS}/{folder}"
+            if prefix in known:
+                continue
+            # Возраст берём по первому же куску: у папки в бакете времени нет вовсе,
+            # а спрашивать про каждый из тысяч — тысячи запросов.
+            keys = sorted(under(prefix))
+            if not keys or storage.get_modified_time(keys[0]) > cutoff:
+                continue
+            found += 1
+            self.stdout.write(f"{prefix} ({len(keys)} кусков)")
+            pieces += drop_prefix(prefix) if apply else len(keys)
+        return found, pieces
 
     def abandoned(self, storage, cutoff, apply):
         """Начатые и не собранные многочастные загрузки.

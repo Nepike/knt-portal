@@ -20,9 +20,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from attachments.uploads import sign_download, sign_put, under
-from lectorium.tasks import drop_lecture_files
 
-from .models import MediaJob, take
+from .models import MediaJob, sweep, take
 from .spec import MASTER, POSTER, RECIPES, check_ladder, payload
 from .tasks import drop_source
 
@@ -101,12 +100,21 @@ def _body(request):
 
 def _job(payload):
     """Задание по присланному токену или None. Номер приходит от пекарни, и без подписи
-    она могла бы закрыть чужое."""
+    она могла бы закрыть чужое.
+
+    В токене не только номер, но и НОМЕР ПОПЫТКИ. Пекарня, промолчавшая дольше
+    `CLAIM_TIMEOUT`, не умерла — она просто медленная, и задание к тому времени уже отдано
+    другой машине. По одному номеру задания обе оставались бы полноправными: первая
+    доделала бы своё и снесла папку второй. Попытку увеличивает `take`, поэтому старый
+    токен перестаёт подходить ровно в тот миг, когда работу передали.
+    """
     try:
-        number = signing.loads(payload.get("token", ""), salt=JOB_SALT, max_age=JOB_MAX_AGE)
-    except signing.BadSignature:
+        number, attempt = signing.loads(payload.get("token", ""), salt=JOB_SALT, max_age=JOB_MAX_AGE)
+    except (signing.BadSignature, TypeError, ValueError):
         return None
-    return MediaJob.objects.filter(pk=number, status=MediaJob.Status.BAKING).first()
+    return MediaJob.objects.filter(
+        pk=number, attempts=attempt, status=MediaJob.Status.BAKING,
+    ).first()
 
 
 def _gone():
@@ -127,7 +135,7 @@ def claim(request):
     return JsonResponse({"job": {
         "id": job.pk,
         "recipe": job.recipe,
-        "token": signing.dumps(job.pk, salt=JOB_SALT),
+        "token": signing.dumps([job.pk, job.attempts], salt=JOB_SALT),
         "source": sign_download(job.source),
         "name": PurePosixPath(job.source).name,
     }})
@@ -162,13 +170,14 @@ def plan(request):
     # Папка всегда новая, даже на повторе: класть свежие куски поверх недолитых —
     # значит получить набор из двух выпечек, где половина сегментов от прошлой.
     # А недолитое надо СНЯТЬ, иначе каждая упавшая на заливке пекарня оставляла бы
-    # в бакете по гигабайту, которого потом ничем не найти.
+    # в бакете по гигабайту, которого потом ничем не найти. Через `sweep`, потому что
+    # прошлая папка бывает и не недолитой: у задания, возвращённого в очередь после
+    # успеха, это набор живой лекции (см. sweep).
     stale = job.prefix
     job.prefix = f"lectures/{uuid4().hex}"
     job.manifest = body["manifest"]
     job.save(update_fields=["prefix", "manifest", "updated"])
-    if stale:
-        transaction.on_commit(lambda: drop_lecture_files.delay(stale))
+    sweep(stale)
     return JsonResponse({"prefix": job.prefix})
 
 
@@ -240,8 +249,9 @@ def commit(request):
     # Сырьё больше не нужно: гигабайты, из которых уже всё взяли.
     source = job.source
     transaction.on_commit(lambda: drop_source.delay(source))
-    if replaced and replaced != job.prefix:
-        transaction.on_commit(lambda: drop_lecture_files.delay(replaced))
+    # Через `sweep`, а не напрямую: он же и убережёт от повторного `commit`, когда
+    # «прошлая» папка — это та самая, что мы только что поставили лекции.
+    sweep(replaced)
     return JsonResponse({"ok": True})
 
 
@@ -257,7 +267,13 @@ def fail(request):
     if job is None:
         return _gone()
 
+    # Недолитое снимаем прямо здесь, а не откладываем до следующей попытки: попытки
+    # может и не быть. Самый обычный отказ — оборвавшаяся ЗАЛИВКА, то есть папка уже
+    # с гигабайтом кусков; брошенная, она осталась бы в бакете навсегда, потому что
+    # искать её потом не по чему. Заодно чистим и поле — оно указывало бы в пустоту.
+    stale, job.prefix = job.prefix, ""
     job.status = MediaJob.Status.FAILED
     job.note = str(body.get("error", ""))[:300]
-    job.save(update_fields=["status", "note", "updated"])
+    job.save(update_fields=["status", "note", "prefix", "updated"])
+    sweep(stale)
     return JsonResponse({"ok": True})

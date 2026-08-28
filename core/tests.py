@@ -12,8 +12,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
-from django.test import SimpleTestCase, TestCase, override_settings
-from django.urls import reverse
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
+from django.urls import ResolverMatch, get_resolver, reverse
 
 from PIL import Image as PilImage
 
@@ -24,7 +24,7 @@ from users.models import User
 
 from chats.models import Chat
 
-from . import beta
+from . import nav
 from .legacy_markup import to_markdown
 from .management.commands.import_legacy_files import extension, filename
 from .search import by_name
@@ -247,49 +247,30 @@ class HtmxVaryTests(TestCase):
             self.assertIn("HX-Request", response.headers["Vary"])
 
 
-@override_settings(BETA=True)
-class BetaLockTests(TestCase):
-    """Закрыта геймификация: профиль со всем, что к нему прицеплено, и магазин.
+class OpenSectionsTests(TestCase):
+    """Сайт открыт целиком: ни одного раздела за замком.
 
-    Решение пользователя: открывать не по частям, а разом — когда будут ещё кейсы и значки.
+    Класс остался от беты, когда геймификация была закрыта до готовности кейсов и значков.
+    Замок снят к релизу, и проверка развернулась: теперь она следит, чтобы ни один раздел
+    не оказался закрыт снова по недосмотру — молча погасший пункт меню заметить трудно.
     """
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
-        self.staff = make_user("staff@x.ru", is_staff=True)
         self.client.force_login(self.reader)
 
-    def test_every_other_section_is_reachable(self):
-        # Загрузка и правка тоже: «только чтение» кончилось вместе с проверкой разделов.
-        for name in ("material_list", "book_list", "teacher_list", "support",
-                     "chat_list", "material_new", "book_new"):
+    def test_every_section_is_reachable(self):
+        # Загрузка и правка тоже, а не только чтение. Стены тут нет: без заведённой доски
+        # она честно отвечает 404, и это про доску, а не про доступ.
+        for name in ("material_list", "book_list", "teacher_list", "support", "chat_list",
+                     "material_new", "book_new", "playlist_list", "shop"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
-    def test_the_profile_explains_itself_instead_of_pretending_to_be_missing(self):
-        # 403 со страницей, а не 404: страница существует, просто ещё не показывается.
-        response = self.client.get(reverse("profile", args=[self.reader.pk]))
+    def test_the_profile_and_what_hangs_off_it_are_open(self):
+        self.assertEqual(self.client.get(reverse("profile", args=[self.reader.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("profile_edit")).status_code, 200)
 
-        self.assertEqual(response.status_code, 403)
-        self.assertContains(response, "Страница ещё не готова", status_code=403)
-
-    def test_everything_hanging_off_the_profile_is_closed_too(self):
-        # Правка, сессии и экипировка живут на той же странице — открывать их поодиночке
-        # значило бы оставить работающие ручки у закрытой двери.
-        self.assertEqual(self.client.get(reverse("profile_edit")).status_code, 403)
-        self.assertEqual(self.client.post(reverse("session_end")).status_code, 403)
-        self.assertEqual(self.client.post(reverse("item_unequip")).status_code, 403)
-
-    def test_the_shop_is_closed_together_with_the_profile(self):
-        # Покупать, не видя купленного в профиле, нечего — открываться им только вместе.
-        self.assertEqual(self.client.get(reverse("shop")).status_code, 403)
-        self.assertEqual(self.client.post(reverse("item_buy", args=[1])).status_code, 403)
-
-    def test_staff_walks_everywhere(self):
-        self.client.force_login(self.staff)
-        self.assertEqual(self.client.get(reverse("profile", args=[self.staff.pk])).status_code, 200)
-        self.assertEqual(self.client.get(reverse("shop")).status_code, 200)
-
-    def test_an_anonymous_visitor_is_sent_to_login_not_to_the_beta_page(self):
+    def test_an_anonymous_visitor_is_sent_to_login(self):
         self.client.logout()
         target = reverse("profile", args=[self.reader.pk])
 
@@ -298,32 +279,22 @@ class BetaLockTests(TestCase):
     def test_the_root_leads_to_materials(self):
         self.assertRedirects(self.client.get("/"), reverse("material_list"))
 
-    @override_settings(BETA=False)
-    def test_switching_beta_off_opens_everything(self):
-        self.assertEqual(self.client.get(reverse("profile", args=[self.reader.pk])).status_code, 200)
-
-    def test_the_menu_does_not_offer_a_page_that_is_closed(self):
-        """Пункты гасим, а не прячем — пусть видно, что раздел есть и никуда не делся."""
+    def test_the_menu_gives_out_every_link(self):
+        """Пункт без href — это раздел, который кто-то закрыл и забыл открыть обратно."""
         page = self.client.get(reverse("material_list")).content.decode()
 
-        self.assertIn("Профиль", page)
-        self.assertIn("Магазин", page)
-        self.assertNotIn(reverse("profile", args=[self.reader.pk]), page)
-        self.assertNotIn(f'href="{reverse("shop")}"', page)
+        for name in ("playlist_list", "shop", "wall", "book_list"):
+            self.assertIn(f'href="{reverse(name)}"', page, name)
+        self.assertIn(reverse("profile", args=[self.reader.pk]), page)
 
-    def test_staff_still_gets_the_links(self):
-        # Словарь locked собран из того же списка, что и замок, значит и исключение для
-        # персонала должно совпадать: иначе пункт серый, а страница открывается.
-        self.client.force_login(self.staff)
+    def test_nothing_promises_a_beta_any_more(self):
         page = self.client.get(reverse("material_list")).content.decode()
 
-        self.assertIn(reverse("profile", args=[self.staff.pk]), page)
-        self.assertIn(f'href="{reverse("shop")}"', page)
+        self.assertNotIn("бета", page.lower())
 
 
-@override_settings(BETA=True)
-class BetaTeachersTests(TestCase):
-    """Раздел преподавателей открыт ЦЕЛИКОМ — не только чтение, но и отзывы."""
+class TeacherSectionTests(TestCase):
+    """Раздел преподавателей целиком — не только чтение, но и отзывы."""
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
@@ -346,7 +317,6 @@ class BetaTeachersTests(TestCase):
         self.assertFalse(Review.objects.filter(pk=review.pk).exists())
 
 
-@override_settings(BETA=True)
 class SupportFormTests(TestCase):
     def setUp(self):
         self.user = make_user("reader@x.ru", name="Иван", surname="Петров")
@@ -369,11 +339,6 @@ class SupportFormTests(TestCase):
             response = self.client.post(reverse("support"), {"topic": "broken", "text": ""})
         self.assertEqual(response.status_code, 200)
         sent.assert_not_called()
-
-    def test_the_page_says_nothing_about_the_beta(self):
-        # Страница переживёт бету — плашка на ней была бы мусором уже через месяц.
-        page = self.client.get(reverse("support")).content.decode()
-        self.assertNotIn("бета-версии", page)
 
     def test_a_logged_in_person_is_not_asked_for_a_contact(self):
         # Связаться есть как: в чат уезжает ссылка на профиль, а там телеграм и ВК.
@@ -413,7 +378,6 @@ class SupportFormTests(TestCase):
         self.assertTrue(sent.call_args.kwargs["image"])
 
 
-@override_settings(BETA=True)
 class SupportWithoutLoginTests(TestCase):
     """Кто не может войти — как раз тот, кому поддержка нужнее всего."""
 
@@ -477,6 +441,35 @@ class ThrottleTests(SimpleTestCase):
         with patch("core.throttle.cache.add", side_effect=ConnectionError("Redis не отвечает")):
             with self.assertLogs("core.throttle", "ERROR"):
                 self.assertFalse(throttled("t:dead", 1))
+
+
+class NavSectionTests(SimpleTestCase):
+    """Пункт меню подсвечен по РАЗДЕЛУ, а не по странице: уйдя со списка материалов
+    в конкретный материал, человек из раздела не вышел."""
+
+    def at(self, url_name):
+        request = RequestFactory().get("/")
+        request.resolver_match = ResolverMatch(lambda r: None, (), {}, url_name=url_name)
+        return nav.section(request)
+
+    def test_inner_pages_keep_their_section_lit(self):
+        self.assertEqual(self.at("material_list"), "materials")
+        self.assertEqual(self.at("material_detail"), "materials")
+        self.assertEqual(self.at("playlist_detail"), "lectorium")
+        self.assertEqual(self.at("book_edit"), "library")
+
+    def test_a_page_outside_the_menu_lights_nothing(self):
+        # Профиля и поддержки в меню нет — подсвечивать нечего, и это не ошибка.
+        self.assertEqual(self.at("profile"), "")
+        self.assertEqual(self.at(None), "")
+
+    def test_every_name_in_the_map_is_a_real_url(self):
+        """Карта живёт отдельно от urls.py: переименовали урл — пункт молча погаснет
+        навсегда, и заметить это можно только глазами."""
+        known = get_resolver().reverse_dict
+        missing = sorted(name for names in nav.SECTIONS.values() for name in names if name not in known)
+
+        self.assertFalse(missing, f"в core/nav.py имена, которых нет среди урлов: {missing}")
 
 
 class StaticBuildTests(SimpleTestCase):

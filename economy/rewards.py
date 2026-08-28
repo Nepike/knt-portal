@@ -30,6 +30,14 @@ from .services import credit, lock
 WELCOME = 500
 MATERIAL = 50  # одобренный материал — основной вклад, и он проходит через проверку
 BOOK = 30  # книга реже и проще материала
+# Курс лекций — работа другого порядка: снять пару, дотащить гигабайты до сайта и дождаться
+# выпечки. Отсюда и цифра, назначенная пользователем: десять материалов.
+#
+# Платим за КУРС, а не за запись в нём: так решено, и так проще людям — но это значит,
+# что двадцать курсов по одной лекции принесут вдесятеро больше, чем один из двадцати.
+# Держится на том, что курсы заводят по отдельному праву и каждый проходит проверку;
+# начнут дробить — считать придётся по записям.
+PLAYLIST = 500
 REVIEW_TEXT = 20  # отзыв, в котором есть что читать: таких на весь сайт 183
 REVIEW_SCORES = 5  # голые оценки — это клик, но статистике преподавателя они нужны
 MODERATION = 5  # за разобранную чужую работу, одобрил её модератор или вернул
@@ -85,12 +93,14 @@ def earned(user):
 
 
 def _uploads(user):
-    """Одобренные материалы и книги. Неодобренные не в счёт: работа на проверке ещё
-    может и не выйти, а заплатить за неё значило бы платить за попытку."""
+    """Одобренные материалы, книги и курсы лекций. Неодобренные не в счёт: работа
+    на проверке ещё может и не выйти, а заплатить за неё значило бы платить за попытку."""
+    from lectorium.models import Playlist
     from library.models import Book
     from materials.models import Material
 
-    for model, reason, rate in ((Material, R.MATERIAL, MATERIAL), (Book, R.BOOK, BOOK)):
+    for model, reason, rate in ((Material, R.MATERIAL, MATERIAL), (Book, R.BOOK, BOOK),
+                                (Playlist, R.PLAYLIST, PLAYLIST)):
         rows = model.objects.filter(uploader=user, status=model.Status.APPROVED).values_list("pk", "title")
         for pk, title in rows:
             yield Award(reason, str(pk), rate, title)
@@ -119,15 +129,20 @@ def _reviews(user):
 
 def _comments(user):
     """Сам комментарий не оплачивается — ни с текстом, ни с картинкой: иначе под каждым
-    материалом выросла бы ферма «спасибо». Платят за него только чужие лайки."""
-    rows = user.material_comments.annotate(
+    материалом выросла бы ферма «спасибо». Платят за него только чужие лайки.
+
+    Название берём у того владельца, который есть: комментарий висит либо под материалом,
+    либо под лекцией. Ключ награды (`c<номер>`) от переезда модели не поменялся — иначе
+    уже выплаченное начислилось бы второй раз.
+    """
+    rows = user.comments.annotate(
         likes=Count("liked_users", distinct=True),
         dislikes=Count("disliked_users", distinct=True),
-    ).values_list("pk", "material__title", "likes", "dislikes")
+    ).values_list("pk", "material__title", "lecture__title", "likes", "dislikes")
 
-    for pk, title, likes, dislikes in rows:
+    for pk, material, lecture, likes, dislikes in rows:
         if net := _net(likes, dislikes):
-            yield Award(R.LIKES, f"c{pk}", LIKE * net, f"лайки на комментарии к «{title}»")
+            yield Award(R.LIKES, f"c{pk}", LIKE * net, f"лайки на комментарии к «{material or lecture}»")
 
 
 def _net(likes, dislikes):
@@ -183,10 +198,11 @@ def _wall(user):
 def _moderated(user):
     """Чужие работы, по которым человек принял решение. Свои не в счёт — иначе модератор
     получал бы дважды: и как автор, и как проверяющий."""
+    from lectorium.models import Playlist
     from library.models import Book
     from materials.models import Material
 
-    for model, mark in ((Material, "m"), (Book, "b")):
+    for model, mark in ((Material, "m"), (Book, "b"), (Playlist, "p")):
         rows = (
             model.objects.filter(reviewed_by=user).exclude(uploader=user).values_list("pk", "title")
         )

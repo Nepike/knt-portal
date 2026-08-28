@@ -1,4 +1,5 @@
 import secrets
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -10,19 +11,22 @@ from django.contrib.auth.views import (
     PasswordResetView as BasePasswordResetView,
 )
 from django.contrib.sessions.models import Session
-from django.db.models import Count
+from django.core.paginator import Paginator
+from django.db.models import Count, Q, Sum
+from django.db.models.functions import Coalesce
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from cosmetics.models import CosmeticItem
 from cosmetics.services import inventory, outfit
-from core.models import Moderated
+from core.models import ALUMNI, Moderated, Team
+from core.search import by_name
 from core.throttle import client_ip, throttled
 from library.models import Book
 from materials.models import Material
 
-from .forms import MAX_AVATAR_DATA, ProfileForm, RegisterUserForm
+from .forms import MAX_AVATAR_DATA, ProfileForm, RegisterUserForm, StudentFilterForm
 from .models import User
 from .sessions import alive
 
@@ -59,7 +63,7 @@ def _contributions(person, full):
     materials = Material.objects.filter(uploader=person, status=approved)
     books = Book.objects.filter(uploader=person, status=approved)
     reviews = person.teacher_reviews.all()
-    comments = person.material_comments.all()
+    comments = person.comments.all()
     if not full:
         materials = materials.filter(hide_uploader=False)
         books = books.filter(hide_uploader=False)
@@ -73,6 +77,138 @@ def _contributions(person, full):
         "comments": comments.count(),
         "by_term": _by_term(materials),
     }
+
+
+PAGE_SIZE = 24  # человек в порции
+TOP_SIZE = 3
+# Как сортировать список. По алфавиту — по умолчанию: раздел заведён, чтобы НАЙТИ
+# человека, а не посмотреть, кто первый.
+SORTS = {"name": ("surname", "name"), "contribution": ("-earned", "surname", "name")}
+SORT_LABELS = {"name": "По алфавиту", "contribution": "По вкладу"}
+
+
+def _people():
+    """Все живые люди со счётчиком заработанного.
+
+    Считаем ЗАРАБОТАННОЕ (плюсы журнала), а не баланс. Баланс — это заработанное минус
+    потраченное, и топ по нему получился бы топом тех, кто ничего не покупает: купил
+    рамку — уехал вниз. А ещё баланс — дело личное (чужой кошелёк в профиле не
+    показывается), тогда как заработанное складывается из того, что и так на виду:
+    материалов, книг, отзывов, клеток на Стене.
+    """
+    earned = Sum("wallet__entries__amount", filter=Q(wallet__entries__amount__gt=0))
+    return (
+        User.objects.filter(is_active=True)
+        .select_related("team")
+        .annotate(earned=Coalesce(earned, 0))
+    )
+
+
+def _courses():
+    """{значение фильтра: (подпись, [номера групп])} — по нынешнему составу групп.
+
+    Список курсов не зашит: набор групп меняется каждый год, и «6 курс», за которым
+    никого нет, — предложение, ведущее в пустоту.
+
+    Считаем в Python и по ГРУППАМ: курс нигде не хранится, он выводится из года
+    зачисления (`Team.grade_key`), и вторая его реализация на SQL разошлась бы с первой
+    в первый же сентябрь. Групп два десятка — это один запрос, а не арифметика
+    по трёмстам людям.
+    """
+    buckets = {}
+    for team in Team.objects.all():
+        key = team.grade_key()
+        label = "Выпускники" if key == ALUMNI else f"{key} курс"
+        buckets.setdefault(key, (label, []))[1].append(team.pk)
+    # Курсы по возрастанию, выпускники последними: они не курс, а его отсутствие.
+    return dict(sorted(buckets.items(), key=lambda pair: (pair[0] == ALUMNI, pair[0])))
+
+
+def student_list(request):
+    q = request.GET.get("q", "").strip()
+    sort = request.GET.get("sort", "")
+    if sort not in SORTS:
+        sort = "name"
+
+    courses = _courses()
+    course = request.GET.get("course", "")
+    if course not in courses:
+        course = ""
+    asked = request.GET.get("team", "")
+    team = Team.objects.filter(pk=asked).first() if asked.isdigit() else None
+
+    people = _people()
+    if course:
+        people = people.filter(team__in=courses[course][1])
+    if team:
+        people = people.filter(team=team)
+    if q:
+        people = by_name(people, q)
+    # Порядок поиска сохраняем ПЕРВЫМ ключом: он ставит вперёд тех, у кого слово стоит
+    # в начале имени, — по «Иван» это Иван и Иванов, а не десять Ивановых (`core.search`).
+    # Выбранная сортировка идёт после него, иначе поиск перестал бы попадать в цель.
+    people = people.order_by(*(("name_rank",) if q else ()), *SORTS[sort])
+
+    page = Paginator(people, PAGE_SIZE).get_page(request.GET.get("page"))
+    # Форма несвязанная, со значениями УЖЕ разобранными: селект показывает ровно то,
+    # что применено, а не то, что прислали.
+    form = StudentFilterForm(
+        courses=[(key, label) for key, (label, _) in courses.items()],
+        teams=_teams(courses, course, team),
+        initial={"course": course, "team": team.pk if team else ""},
+    )
+    context = {
+        "page": page, "people": page.object_list, "q": q, "sort": sort, "form": form,
+        # Пусто под выбранным курсом — это не «на сайте нет людей», и говорить об этом
+        # надо по-разному.
+        "picked": bool(course or team),
+    }
+
+    if not request.headers.get("HX-Request"):
+        return render(request, "users/students.html", {
+            **context, "sorts": SORT_LABELS.items(), "top": _top(),
+        })
+
+    if request.GET.get("page"):
+        return render(request, "users/_student_list.html", context)
+
+    # Сменили курс — вместе со списком возвращаем и сам блок подбора: набор групп
+    # в селекте после этого другой. Так же устроены материалы и лекторий.
+    response = render(request, "users/_student_list.html", {**context, "refresh_filters": True})
+    response["HX-Push-Url"] = _picked_url(request)
+    return response
+
+
+def _teams(courses, course, team):
+    """Группы для селекта: только выбранного курса — с ним их три вместо двух десятков.
+
+    Выбранную оставляем всегда, даже если она из другого курса: иначе своего же значения
+    в списке не оказалось бы и сменить его было бы нечем (та же оговорка, что
+    в `core.filters.narrow`).
+
+    Служебной группы выпускников в списке нет: её номер «000000» ничего не значит,
+    а отбор по ней — это ровно курс «Выпускники», который тут же рядом. Настоящие
+    выпустившиеся группы остаются со своими номерами.
+    """
+    teams = Team.objects.exclude(year_of_admission=Team.ALUMNI_YEAR)
+    if course:
+        teams = teams.filter(pk__in=courses[course][1])
+    if team:
+        teams = teams | Team.objects.filter(pk=team.pk)
+    return teams
+
+
+def _picked_url(request):
+    """Адрес списка с выбранным подбором: F5 не сбрасывает фильтры, а ссылку можно
+    переслать. Пустые параметры выбрасываем, `page` — тоже: он про порцию, а не про подбор."""
+    query = urlencode({key: value for key, value in request.GET.items() if value and key != "page"})
+    return f"{request.path}?{query}" if query else request.path
+
+
+def _top(size=TOP_SIZE):
+    """Кто сделал для сайта больше всех. Заработанное и есть мера вклада: оно набегает
+    из материалов, книг, курсов, отзывов и Стены — из всего, что на сайте видно."""
+    return list(_people().order_by("-earned")[:size])
 
 
 RECENT = 7  # операций в кошельке на странице профиля, дальше — «вся история»

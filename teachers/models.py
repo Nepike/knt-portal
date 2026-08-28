@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Avg, Count
+from django.urls import reverse
 from django.utils import timezone
 
 from attachments.storage import media_storage, random_key
@@ -65,6 +66,9 @@ class Teacher(models.Model):
 
     def __str__(self):
         return self.short_name()
+
+    def get_absolute_url(self):
+        return reverse("teacher_detail", args=[self.pk])
 
     def short_name(self):
         initials = f"{self.name[0]}." if self.name else ""

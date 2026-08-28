@@ -9,6 +9,7 @@ from unittest import mock
 from urllib.parse import unquote
 
 from botocore.exceptions import ClientError
+from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.core import signing
 from django.core.cache import cache
@@ -18,17 +19,20 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
+from core.models import Subject
 from intake.models import MediaJob
+from lectorium.models import Lecture, Playlist
 from library.models import Book
 from users.models import User
 
 from . import hls
-from .media import file_url, hls_key, hls_url, media_key, media_url, redirect_url
+from .media import MEDIA_CACHE, file_url, hls_key, hls_url, media_key, media_url, redirect_url
 from .models import File
 from .storage import drop_prefix, file_storage, random_key
+from .tasks import sweep_storage
 from .uploads import (
     MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, UPLOAD_SALT,
-    max_upload_size, part_size,
+    max_upload_size, new_key, part_size,
 )
 
 
@@ -303,6 +307,37 @@ class HlsDeliveryTests(TestCase):
     def test_a_signed_but_missing_piece_is_not_found(self):
         self.assertEqual(self.client.get(hls_url("lectures/abc/net.m3u8")).status_code, 404)
 
+    def test_a_segment_is_cached_by_the_browser_for_good(self):
+        """Без `immutable` браузер держит сегмент, но на каждый переспрашивает
+        «не изменилось?» — и запрос всё равно доходит до нас. На пересмотре лекции
+        это лишний круг на каждые 6 секунд видео, поймано на боевом трафике.
+
+        Врать тут нечем: в ключе uuid, перезапись запрещена, а подпись входит в адрес —
+        сменится ключ подписи, сменится и адрес."""
+        with override_settings(MEDIA_ACCEL=True):
+            rule = self.client.get(hls_url(self.segment))["Cache-Control"]
+
+        self.assertIn("immutable", rule)
+        self.assertIn("max-age=31536000", rule)
+
+    def test_without_nginx_the_segment_is_not_cached_for_a_year(self):
+        """Так живёт разработка: ответ — редирект на подписанную ссылку хранилища,
+        а та живёт сутки. Год кеша означал бы, что назавтра браузер идёт по протухшей
+        подписи и видео молча перестаёт заводиться."""
+        response = self.client.get(hls_url(self.segment))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn("immutable", response["Cache-Control"])
+        self.assertIn(f"max-age={MEDIA_CACHE}", response["Cache-Control"])
+
+    def test_a_manifest_is_cached_but_not_forever(self):
+        """Манифест — тот же неизменный кусок, но это ВХОД в набор: вечный кеш означал бы,
+        что правку раздачи часть людей не увидит год."""
+        rule = self.client.get(hls_url(self.master))["Cache-Control"]
+
+        self.assertIn("max-age=3600", rule)
+        self.assertNotIn("immutable", rule)
+
     def test_a_picture_token_does_not_open_a_lecture(self):
         """Соли разные не для красоты: подпись — это разрешение, и разрешение на кусок
         лекции не должно годиться там, где отдаются любые ключи."""
@@ -496,6 +531,32 @@ class UploadLimitTests(TestCase):
             self.assertEqual(max_upload_size(self.user), MAX_FILE_SIZE)
 
 
+class ScheduleTests(TestCase):
+    """Ночная уборка живёт расписанием, а расписание — строкой с именем задачи."""
+
+    def test_the_schedule_points_at_a_task_that_exists(self):
+        """Опечатку в имени beat находит только на боевом сервере в четыре утра,
+        и то в лог: задача просто не запускается, и никто об этом не узнаёт."""
+        from knt.celery import app as celery_app
+
+        celery_app.loader.import_default_modules()
+        for name, entry in settings.CELERY_BEAT_SCHEDULE.items():
+            self.assertIn(entry["task"], celery_app.tasks, name)
+
+    def test_the_nightly_sweep_actually_sweeps(self):
+        """Через команду, а не своей копией логики: руками её запускают ровно так же."""
+        with mock.patch("attachments.tasks.call_command") as command:
+            sweep_storage(days=3)
+
+        self.assertEqual(command.call_args.args, ("clean_uploads", "--apply", "--days=3"))
+
+    def test_it_gets_more_time_than_an_ordinary_task(self):
+        """Уборка обходит весь бакет — сотни запросов в чужую сеть; общий потолок
+        в минуту ей мал по построению."""
+        self.assertGreater(sweep_storage.soft_time_limit, settings.CELERY_TASK_SOFT_TIME_LIMIT)
+        self.assertGreater(sweep_storage.time_limit, sweep_storage.soft_time_limit)
+
+
 class DropPrefixBatchTests(SimpleTestCase):
     """Ветка для бакета: поштучно у двухчасовой лекции это 2400 запросов в чужую сеть.
 
@@ -661,6 +722,36 @@ class AdoptUploadTests(TestCase):
 
         self.assertTrue(file_storage().exists(key))
 
+    def stale_set(self, prefix):
+        """Папка готового набора в хранилище, состаренная — свежие уборка не трогает."""
+        storage = file_storage()
+        for name in ("master.m3u8", "poster.jpg", "0/seg00000.m4s"):
+            os.utime(storage.path(storage.save(f"{prefix}/{name}", ContentFile(b"x"))), (0, 0))
+        return prefix
+
+    def test_cleanup_sweeps_a_set_nobody_points_at(self):
+        """Имя папке даёт приёмка и тут же пишет его в задание. Осталась без хозяина —
+        значит хозяина потеряли, а весит она гигабайты и в базе её больше нет нигде."""
+        orphan = self.stale_set("lectures/бесхозный")
+
+        call_command("clean_uploads", "--apply", verbosity=0)
+
+        self.assertFalse(file_storage().exists(f"{orphan}/master.m3u8"))
+
+    def test_cleanup_does_not_touch_a_set_that_is_playing(self):
+        subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+        playlist = Playlist.objects.create(title="Механика", subject=subject, uploader=self.author)
+        live = self.stale_set("lectures/живой")
+        Lecture.objects.create(playlist=playlist, title="Первая", prefix=live)
+        # И папку задания, которое ещё печётся: пекарня как раз льёт в неё куски.
+        baking = self.stale_set("lectures/печётся")
+        MediaJob.objects.create(recipe="lecture", source="uploads/x/z.mkv", prefix=baking)
+
+        call_command("clean_uploads", "--apply", verbosity=0)
+
+        self.assertTrue(file_storage().exists(f"{live}/master.m3u8"))
+        self.assertTrue(file_storage().exists(f"{baking}/master.m3u8"))
+
     def test_order_continues_after_files_sent_through_the_app(self):
         key = self.put()
         self.create(uploaded=self.token(key))
@@ -712,6 +803,22 @@ class BlobCleanupTests(TestCase):
             key = random_key(folder, long_name)
             self.assertLessEqual(len(key), 100, folder)
             self.assertTrue(key.endswith(".pdf"), key)
+
+    def test_a_direct_upload_key_fits_it_too(self):
+        """Прямая загрузка ходит мимо `upload_to` и кладёт ключ в поле сама. Имя ей
+        приходит от браузера, обрезанное только до 150 символов, — и без этой же мерки
+        обычный студенческий заголовок давал пятисотку вместо сохранённого материала."""
+        long_name = "Конспект по общей физике. Механика и термодинамика. 1 семестр 2024.pdf"
+        key = new_key(long_name)
+
+        self.assertLessEqual(len(key), 100)
+        self.assertTrue(key.startswith("uploads/"), key)
+        self.assertTrue(key.endswith(".pdf"), key)
+        # Папка на ключ по-прежнему своя: по ней `drop_source` снимает сырьё целиком.
+        self.assertEqual(len(key.split("/")), 3, key)
+        # И он правда ложится в базу — ради этого всё и затевалось.
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
+        File.objects.create(book=book, name="конспект", file=key, size=1)
 
     def test_name_without_extension_survives(self):
         key = random_key("books", "конспект")

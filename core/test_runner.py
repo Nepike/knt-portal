@@ -14,11 +14,6 @@ class MediaIsolatedRunner(DiscoverRunner):
     override_settings его уже не переубедит — подменяем объект прямо в поле.
     Проходим по ВСЕМ моделям, а не по списку: иначе новое файловое поле однажды
     появится, про подмену забудут, и тесты молча полезут в боевой бакет.
-
-    Здесь же гасим бету (core/beta.py). Тесты описывают, каким сайт задуман, а бета —
-    временная накладка поверх: иначе каждый тест закрытого раздела пришлось бы чинить
-    сейчас и чинить обратно, когда накладку снимут. Сама она проверяется отдельно,
-    в core.tests.BetaLockTests, с явным override_settings(BETA=True).
     """
 
     def setup_test_environment(self, **kwargs):
@@ -31,7 +26,7 @@ class MediaIsolatedRunner(DiscoverRunner):
         celery_app.conf.task_eager_propagates = True
 
         self._media = tempfile.TemporaryDirectory()
-        self._override = override_settings(MEDIA_ROOT=self._media.name, BETA=False)
+        self._override = override_settings(MEDIA_ROOT=self._media.name)
         self._override.enable()
 
         storage = FileSystemStorage(location=self._media.name)

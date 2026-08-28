@@ -9,6 +9,8 @@
 """
 
 from django.db import models, transaction
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils import timezone
 
 # Столько ждём вестей от взявшего задание. Двухчасовая лекция печётся минут двадцать,
@@ -62,6 +64,41 @@ class MediaJob(models.Model):
             and self.claimed_at
             and (timezone.now() - self.claimed_at).total_seconds() > CLAIM_TIMEOUT
         )
+
+
+def sweep(prefix):
+    """Снять папку готового — но только если на неё не смотрит ни одна лекция.
+
+    Проверка не формальность. После `commit` папка задания И ЕСТЬ набор живой лекции,
+    а задание возвращают в очередь руками из админки, чтобы перепечь; без этой проверки
+    «прошлая папка» задания оказалась бы тем самым набором, который сейчас смотрят,
+    и опубликованная лекция осталась бы указывать в пустоту. Прошлый набор снимает
+    `commit` — тогда, когда новый уже встал на его место.
+    """
+    from lectorium.models import Lecture
+    from lectorium.tasks import drop_lecture_files
+
+    if prefix and not Lecture.objects.filter(prefix=prefix).exists():
+        transaction.on_commit(lambda: drop_lecture_files.delay(prefix))
+
+
+@receiver(post_delete, sender=MediaJob, dispatch_uid="intake.leftovers")
+def _drop_leftovers(sender, instance, **kwargs):
+    """Убрать за удалённым заданием.
+
+    Запись удалили, пока она пеклась, — задание уезжает каскадом, и вместе с ним
+    пропадает единственная память о двух вещах: о сырье (десятки гигабайт) и о папке,
+    куда пекарня уже успела налить кусков. `post_delete` самой лекции про них не знает:
+    до `commit` её `prefix` пуст. Без этого обеих потом не найти ничем.
+
+    У закрытого задания сырьё снял `commit`, а папка принадлежит лекции — обе ветки
+    об этом помнят.
+    """
+    from .tasks import drop_source
+
+    sweep(instance.prefix)
+    if instance.status != MediaJob.Status.DONE and instance.source:
+        transaction.on_commit(lambda: drop_source.delay(instance.source))
 
 
 def take(worker):

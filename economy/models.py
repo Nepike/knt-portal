@@ -39,6 +39,7 @@ class BalanceLog(models.Model):
         WELCOME = "welcome", "стартовые"
         MATERIAL = "material", "материалы"
         BOOK = "book", "книги"
+        PLAYLIST = "playlist", "курсы лекций"
         REVIEW = "review", "отзывы о преподавателях"
         LIKES = "likes", "лайки на твоих отзывах и комментариях"
         DOWNLOAD = "download", "скачивания твоих файлов"

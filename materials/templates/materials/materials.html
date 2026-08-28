@@ -16,7 +16,7 @@
 {% endcomment %}
 <form hx-get="{% url 'material_list' %}" hx-target="#material-list" hx-history="false"
       hx-trigger="change delay:100ms" class="mb-5">
-  {% include "materials/_filters.html" %}
+  {% include "core/_filters.html" %}
 </form>
 
 <div id="material-list" class="flex flex-col gap-3">

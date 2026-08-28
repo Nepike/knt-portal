@@ -27,6 +27,19 @@ from .uploads import (
 ACCEL_R2 = "/__r2"
 ACCEL_LOCAL = "/__local/"
 
+# Сколько браузеру держать кусок набора HLS.
+#
+# Сегмент неизменен по построению: в ключе uuid, перезапись в хранилище запрещена,
+# а подпись входит в АДРЕС — сменится ключ подписи, сменится и адрес, то есть протухшим
+# ответ оказаться не может в принципе. Поэтому `immutable`: без него браузер держит кусок
+# в кеше, но на каждый переспрашивает «не изменилось?», и запрос всё равно доходит
+# до нас. На пересмотре лекции это лишний круг на каждые 6 секунд видео.
+SEGMENT_MAX_AGE = 365 * 24 * 3600
+# Манифест — та же неизменная вещь, но это ВХОД в набор, и вечный кеш означал бы, что
+# правку раздачи часть людей не увидит год. Час — и перепроверок почти нет, и руки
+# не связаны.
+MANIFEST_MAX_AGE = 3600
+
 
 def _deliver(name):
     """Байты отдаёт nginx: он сам сходит в хранилище, закеширует и отправит файл.
@@ -108,14 +121,27 @@ def hls_piece(request, token, name):
     key = hls_key(token)
     if key is None:
         raise Http404
+
     if not key.endswith(".m3u8"):
-        return _allow_our_origin(request, _deliver(key))
+        response = _deliver(key)
+        # `immutable` годится только там, где наш адрес и есть ответ. В разработке
+        # `_deliver` отдаёт РЕДИРЕКТ на подписанную ссылку хранилища, а та живёт сутки:
+        # год кеша на такой ответ означает, что назавтра браузер идёт по протухшей
+        # подписи и сегменты начинают отдавать 403 — без единого намёка на причину.
+        # Ровно от этого бережётся и media_image ниже.
+        response["Cache-Control"] = (
+            f"public, max-age={SEGMENT_MAX_AGE}, immutable" if settings.MEDIA_ACCEL
+            else f"private, max-age={MEDIA_CACHE}"
+        )
+        return _allow_our_origin(request, response)
 
     try:
         text = manifest(key)
     except FileNotFoundError:
         raise Http404
-    return _allow_our_origin(request, HttpResponse(text, content_type=MANIFEST_TYPE))
+    response = HttpResponse(text, content_type=MANIFEST_TYPE)
+    response["Cache-Control"] = f"public, max-age={MANIFEST_MAX_AGE}"
+    return _allow_our_origin(request, response)
 
 
 @login_not_required

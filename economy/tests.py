@@ -11,7 +11,9 @@ from PIL import Image as PilImage
 
 from attachments.models import File
 from core.models import Subject
-from materials.models import Comment, Material
+from comments.models import Comment
+from lectorium.models import Playlist
+from materials.models import Material
 from teachers.models import Review, Teacher
 from users.models import User
 from wall.models import WallProfile
@@ -432,6 +434,51 @@ class RewardTests(TestCase):
         mine.reviewed_by = self.user
         mine.save(update_fields=["reviewed_by"])
         theirs = self.material(uploader=make_user("o@t.local"))
+        theirs.reviewed_by = self.user
+        theirs.save(update_fields=["reviewed_by"])
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.MODERATION), rewards.MODERATION)
+
+    def course(self, status=Playlist.Status.APPROVED, uploader=None, title="Линейная алгебра"):
+        return Playlist.objects.create(
+            title=title, subject=self.subject, uploader=uploader or self.user, status=status,
+        )
+
+    def test_an_approved_course_is_worth_ten_materials(self):
+        """Снять пару, дотащить гигабайты до сайта и дождаться выпечки — работа другого
+        порядка, чем выложить конспект."""
+        self.course()
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), rewards.PLAYLIST)
+        self.assertEqual(rewards.PLAYLIST, rewards.MATERIAL * 10)
+
+    def test_a_course_on_review_is_not_paid_for_yet(self):
+        self.course(status=Playlist.Status.PENDING)
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), 0)
+
+    def test_each_course_is_paid_for_separately(self):
+        # Ключ у награды свой на каждый курс: удаливший один не лишается платы за другой.
+        self.course(title="Первый")
+        self.course(title="Второй")
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), rewards.PLAYLIST * 2)
+
+    def test_a_deleted_course_does_not_take_its_payment_back(self):
+        """Выплаченное назад не забирается — иначе «удалить и залить заново» стало бы фермой."""
+        course = self.course()
+        rewards.sync(self.user)
+        course.delete()
+
+        self.assertEqual(rewards.sync(User.objects.get(pk=self.user.pk)), {})
+        self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), rewards.PLAYLIST)
+
+    def test_checking_someone_elses_course_pays_the_moderator(self):
+        theirs = self.course(uploader=make_user("lect@t.local"))
         theirs.reviewed_by = self.user
         theirs.save(update_fields=["reviewed_by"])
         rewards.sync(self.user)

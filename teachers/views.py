@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from attachments.uploads import drop_replaced
+from bookmarks.views import button as bookmark_button
 from core.search import by_name
 from economy import rewards
 
@@ -106,6 +107,8 @@ def teacher_detail(request, pk):
         "scales": scales,
         "hidden_count": hidden_count,
         "form": form,
+        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        "bookmark": bookmark_button(request.user, teacher),
     })
 
 

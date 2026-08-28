@@ -4,13 +4,17 @@ from uuid import uuid4
 from django.contrib.auth.models import Permission
 from django.contrib.messages import get_messages
 from django.core.files.base import ContentFile
-from django.test import TestCase, override_settings
+from django.template.loader import render_to_string
+from django.test import TestCase
 from django.urls import reverse
 
 from attachments.storage import file_storage
 from attachments.uploads import adopt_token
-from core.models import Subject
+from core.models import Subject, Term
+from economy import rewards
+from economy.services import wallet_of
 from intake.models import MediaJob
+from teachers.models import Teacher
 from users.models import User
 
 from .models import Lecture, Playlist
@@ -81,6 +85,89 @@ class VisibilityTests(LectoriumTests):
         self.assertEqual(self.client.get(self.waiting.get_absolute_url()).status_code, 404)
 
 
+class FilterTests(LectoriumTests):
+    """Подбор курсов — тот же, что у материалов (core/filters.py), и проверяем его
+    здесь отдельно: общий код легко сломать правкой ради одного из двух разделов."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.matan = Subject.objects.create(name="Матан", dative="матану", accusative="матан")
+        cls.first = Term.objects.create(number=1)
+        cls.second = Term.objects.create(number=2)
+        cls.lector = Teacher.objects.create(surname="Цветкова", name="Анна", patronymic="Валерьевна")
+
+    def setUp(self):
+        self.algebra = self.make_playlist("Линейная алгебра")
+        self.algebra.subject = self.matan
+        self.algebra.save(update_fields=["subject"])
+        self.algebra.terms.add(self.first)
+        self.algebra.teachers.add(self.lector)
+
+        self.mechanics = self.make_playlist("Механика")  # предмет Физика, второй семестр
+        self.mechanics.terms.add(self.second)
+        self.client.force_login(self.author)
+
+    def get(self, **params):
+        return self.client.get(reverse("playlist_list"), params)
+
+    def titles(self, response):
+        return [one.title for one in response.context["playlists"]]
+
+    def options(self, response, name):
+        return set(response.context["form"].fields[name].queryset.values_list("pk", flat=True))
+
+    def test_courses_are_picked_by_subject_term_and_teacher(self):
+        self.assertEqual(self.titles(self.get(subject=self.matan.pk)), ["Линейная алгебра"])
+        self.assertEqual(self.titles(self.get(term=self.second.pk)), ["Механика"])
+        self.assertEqual(self.titles(self.get(teacher=self.lector.pk)), ["Линейная алгебра"])
+
+    def test_choosing_a_term_leaves_only_what_it_has(self):
+        first = self.get(term=self.first.pk)
+
+        self.assertEqual(self.options(first, "subject"), {self.matan.pk})
+        self.assertEqual(self.options(first, "teacher"), {self.lector.pk})
+
+    def test_a_filter_never_narrows_itself(self):
+        # Иначе в списке осталось бы одно выбранное значение и сменить его было бы нечем.
+        self.assertEqual(self.options(self.get(term=self.first.pk), "term"),
+                         {self.first.pk, self.second.pk})
+
+    def test_garbage_in_the_address_does_not_break_the_page(self):
+        self.assertEqual(self.get(subject="нет", term="-1", teacher="ерунда").status_code, 200)
+
+    def test_the_picked_filters_go_into_the_address(self):
+        response = self.client.get(
+            reverse("playlist_list"), {"subject": self.matan.pk, "term": ""},
+            headers={"HX-Request": "true"},
+        )
+
+        self.assertIn(f"subject={self.matan.pk}", response["HX-Push-Url"])
+        self.assertNotIn("term=", response["HX-Push-Url"])
+
+    def test_a_card_carries_the_picked_filters_into_its_link(self):
+        """По этой строке страница курса и узнаёт, куда возвращать по «Лекторий»."""
+        response = self.get(term=self.first.pk)
+
+        self.assertContains(response, f"{self.algebra.get_absolute_url()}?term={self.first.pk}")
+
+    def test_the_course_page_returns_to_the_same_picking(self):
+        page = self.client.get(self.algebra.get_absolute_url(), {"term": self.first.pk})
+
+        self.assertEqual(page.context["back_url"], f"{reverse('playlist_list')}?term={self.first.pk}")
+        # И запись открывается, не теряя подбора: иначе первый же клик стёр бы его.
+        self.assertContains(page, f"?term={self.first.pk}&amp;lecture=")
+
+    def test_a_course_with_two_teachers_counts_its_records_once(self):
+        """Подбор по преподавателю — join по многие-ко-многим: без distinct курс насчитал
+        бы себе вдвое больше записей, чем в нём есть."""
+        self.algebra.teachers.add(Teacher.objects.create(surname="Иванов", name="Иван"))
+
+        found = self.get(term=self.first.pk).context["playlists"][0]
+
+        self.assertEqual(found.lectures_count, self.algebra.lectures.count())
+
+
 class DetailTests(LectoriumTests):
     """Страница курса: плеер на выбранной записи, остальные — списком рядом."""
 
@@ -123,11 +210,32 @@ class DetailTests(LectoriumTests):
         """Ссылку на запись пересылают, а обработка идёт час. Папки набора у неё ещё нет,
         и плеер получил бы адрес в никуда вместо честного «обрабатывается»."""
         waiting = Lecture.objects.create(playlist=self.playlist, title="Свежая", order=9, prefix="")
+        MediaJob.objects.create(
+            recipe="lecture", source="uploads/a/z.mkv", lecture=waiting,
+            status=MediaJob.Status.BAKING,
+        )
 
         page = self.open(lecture=waiting.pk)
 
         self.assertEqual(page.context["lecture"], self.playlist.lectures.first())
         self.assertContains(page, "обрабатывается")
+
+    def test_the_course_is_named_above_its_records(self):
+        """Заголовок страницы показывает ОТКРЫТУЮ запись, и без этой строки непонятно,
+        из какого она курса."""
+        page = self.open()
+
+        self.assertContains(page, self.playlist.title)
+        self.assertContains(page, "3 записи")
+
+    def test_every_ready_record_shows_its_own_frame(self):
+        page = self.open()
+
+        for one in self.playlist.lectures.all():
+            self.assertContains(page, one.poster_url())
+
+    def test_the_menu_lights_the_section_not_the_page(self):
+        self.assertEqual(self.open().context["section"], "lectorium")
 
     def test_a_playlist_of_nothing_but_unbaked_records_shows_no_player(self):
         fresh = self.make_playlist("Свежий", lectures=0)
@@ -137,6 +245,58 @@ class DetailTests(LectoriumTests):
 
         self.assertIsNone(page.context["lecture"])
         self.assertContains(page, "обрабатываются")
+
+
+class ReactionTests(LectoriumTests):
+    """Оценка у ЗАПИСИ, а не у курса: курс из двадцати лекций читается разного качества."""
+
+    def setUp(self):
+        self.playlist = self.make_playlist(lectures=2)
+        self.lecture = self.playlist.lectures.first()
+        self.client.force_login(self.stranger)
+
+    def vote(self, which, lecture=None):
+        return self.client.post(reverse(f"lecture_{which}", args=[(lecture or self.lecture).pk]))
+
+    def test_the_buttons_are_shown_under_the_open_record(self):
+        page = self.client.get(self.playlist.get_absolute_url())
+
+        self.assertContains(page, "lecture-reactions")
+        self.assertEqual(page.context["lecture"].likes, 0)
+
+    def test_a_like_is_counted_and_can_be_taken_back(self):
+        self.vote("like")
+        self.assertEqual(self.lecture.liked_users.count(), 1)
+
+        self.vote("like")  # повторный клик снимает голос
+        self.assertEqual(self.lecture.liked_users.count(), 0)
+
+    def test_a_dislike_moves_the_vote_instead_of_doubling_it(self):
+        self.vote("like")
+
+        self.vote("dislike")
+
+        self.assertEqual(self.lecture.liked_users.count(), 0)
+        self.assertEqual(self.lecture.disliked_users.count(), 1)
+
+    def test_the_answer_carries_the_fresh_count(self):
+        answer = self.vote("like")
+
+        self.assertContains(answer, "lecture-reactions")
+        self.assertContains(answer, "1")
+
+    def test_votes_of_two_people_add_up(self):
+        self.vote("like")
+        self.client.force_login(self.author)
+        self.vote("like")
+
+        self.assertEqual(self.lecture.liked_users.count(), 2)
+
+    def test_a_record_of_an_unchecked_course_cannot_be_voted_on(self):
+        hidden = self.make_playlist("Черновик", status=Playlist.Status.PENDING).lectures.first()
+
+        self.assertEqual(self.vote("like", hidden).status_code, 404)
+        self.assertEqual(hidden.liked_users.count(), 0)
 
 
 class ReviewTests(LectoriumTests):
@@ -163,6 +323,19 @@ class ReviewTests(LectoriumTests):
 
     def test_nobody_else_decides(self):
         self.assertEqual(self.decide(self.author, decision="approve").status_code, 403)
+
+    def test_publishing_pays_the_author_and_the_moderator_right_away(self):
+        """Начисление зовём тут же, а не ждём следующего входа автора: иначе он решил бы,
+        что токенов не дали вовсе."""
+        self.decide(self.moderator, decision="approve")
+
+        self.assertEqual(wallet_of(self.author).balance, rewards.WELCOME + rewards.PLAYLIST)
+        self.assertEqual(wallet_of(self.moderator).balance, rewards.WELCOME + rewards.MODERATION)
+
+    def test_a_rejected_course_is_not_paid_for(self):
+        self.decide(self.moderator, decision="reject", note="Звука нет")
+
+        self.assertEqual(wallet_of(self.author).balance, rewards.WELCOME)
 
     def test_it_waits_in_the_common_queue(self):
         """Очередь одна на весь сайт: модератор не должен обходить разделы по очереди."""
@@ -360,19 +533,231 @@ class PlaylistFormTests(LectoriumTests):
         self.assertTrue(playlist.is_pending)
 
 
-@override_settings(BETA=True)
-class BetaTests(LectoriumTests):
-    """Раздел готов, а сдавать лекции ещё нечем — до тех пор он закрыт."""
+class TelegramTests(LectoriumTests):
+    """Модерации в чат — как о материале и книге: очередь на сайте есть, но в неё надо
+    зайти, а курс лекций ждёт проверки неделями."""
 
-    def test_the_section_is_shut_for_everyone_but_staff(self):
+    def setUp(self):
+        self.keeper = make_user("k@t.local", surname="Хранов")
+        self.keeper.user_permissions.add(Permission.objects.get(codename="add_playlist"))
+        self.keeper = User.objects.get(pk=self.keeper.pk)
+        self.client.force_login(self.keeper)
+
+    def create(self):
+        return self.client.post(reverse("playlist_new"), {
+            "title": "Механика", "subject": self.subject.pk, "year": 2026, "synopsis": "",
+        })
+
+    def test_a_new_course_reaches_the_chat(self):
+        with mock.patch("lectorium.views.notify") as notify:
+            self.create()
+
+        chat, template, context = notify.call_args.args
+        self.assertEqual(chat, "moderation")
+        self.assertEqual(template, "telegram/playlist_pending.html")
+        self.assertTrue(context["created"])
+        self.assertEqual(context["playlist"], Playlist.objects.get())
+
+    def test_an_edited_course_says_it_came_back(self):
+        playlist = self.make_playlist(status=Playlist.Status.APPROVED, lectures=0)
+        Playlist.objects.filter(pk=playlist.pk).update(uploader=self.keeper)
+
+        with mock.patch("lectorium.views.notify") as notify:
+            self.client.post(reverse("playlist_edit", args=[playlist.pk]), {
+                "title": "Другое имя", "subject": self.subject.pk, "year": 2026, "synopsis": "",
+            })
+
+        self.assertFalse(notify.call_args.args[2]["created"])
+
+    def test_a_moderator_publishing_his_own_tells_nobody(self):
+        """Он и есть тот, кому сообщали бы."""
+        self.client.force_login(self.moderator)
+        self.moderator.user_permissions.add(Permission.objects.get(codename="add_playlist"))
+
+        with mock.patch("lectorium.views.notify") as notify:
+            self.create()
+
+        notify.assert_not_called()
+
+    def test_a_deleted_course_reaches_the_chat_with_what_was_lost(self):
+        playlist = self.make_playlist(lectures=2)
+        self.client.force_login(self.author)
+
+        with mock.patch("lectorium.views.notify") as notify, self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("playlist_delete", args=[playlist.pk]))
+
+        chat, template, context = notify.call_args.args
+        self.assertEqual((chat, template), ("moderation", "telegram/playlist_deleted.html"))
+        self.assertEqual(context["lectures"], 2)
+
+    def test_the_message_carries_what_the_moderator_needs(self):
+        playlist = self.make_playlist(lectures=2)
+        playlist.terms.add(Term.objects.create(number=3))
+        playlist.teachers.add(Teacher.objects.create(name="Пётр", surname="Сорокоумов"))
+
+        text = render_to_string("telegram/playlist_pending.html", {
+            "playlist": playlist, "editor": self.author, "created": True,
+            "url": "https://knt-mipt.ru/lectures/1/",
+        })
+
+        self.assertIn("Новый курс лекций", text)
+        self.assertIn(playlist.title, text)
+        self.assertIn("https://knt-mipt.ru/lectures/1/", text)
+        self.assertIn("Физика", text)
+        self.assertIn("Сорокоумов", text)
+        self.assertIn("<b>Записей:</b> 2", text)
+        self.assertIn("Иванов Иван", text)
+
+
+class RecordEditTests(LectoriumTests):
+    """Записи правятся на форме курса: поле у них ровно одно, своей страницы не надо."""
+
+    def setUp(self):
+        self.playlist = self.make_playlist(lectures=2)
+        self.first, self.second = self.playlist.lectures.all()
+        self.client.force_login(self.author)
+
+    def save(self, **extra):
+        body = {"title": self.playlist.title, "subject": self.subject.pk, "year": 2026, "synopsis": ""}
+        return self.client.post(reverse("playlist_edit", args=[self.playlist.pk]), {**body, **extra})
+
+    def left(self, prefix):
+        try:
+            folders, files = file_storage().listdir(prefix)
+        except (FileNotFoundError, NotADirectoryError):
+            return 0
+        return len(files) + len(folders)
+
+    def test_the_form_lists_the_records(self):
+        page = self.client.get(reverse("playlist_edit", args=[self.playlist.pk])).content.decode()
+
+        self.assertIn(f'name="name-{self.first.pk}"', page)
+        self.assertIn(self.second.title, page)
+
+    def test_a_record_is_renamed(self):
+        self.save(**{f"name-{self.first.pk}": "Первая пара", f"name-{self.second.pk}": self.second.title})
+
+        self.first.refresh_from_db()
+        self.assertEqual(self.first.title, "Первая пара")
+
+    def test_a_marked_record_goes_and_takes_its_video(self):
+        make_set(self.first.prefix)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.save(**{f"delete-{self.first.pk}": "on", f"name-{self.second.pk}": self.second.title})
+
+        self.assertEqual([one.pk for one in self.playlist.lectures.all()], [self.second.pk])
+        self.assertFalse(self.left(self.first.prefix))
+
+    def test_dragging_a_record_changes_its_place(self):
+        """Порядок присылается скрытыми input name="order": перетаскивание переставляет
+        сами строки, а браузер отправляет поля в порядке разметки."""
+        self.save(**{
+            "order": [self.second.pk, self.first.pk],
+            f"name-{self.first.pk}": self.first.title,
+            f"name-{self.second.pk}": self.second.title,
+        })
+
+        self.assertEqual(
+            [one.pk for one in self.playlist.lectures.all()], [self.second.pk, self.first.pk],
+        )
+
+    def test_a_record_deleted_in_the_same_go_does_not_break_the_order(self):
+        """Удалённая запись в присланном списке ещё встречается — её строку убирает
+        браузер только после перезагрузки."""
+        third = Lecture.objects.create(playlist=self.playlist, title="Третья", order=2, prefix="x")
+
+        self.save(**{
+            "order": [third.pk, self.first.pk, self.second.pk],
+            f"delete-{self.first.pk}": "on",
+            f"name-{self.second.pk}": self.second.title,
+        })
+
+        self.assertEqual([one.pk for one in self.playlist.lectures.all()], [third.pk, self.second.pk])
+        self.assertEqual([one.order for one in self.playlist.lectures.all()], [0, 2])
+
+    def test_the_form_can_be_dragged_at_all(self):
+        """Плагин перетаскивания грузится только там, где он нужен, — забыть его
+        значит получить страницу, где ручка есть, а тянуть нельзя."""
+        page = self.client.get(reverse("playlist_edit", args=[self.playlist.pk])).content.decode()
+
+        self.assertIn("alpine-sort", page)
+        self.assertIn("x-sort:item", page)
+
+    def test_an_unmarked_record_stays(self):
+        """Промах по кнопке не должен стоить двухчасовой лекции: пока не нажато
+        «Сохранить», ничего не происходит."""
+        self.client.get(reverse("playlist_edit", args=[self.playlist.pk]))
+
+        self.assertEqual(self.playlist.lectures.count(), 2)
+
+    def test_deleting_the_course_takes_every_video_with_it(self):
+        prefixes = [one.prefix for one in self.playlist.lectures.all()]
+        for prefix in prefixes:
+            make_set(prefix)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            answer = self.client.post(reverse("playlist_delete", args=[self.playlist.pk]))
+
+        self.assertRedirects(answer, reverse("playlist_list"))
+        self.assertEqual(Playlist.objects.count(), 0)
+        self.assertEqual([self.left(prefix) for prefix in prefixes], [0, 0])
+
+    def test_a_stranger_deletes_nothing(self):
         self.client.force_login(self.stranger)
 
-        self.assertEqual(self.client.get(reverse("playlist_list")).status_code, 403)
+        # Чужой непроверенный курс не виден вовсе, а одобренный виден, но не его.
+        self.assertEqual(self.client.post(reverse("playlist_delete", args=[self.playlist.pk])).status_code, 403)
+        self.assertEqual(Playlist.objects.count(), 1)
 
-    def test_staff_can_look(self):
-        self.client.force_login(make_user("st@t.local", is_staff=True))
+    def test_moderation_deletes_anything(self):
+        self.client.force_login(self.moderator)
 
-        self.assertEqual(self.client.get(reverse("playlist_list")).status_code, 200)
+        self.client.post(reverse("playlist_delete", args=[self.playlist.pk]))
+
+        self.assertEqual(Playlist.objects.count(), 0)
+
+
+class StageTests(LectoriumTests):
+    """Что написано вместо кадра, пока набора нет.
+
+    «Обрабатывается» у записи, до которой пекарня ещё не дошла, — неправда: очередь
+    стоит, пока не включат машину с видеокартой, и человек всё это время ждёт готового
+    с минуты на минуту.
+    """
+
+    def setUp(self):
+        self.playlist = self.make_playlist(lectures=1)
+        self.lecture = self.playlist.lectures.get()
+        Lecture.objects.filter(pk=self.lecture.pk).update(prefix="")
+        self.lecture.refresh_from_db()
+        self.job = MediaJob.objects.create(recipe="lecture", source="uploads/a/z.mkv", lecture=self.lecture)
+
+    def stage(self, status):
+        MediaJob.objects.filter(pk=self.job.pk).update(status=status)
+        return Lecture.objects.get(pk=self.lecture.pk).stage()
+
+    def test_a_record_nobody_took_yet_is_in_the_queue(self):
+        self.assertEqual(self.stage(MediaJob.Status.WAITING), "в очереди")
+
+    def test_a_record_in_the_oven_says_so(self):
+        self.assertEqual(self.stage(MediaJob.Status.BAKING), "обрабатывается")
+
+    def test_a_record_that_fell_over_says_so(self):
+        self.assertEqual(self.stage(MediaJob.Status.FAILED), "не обработалась")
+
+    def test_a_record_without_a_job_is_not_waiting_in_any_queue(self):
+        """Такую завели руками в админке, чтобы прицепить набор, испечённый отдельно."""
+        self.job.delete()
+
+        self.assertEqual(Lecture.objects.get(pk=self.lecture.pk).stage(), "набор не привязан")
+
+    def test_the_page_says_it_out_loud(self):
+        self.client.force_login(self.author)
+
+        page = self.client.get(reverse("playlist_detail", args=[self.playlist.pk])).content.decode()
+
+        self.assertIn("в очереди", page)
+        self.assertNotIn("обрабатывается", page)
 
 
 class CheckPageTests(LectoriumTests):

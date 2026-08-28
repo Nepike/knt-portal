@@ -75,6 +75,12 @@ class Lecture(models.Model):
     duration = models.PositiveIntegerField("длительность (с)", default=0)
     created = models.DateTimeField("добавлена", default=timezone.now)
 
+    # Оценка у ЗАПИСИ, а не у курса: курс из двадцати лекций читается разного качества,
+    # и лайк на него не отвечал бы ни на один вопрос. Проверяется же и награждается
+    # по-прежнему курс целиком — он единица работы, а не единица просмотра.
+    liked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="liked_lectures", blank=True)
+    disliked_users = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="disliked_lectures", blank=True)
+
     class Meta:
         verbose_name = "лекция"
         verbose_name_plural = "лекции"
@@ -103,6 +109,27 @@ class Lecture(models.Model):
 
     def poster_url(self):
         return redirect_url(self.poster_key)
+
+    def stage(self):
+        """Что написать вместо кадра, пока набора нет.
+
+        «Обрабатывается» у записи, до которой пекарня ещё не дошла, — неправда: очередь
+        стоит, пока машину с видеокартой не включат, и это бывают сутки. Человек всё это
+        время думает, что работа идёт именно над его лекцией, и ждёт её с минуты на минуту.
+
+        Задания может не быть вовсе — запись завели руками в админке, чтобы прицепить
+        набор, испечённый отдельно; такая честно ждёт, но не очереди.
+        """
+        from intake.models import MediaJob
+
+        job = getattr(self, "job", None)
+        if job is None:
+            return "набор не привязан"
+        return {
+            MediaJob.Status.WAITING: "в очереди",
+            MediaJob.Status.BAKING: "обрабатывается",
+            MediaJob.Status.FAILED: "не обработалась",
+        }.get(job.status, "обрабатывается")
 
     def human_duration(self):
         """«1:23:45» или «12:30» — часы показываем, только когда они есть."""

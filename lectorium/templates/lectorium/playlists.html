@@ -1,5 +1,4 @@
 {% extends "core/base.html" %}
-{% load text_extras %}
 
 {% block title %}Лекторий{% endblock %}
 
@@ -14,41 +13,19 @@
   {% endif %}
 </div>
 
-<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-  {% for playlist in playlists %}
-  <a href="{{ playlist.get_absolute_url }}"
-     class="panel rounded-2xl overflow-hidden flex flex-col hover:border-accent transition group">
-    <div class="aspect-video bg-slate-100 dark:bg-slate-800 overflow-hidden">
-      {% with first=playlist.cover %}
-      {% if first %}
-        <img src="{{ first.poster_url }}" alt="" loading="lazy"
-             class="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105">
-      {% else %}
-        <span class="w-full h-full flex items-center justify-center text-slate-300 dark:text-slate-600">
-          <i class="fa-solid fa-video text-3xl"></i>
-        </span>
-      {% endif %}
-      {% endwith %}
-    </div>
+{% comment %}
+  Подбор: селекты шлют change, адрес обновляет сама вьюха заголовком HX-Push-Url
+  (в него уходят только непустые поля). Устройство то же, что у материалов, — см.
+  core/filters.py и core/_filters.html.
+  hx-history="false" — снимок htmx хранит innerHTML, и «назад» вернул бы пустые фильтры
+  при отфильтрованном списке; вместо кеша честный перезапрос.
+{% endcomment %}
+<form hx-get="{% url 'playlist_list' %}" hx-target="#playlist-list" hx-history="false"
+      hx-trigger="change delay:100ms" class="mb-5">
+  {% include "core/_filters.html" %}
+</form>
 
-    <div class="p-4 flex-1 flex flex-col">
-      <h2 class="font-semibold leading-snug line-clamp-2">{{ playlist.title }}</h2>
-      <p class="text-xs text-slate-400 mt-1">
-        {{ playlist.subject.name }} · {{ playlist.year }}
-        · {{ playlist.lectures_count }} {{ playlist.lectures_count|plural:"лекция,лекции,лекций" }}
-      </p>
-      {% if not playlist.is_published %}
-      <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
-        <i class="fa-solid fa-clock"></i>
-        {% if playlist.is_pending %}на проверке{% else %}отклонено{% endif %}
-      </p>
-      {% endif %}
-    </div>
-  </a>
-  {% empty %}
-  <p class="sm:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-400">
-    Пока ни одной записи
-  </p>
-  {% endfor %}
+<div id="playlist-list" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+  {% include "lectorium/_playlist_list.html" %}
 </div>
 {% endblock %}

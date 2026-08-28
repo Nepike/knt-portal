@@ -9,14 +9,14 @@
     {% if total %}<span class="text-slate-400 font-normal">{{ total }}</span>{% endif %}
   </h2>
 
-  <form hx-post="{% url 'comment_add' material.pk %}" hx-target="#comments" hx-swap="outerHTML"
+  <form hx-post="{% url 'comment_add' kind owner.pk %}" hx-target="#comments" hx-swap="outerHTML"
         hx-encoding="multipart/form-data"
         class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 mb-5">
-    {% include "materials/_comment_fields.html" with form=comment_form submit="Отправить" %}
+    {% include "comments/_comment_fields.html" with form=comment_form submit="Отправить" %}
   </form>
 
   <div class="flex flex-col gap-3">
-    {% for c in comments %}{% include "materials/_comment.html" %}{% empty %}
+    {% for c in comments %}{% include "comments/_comment.html" %}{% empty %}
     <p class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center text-slate-400">
       Пока тихо — можно написать первым
     </p>

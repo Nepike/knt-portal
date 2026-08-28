@@ -15,14 +15,17 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from attachments.models import File
 from core.models import Subject
 from lectorium.models import Lecture, Playlist
+from materials.models import Material
 from tools import bake
 from users.models import User
 
 from . import mp4, spec, views
 from .models import CLAIM_TIMEOUT, MediaJob
 from .spec import MASTER, POSTER
+from .tasks import drop_source
 
 
 def make_lecture():
@@ -577,6 +580,152 @@ class QueueTests(TestCase):
         job = MediaJob.objects.get()
         self.assertEqual(job.status, MediaJob.Status.FAILED)
         self.assertEqual(job.note, "ffmpeg не справился")
+
+    def test_the_worker_that_lost_the_job_cannot_touch_it_any_more(self):
+        """Медленная пекарня не умерла — она просто молчала дольше часа, и задание
+        к тому времени отдали другой. Доделав своё, она снесла бы папку сменщицы."""
+        first = self.claim()["token"]
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+        second = self.claim()["token"]
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.call("intake_plan", token=first, manifest=made_manifest()).status_code, 409)
+        self.assertEqual(self.call("intake_plan", token=second, manifest=made_manifest()).status_code, 200)
+
+
+@override_settings(INTAKE_TOKEN=TOKEN)
+class LeftoverTests(TestCase):
+    """Что остаётся в хранилище после каждого способа не довести выпечку до конца.
+
+    Ключей от бакета у сайта много, а памяти о них — ровно одна строка в базе: пропала
+    она, и папку с гигабайтом кусков потом не найти ничем. Поэтому каждый выход из
+    выпечки проверяется отдельно.
+    """
+
+    def setUp(self):
+        self.lecture = make_lecture()
+        self.job = MediaJob.objects.create(
+            recipe="lecture", source="uploads/abc/zapis.mkv", lecture=self.lecture,
+        )
+        for name, answer in (("sign_download", "https://r2/get"), ("sign_put", "https://r2/put")):
+            patch = mock.patch(f"intake.views.{name}", return_value=answer)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def call(self, where, **body):
+        return self.client.post(
+            reverse(where), json.dumps(body), content_type="application/json",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    def claim(self):
+        return self.call("intake_claim", worker="дом").json()["job"]["token"]
+
+    def bake(self):
+        """Полный круг: взять задание, испечь, залить, закрыть. Возвращает папку набора."""
+        token = self.claim()
+        manifest = made_manifest()
+        prefix = self.call("intake_plan", token=token, manifest=manifest).json()["prefix"]
+        with mock.patch("intake.views.under", return_value=stored(prefix, manifest)), \
+                mock.patch("intake.tasks.drop_prefix"), \
+                mock.patch("lectorium.tasks.drop_prefix"), \
+                self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_commit", token=token)
+        return prefix
+
+    def swept(self):
+        """Что уедет из хранилища за время блока. Возвращает mock, накопивший префиксы."""
+        return mock.patch("lectorium.tasks.drop_prefix")
+
+    def test_a_job_sent_back_to_the_queue_keeps_the_set_until_the_new_one_is_ready(self):
+        """Задание вернули в очередь из админки, чтобы перепечь. Папка задания в этот
+        момент — набор ОПУБЛИКОВАННОЙ лекции, и снять её значит погасить лекцию
+        на всё время новой выпечки, а при осечке — навсегда."""
+        live = self.bake()
+        MediaJob.objects.update(status=MediaJob.Status.WAITING)
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_plan", token=self.claim(), manifest=made_manifest())
+
+        self.lecture.refresh_from_db()
+        self.assertEqual(self.lecture.prefix, live)
+        swept.assert_not_called()
+
+    def test_the_previous_set_goes_only_when_the_new_one_has_taken_its_place(self):
+        """Продолжение предыдущего: как только лекция переехала, старый набор не нужен."""
+        live = self.bake()
+        MediaJob.objects.update(status=MediaJob.Status.WAITING)
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            fresh = self.bake()
+
+        self.lecture.refresh_from_db()
+        self.assertEqual(self.lecture.prefix, fresh)
+        self.assertEqual([call.args[0] for call in swept.call_args_list], [live])
+
+    def test_a_failure_sweeps_what_had_already_been_uploaded(self):
+        """Самый обычный отказ — оборвавшаяся ЗАЛИВКА, то есть папка уже с гигабайтом
+        кусков. Повтора может и не быть, и тогда ждать его нечего."""
+        token = self.claim()
+        prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_fail", token=token, error="связь оборвалась")
+
+        swept.assert_called_once_with(prefix)
+        self.assertEqual(MediaJob.objects.get().prefix, "")
+
+    def test_a_failed_bake_does_not_touch_the_lecture_that_is_still_playing(self):
+        live = self.bake()
+        MediaJob.objects.update(status=MediaJob.Status.WAITING)
+        token = self.claim()
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_fail", token=token, error="ffmpeg упал")
+
+        self.lecture.refresh_from_db()
+        self.assertEqual(self.lecture.prefix, live)
+        swept.assert_not_called()
+
+    def test_deleting_a_lecture_mid_bake_takes_the_leftovers_with_it(self):
+        """Задание уезжает каскадом, и вместе с ним пропадает единственная память
+        о недолитой папке и о сырье в десятки гигабайт."""
+        token = self.claim()
+        prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
+
+        with self.swept() as folder, mock.patch("intake.tasks.drop_prefix") as source, \
+                self.captureOnCommitCallbacks(execute=True):
+            self.lecture.delete()
+
+        folder.assert_called_once_with(prefix)
+        source.assert_called_once_with("uploads/abc")
+
+    def test_deleting_a_closed_job_leaves_the_lecture_alone(self):
+        """У готового задания папка принадлежит лекции, а сырьё снял `commit`."""
+        live = self.bake()
+
+        with self.swept() as folder, mock.patch("intake.tasks.drop_prefix") as source, \
+                self.captureOnCommitCallbacks(execute=True):
+            MediaJob.objects.get().delete()
+
+        self.lecture.refresh_from_db()
+        self.assertEqual(self.lecture.prefix, live)
+        folder.assert_not_called()
+        source.assert_not_called()
+
+    def test_source_that_is_also_a_material_file_is_not_taken_away(self):
+        """Токен загрузки не одноразовый: тот же файл можно сдать и в лекторий,
+        и приложением к материалу. Тогда у ключа есть второй хозяин."""
+        material = Material.objects.create(
+            title="Конспект", subject=self.lecture.playlist.subject,
+            uploader=self.lecture.playlist.uploader,
+        )
+        File.objects.create(material=material, name="запись", file="uploads/abc/zapis.mkv", size=1)
+
+        with mock.patch("intake.tasks.drop_prefix") as swept:
+            drop_source("uploads/abc/zapis.mkv")
+
+        swept.assert_not_called()
 
 
 class DjangoFreeTests(SimpleTestCase):

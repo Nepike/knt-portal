@@ -11,7 +11,7 @@ from django.core.files.storage import FileSystemStorage
 
 from .media import media_url
 from .models import File, Image, human_size
-from .storage import file_storage
+from .storage import file_storage, random_key
 
 MB = 1024 * 1024
 # Через приложение файл держит воркер и место на диске — лимит скромный.
@@ -161,7 +161,16 @@ def sign_upload(name):
 
 
 def new_key(name):
-    return f"uploads/{uuid4().hex}/{Path(name).name}"
+    """Ключ прямой загрузки.
+
+    Через `random_key`, а не своей строкой: у `File.file` длина по умолчанию — 100
+    символов, и «uploads/<uuid>/» съедает из них 41. Имя файла обрезано только до 150
+    (`_named`), так что обычный студенческий заголовок вроде «Конспект по общей физике.
+    Механика. 1 семестр.pdf» давал ключ длиннее колонки, и материал не сохранялся вовсе:
+    вместо файла человек получал пятисотку. Загрузки ЧЕРЕЗ приложение этого не знали —
+    там ключ с самого начала считает `random_key`.
+    """
+    return random_key("uploads", name)
 
 
 def sign_download(key):

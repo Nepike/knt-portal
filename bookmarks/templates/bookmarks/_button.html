@@ -1,0 +1,14 @@
+{% comment %}
+  Кнопка «в закладки» в шапке. Ждёт kind, item и saved — их собирает `bookmarks.views.button`,
+  а в контекст кладёт та страница, которой есть что помечать.
+
+  Значок сплошной в обоих состояниях, меняется только цвет: начертание fa-regular в шапке
+  сайта не подключено, а подключать вторую таблицу стилей ради одной иконки незачем.
+  Так же различаются и лайки.
+{% endcomment %}
+<button type="button" class="btn btn-ghost"
+        hx-post="{% url 'bookmark_toggle' kind item.pk %}" hx-target="this" hx-swap="outerHTML"
+        aria-label="{% if saved %}Убрать из закладок{% else %}В закладки{% endif %}"
+        title="{% if saved %}В закладках{% else %}В закладки{% endif %}">
+  <i class="fa-solid fa-bookmark text-xl {% if saved %}text-accent{% else %}text-slate-400{% endif %}"></i>
+</button>

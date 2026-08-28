@@ -69,21 +69,24 @@
         {% comment %}
           Неготовые разделы гасим, а не прячем: пусть видно, что они есть и никуда
           не делись. Ссылка при этом снимается — вести на страницу «закрыто» незачем.
+
+          Подсвечен пункт РАЗДЕЛА, а не страницы: уйдя со списка материалов в конкретный
+          материал, человек из раздела не вышел. Какие имена урлов к какому разделу
+          относятся — в core/nav.py, оттуда же приезжает `section`.
         {% endcomment %}
         <nav class="flex flex-col gap-1">
-          <a href="{% url 'chat_list' %}" class="nav-link {% if request.resolver_match.app_name == 'chats' or request.resolver_match.url_name == 'chat_list' or request.resolver_match.url_name == 'chat_detail' %}nav-link-active{% endif %}">
+          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Новости?</a>
+          <a href="{% url 'chat_list' %}" class="nav-link {% if section == 'chats' %}nav-link-active{% endif %}">
             <i class="fa-solid fa-comment"></i>Сообщения
             {% if request.user.is_authenticated %}{% include "chats/_unread_badge.html" %}{% endif %}
           </a>
-          <a href="{% url 'material_list' %}" class="nav-link {% if request.resolver_match.url_name == 'material_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
-          <a href="{% url 'book_list' %}" class="nav-link {% if request.resolver_match.url_name == 'book_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
-          <a {% if not locked.playlist_list %}href="{% url 'playlist_list' %}"{% endif %}
-             class="nav-link {% if locked.playlist_list %}nav-link-disabled{% elif request.resolver_match.url_name == 'playlist_list' or request.resolver_match.url_name == 'playlist_detail' %}nav-link-active{% endif %}"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
-          <a href="{% url 'teacher_list' %}" class="nav-link {% if request.resolver_match.url_name == 'teacher_list' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
-          <a href="{% url 'wall' %}" class="nav-link {% if request.resolver_match.url_name == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
-          <a {% if not locked.shop %}href="{% url 'shop' %}"{% endif %}
-             class="nav-link {% if locked.shop %}nav-link-disabled{% elif request.resolver_match.url_name == 'shop' %}nav-link-active{% endif %}"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
+          <a href="{% url 'material_list' %}" class="nav-link {% if section == 'materials' %}nav-link-active{% endif %}"><i class="fa-solid fa-folder"></i>Материалы</a>
+          <a href="{% url 'book_list' %}" class="nav-link {% if section == 'library' %}nav-link-active{% endif %}"><i class="fa-solid fa-book text-lg"></i>Библиотека</a>
+          <a href="{% url 'playlist_list' %}" class="nav-link {% if section == 'lectorium' %}nav-link-active{% endif %}"><i class="fa-solid fa-video text-lg"></i>Лекторий</a>
+          <a href="{% url 'teacher_list' %}" class="nav-link {% if section == 'teachers' %}nav-link-active{% endif %}"><i class="fa-solid fa-user-tie text-lg"></i>Преподаватели</a>
+          <a href="{% url 'student_list' %}" class="nav-link {% if section == 'students' %}nav-link-active{% endif %}"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
+          <a href="{% url 'wall' %}" class="nav-link {% if section == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
+          <a href="{% url 'shop' %}" class="nav-link {% if section == 'shop' %}nav-link-active{% endif %}"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
 
           {% comment %}
             None — не модератор, ссылки быть не должно; 0 — модератор, но очередь пуста.
@@ -92,7 +95,7 @@
           {% endcomment %}
           {% review_pending as moderation_count %}
           {% if moderation_count is not None %}
-          <a href="{% url 'review_queue' %}" class="nav-link {% if request.resolver_match.url_name == 'review_queue' %}nav-link-active{% endif %}">
+          <a href="{% url 'review_queue' %}" class="nav-link {% if section == 'moderation' %}nav-link-active{% endif %}">
             <i class="fa-solid fa-clipboard-check text-lg"></i>Модерация
             {% if moderation_count %}
             <span class="ml-auto inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-amber-500 text-white dark:text-slate-950 text-xs font-bold">{{ moderation_count }}</span>
@@ -100,9 +103,8 @@
           </a>
           {% endif %}
 
+          <a href="{% url 'bookmark_list' %}" class="nav-link {% if section == 'bookmarks' %}nav-link-active{% endif %}"><i class="fa-solid fa-bookmark text-lg"></i>Закладки</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Закладки?</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Новости?</a>
         </nav>
 
         {% comment %}
@@ -131,9 +133,8 @@
           </button>
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
-            {# Пункт гасим, а не прячем — по той же house-rule, что и разделы в меню слева #}
-            <a {% if not locked.profile %}href="{% url 'profile' request.user.pk %}"{% endif %}
-               class="flex items-center gap-1 px-3 py-2 rounded {% if locked.profile %}opacity-40 cursor-not-allowed{% else %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}"><i class="fa-solid fa-user"></i>Профиль</a>
+            <a href="{% url 'profile' request.user.pk %}"
+               class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user"></i>Профиль</a>
             {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
             <form method="post" action="{% url 'logout' %}">
@@ -153,20 +154,17 @@
 
   {# h-dvh вместо min-h-dvh (чат, стена) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
   <div class="lg:pl-64 flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
-    {# Страницы, которые сами про бету и рассказывают, блок гасят — см. core/support.html #}
-    {% block beta_banner %}
-    {% if beta %}
-    <div class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-2 text-center text-sm
-                bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-      <span><i class="fa-solid fa-flask"></i> Сайт переехал недавно и работает в бета-версии — что-то может не работать.</span>
-      <a href="{% url 'support' %}" class="font-semibold underline underline-offset-2 hover:no-underline">Сообщить о проблеме</a>
-    </div>
-    {% endif %}
-    {% endblock %}
     {# Заливка своя, а не с body: под ней проходит косметический фон профиля #}
     <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
+        {% comment %}
+          Кнопка закладки только там, где есть ЧТО помечать: страницу материала, книги,
+          курса или преподавателя. На списке помечать нечего, и серая кнопка-обманка
+          в шапке каждой страницы была бы шумом. Что именно помечаем, кладёт в контекст
+          сама страница — `bookmarks.views.button`.
+        {% endcomment %}
+        {% if bookmark %}{% include "bookmarks/_button.html" with kind=bookmark.kind item=bookmark.item saved=bookmark.saved only %}{% endif %}
         {# TODO (notifications) #}
         <button type="button" class="btn btn-ghost" aria-label="Уведомления"><i class="fa-solid fa-bell text-xl"></i></button>
         <button type="button" class="btn btn-ghost" aria-label="Сменить тему"

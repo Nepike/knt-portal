@@ -1,0 +1,52 @@
+{% load text_extras %}
+{% for person in people %}
+<a href="{% url 'profile' person.pk %}"
+   class="flex items-center gap-3 rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 hover:border-accent/60 transition-colors">
+  {% comment %}
+    Аватар с `only`: без него на страницу с надетой рамкой в контексте (профиль) она
+    налезла бы на все лица разом. Чужие рамки тут и не показываются — как в лентах и чатах.
+  {% endcomment %}
+  {% include "core/_avatar.html" with person=person box="w-12 h-12 rounded-[22%]" text="text-sm" only %}
+
+  <div class="min-w-0 flex-1">
+    <p class="font-medium leading-tight truncate">{{ person.full_name }}</p>
+    {% comment %}
+      Номер группы — только у настоящей: у служебной группы выпускников он «000000»
+      (`core.Team.ALUMNI_YEAR`), и «Выпускник · 000000» читается как поломка. Проверяем
+      год зачисления: у неё он нулевой, а значит ложный.
+    {% endcomment %}
+    <p class="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+      {% if person.team %}{{ person.team.get_grade_str }}{% if person.team.year_of_admission %} · {{ person.team.number }}{% endif %}
+      {% else %}Без группы{% endif %}
+    </p>
+  </div>
+
+  {# Заработанное, а не баланс: чужой кошелёк — дело личное, а вклад и так на виду. #}
+  <span class="shrink-0 text-sm text-slate-400 whitespace-nowrap">
+    {{ person.earned }} <i class="fa-solid fa-cent-sign"></i>
+  </span>
+</a>
+{% empty %}
+{% comment %}
+  Три разных «пусто»: по запросу, по подбору и вообще. «Пока никого» под выбранным
+  курсом читалось бы как «на сайте нет людей», хотя дело в фильтре.
+{% endcomment %}
+<div class="text-center py-16 text-slate-400">
+  <i class="fa-solid fa-user-slash text-3xl mb-3"></i>
+  <p>
+    {% if q %}По запросу «{{ q }}» никого не нашлось
+    {% elif picked %}Под такой подбор никто не попал
+    {% else %}Пока никого{% endif %}
+  </p>
+</div>
+{% endfor %}
+
+{% if page.has_next %}
+{# маячок: попал в зону видимости — подтянул следующую порцию (подбор едет в querystring) #}
+<div class="py-4 text-center text-slate-400"
+     hx-get="{% querystring page=page.next_page_number %}" hx-trigger="intersect once" hx-swap="outerHTML">
+  <i class="fa-solid fa-spinner fa-spin"></i>
+</div>
+{% endif %}
+
+{% if refresh_filters %}{% include "users/_student_filters.html" with oob=True %}{% endif %}

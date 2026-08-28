@@ -1,0 +1,74 @@
+{% extends "core/base.html" %}
+{% load text_extras %}
+
+{% block title %}Студенты{% endblock %}
+
+{% block content %}
+{% if top %}
+{% comment %}
+  Топ по ЗАРАБОТАННОМУ, а не по балансу: баланс — это заработанное минус потраченное,
+  и топ по нему был бы топом тех, кто ничего не покупает. Раскладка и вид те же, что
+  у лучших преподавателей, — на сайте это уже знакомая тройка.
+{% endcomment %}
+<h1 class="text-2xl font-bold text-center mb-8">Больше всех сделали</h1>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 w-full max-w-3xl mx-auto mb-12">
+  {% for person in top %}
+  <a href="{% url 'profile' person.pk %}" class="relative flex items-center gap-4 sm:flex-col sm:gap-0 sm:text-center rounded-2xl border-2 bg-white dark:bg-slate-900 p-4 pr-10 sm:pr-4 sm:py-7 transition hover:-translate-y-0.5 hover:shadow-md
+              {% if forloop.counter == 1 %}border-amber-400{% elif forloop.counter == 2 %}border-slate-300 dark:border-slate-600{% else %}border-amber-700/60{% endif %}">
+    {% if forloop.counter == 1 %}
+    <i class="fa-solid fa-crown absolute -top-4 left-1/2 -translate-x-1/2 text-2xl text-amber-400 hidden sm:block"></i>
+    {% endif %}
+    <span class="absolute top-2 right-3.5 font-black text-lg opacity-80
+                 {% if forloop.counter == 1 %}text-amber-400{% elif forloop.counter == 2 %}text-slate-400{% else %}text-amber-700{% endif %}">#{{ forloop.counter }}</span>
+
+    <span class="rounded-full overflow-hidden shrink-0 inline-flex ring-4
+                 {% if forloop.counter == 1 %}ring-amber-400{% elif forloop.counter == 2 %}ring-slate-300 dark:ring-slate-600{% else %}ring-amber-700/60{% endif %}">
+      {% include "core/_avatar.html" with person=person box="w-16 h-16 sm:w-28 sm:h-28 rounded-full" text="text-xl" only %}
+    </span>
+
+    <div class="min-w-0 sm:mt-4">
+      <p class="font-bold leading-tight">{{ person.full_name }}</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+        {% if person.team %}{{ person.team.get_grade_str }}{% endif %}&nbsp;
+      </p>
+      <p class="font-bold text-lg leading-none mt-2">{{ person.earned }} <i class="fa-solid fa-cent-sign text-sm"></i></p>
+      <p class="text-xs text-slate-400 mt-1">заработано</p>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2 class="text-2xl font-bold text-center mb-6">Поиск студентов</h2>
+<div class="w-full max-w-2xl mx-auto">
+  {% comment %}
+    Поиск и сортировка — одна форма: htmx собирает её целиком, и переключив порядок,
+    человек не теряет набранное имя.
+  {% endcomment %}
+  <form hx-get="{% url 'student_list' %}" hx-target="#student-list" hx-history="false"
+        hx-trigger="input changed delay:300ms, change">
+    <div class="grid gap-3 grid-cols-1 sm:grid-cols-[1.4fr_.8fr_.8fr]">
+      <div class="relative">
+        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>
+        <input name="q" value="{{ q }}" placeholder="Имя или фамилия…" autocomplete="off"
+               class="w-full h-12 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-10 pr-4 text-sm outline-none focus:border-2 focus:border-accent transition">
+      </div>
+      {% include "users/_student_filters.html" %}
+    </div>
+
+    <div class="flex justify-end mt-3 mb-4">
+      <div x-data="segmented('{{ sort }}')" class="inline-flex rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0.5 text-sm">
+        <input type="hidden" name="sort" x-ref="field" :value="value">
+        {% for key, label in sorts %}
+        <button type="button" @click="pick('{{ key }}')" class="px-3 py-1.5 rounded-md transition"
+                :class="value === '{{ key }}' ? 'bg-accent/10 text-accent font-medium' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </div>
+  </form>
+
+  <div id="student-list" class="flex flex-col gap-2">
+    {% include "users/_student_list.html" %}
+  </div>
+</div>
+{% endblock %}

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import environ
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -23,6 +24,8 @@ LOCAL_APPS = [
     "chats",
     "teachers",
     "materials",
+    "comments",
+    "bookmarks",
     "library",
     "attachments",
     "intake",
@@ -36,9 +39,6 @@ LOCAL_APPS = [
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# Бета: наружу открыта только часть разделов, список в core/beta.py. Снять — поставить False.
-BETA = True
-
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "core.middleware.HtmxMiddleware",
@@ -51,8 +51,6 @@ MIDDLEWARE = [
     "users.middleware.MustChangePasswordMiddleware",
     # После аутентификации: отметка «последний запрос» ставится уже известному человеку.
     "users.sessions.ActivityMiddleware",
-    # После логина: анонимного сначала отправляем входить, а не объясняем ему про бету.
-    "core.middleware.BetaLockMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -71,7 +69,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
-                "core.context_processors.beta",
+                "core.context_processors.section",
                 "core.context_processors.site_theme",
                 "chats.context_processors.unread_messages",
                 "cosmetics.context_processors.my_frame",
@@ -169,7 +167,19 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60  # задача получает исключе
 CELERY_TASK_TIME_LIMIT = 120  # не среагировала — воркер убивает процесс
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # Redis может подняться позже воркера
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # логирование настраивает Django (см. prod.LOGGING)
-CELERY_TIMEZONE = TIME_ZONE  # понадобится расписаниям beat: crontab считает по нему
+CELERY_TIMEZONE = TIME_ZONE  # расписания beat считаются по нему
+
+# Расписание. Будильник — отдельный процесс (`beat` в docker-compose), задачу он кладёт
+# в ту же очередь, что и всё остальное.
+#
+# Ночью, потому что воркер один: уборка обходит весь бакет и на это время займёт его
+# целиком, а письма и телеграм подождут в очереди. В четыре часа их и так нет.
+CELERY_BEAT_SCHEDULE = {
+    "sweep-storage": {
+        "task": "attachments.tasks.sweep_storage",
+        "schedule": crontab(hour=4, minute=20),
+    },
+}
 
 # Приёмка медиа (docs/media-pipeline.md): по этому токену ходит пекарня. Логин ей
 # не годится — она не человек и в сессии не живёт. Пусто = приёмка закрыта совсем:

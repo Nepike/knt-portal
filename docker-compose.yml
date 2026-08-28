@@ -76,6 +76,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Будильник: сам ничего не делает, только кладёт задачи по расписанию
+  # (CELERY_BEAT_SCHEDULE в settings/base.py) в ту же очередь, что и всё остальное.
+  # Отдельным процессом — иначе при двух воркерах задача ставилась бы дважды.
+  #
+  # Отметку «когда сработало в последний раз» beat держит файлом; кладём во временный
+  # каталог контейнера намеренно: единственное, что даёт его переживание перезапуска, —
+  # догоняющий запуск пропущенного, а уборке хранилища догонять нечего.
+  beat:
+    logging: *logging
+    build:
+      context: .
+      args:
+        PROXY: ${PROXY:-}
+    entrypoint: ["celery", "-A", "knt", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   bot:
     logging: *logging
     build:

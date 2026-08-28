@@ -14,7 +14,7 @@
       <div class="flex items-start gap-2">
         <h3 class="font-semibold leading-snug">
           {# after:inset-0 растягивает ссылку на всю карточку; ссылки файлов ниже по DOM и relative — они остаются кликабельными #}
-          <a href="{% url 'book_detail' book.pk %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ book.title }}</a>
+          <a href="{% url 'book_detail' book.pk %}{% if filters %}?{{ filters }}{% endif %}" class="after:absolute after:inset-0 after:rounded-2xl">{{ book.title }}</a>
         </h3>
         {% include "moderation/_badge.html" with item=book %}
         {% if book.year %}<span class="ml-auto shrink-0 text-sm text-slate-400">{{ book.year }}</span>{% endif %}
@@ -38,7 +38,7 @@
     {% for file in book.files.all|slice:":3" %}{% include "attachments/_file.html" %}{% endfor %}
     {% with more=book.files.all|length|add:"-3" %}
     {% if more > 0 %}
-    <a href="{% url 'book_detail' book.pk %}" class="relative block px-3 py-1.5 text-sm text-accent hover:underline">Ещё {{ more }} {{ more|plural:"файл,файла,файлов" }}</a>
+    <a href="{% url 'book_detail' book.pk %}{% if filters %}?{{ filters }}{% endif %}" class="relative block px-3 py-1.5 text-sm text-accent hover:underline">Ещё {{ more }} {{ more|plural:"файл,файла,файлов" }}</a>
     {% endif %}
     {% endwith %}
     {% if not book.files.all %}<p class="px-3 py-2 text-sm text-slate-400">Файлов пока нет</p>{% endif %}

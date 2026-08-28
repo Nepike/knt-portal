@@ -1,0 +1,12 @@
+{% comment %}
+  Блок подбора: курс и группа. Возвращается вместе со списком (oob-заменой), когда
+  сменили курс, — набор групп в селекте после этого другой.
+
+  Строка поиска сюда НЕ входит: заменяя её вместе с селектами, мы забирали бы фокус
+  и каретку прямо из-под набирающего.
+{% endcomment %}
+<div id="student-filters" class="contents"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {# hide_optional — у фильтра подпись «необязательно» лишь шумит и ломает лейбл в узкой колонке #}
+  {% include "core/inputs.html" with field=form.course hide_optional=True %}
+  {% include "core/inputs.html" with field=form.team hide_optional=True %}
+</div>

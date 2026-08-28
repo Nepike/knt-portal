@@ -1,24 +1,11 @@
 from datetime import date
 
-from django.conf import settings
-
-from .beta import CLOSED
+from .nav import section as current_section
 
 
-def beta(request):
-    """Плашка «бета» в шапке и гашение пунктов, ведущих в закрытое.
-
-    `locked` — словарь по именам урлов (`{% if locked.shop %}`), и составлен он из того же
-    списка, что и сам замок: иначе, открыв раздел, легко забыть про пункт меню и оставить
-    его серым при работающей странице.
-    """
-    user = getattr(request, "user", None)
-    staff = bool(user and user.is_authenticated and user.is_staff)
-    shut = settings.BETA and not staff
-    return {
-        "beta": settings.BETA,
-        "locked": {name: True for name in CLOSED} if shut else {},
-    }
+def section(request):
+    """Раздел, в котором человек сейчас, — для подсветки пункта меню (`core/nav.py`)."""
+    return {"section": current_section(request)}
 
 
 def site_theme(request):

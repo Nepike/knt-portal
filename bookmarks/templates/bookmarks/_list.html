@@ -1,0 +1,39 @@
+{% load text_extras %}
+{% comment %}
+  Список закладок. Отдельным файлом, потому что его же возвращает `bookmark_drop`:
+  вместе со строкой уходит и её группа, если она была последней, и число в заголовке, —
+  точечным удалением строки этого не показать.
+{% endcomment %}
+<div id="bookmarks">
+  <p class="text-sm text-slate-400 mb-5">
+    {% if total %}{{ total }} {{ total|plural:"закладка,закладки,закладок" }}{% endif %}
+  </p>
+
+  {% for group in groups %}
+  <section class="mb-6">
+    <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2">
+      <i class="fa-solid {{ group.icon }}"></i>{{ group.title }}
+    </h2>
+    <div class="flex flex-col gap-1">
+      {% for row in group.rows %}
+      <div class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3">
+        <a href="{{ row.url }}" class="min-w-0 flex-1">
+          <span class="block font-medium leading-snug truncate">{{ row.title }}</span>
+          {% if row.note %}<span class="block text-xs text-slate-400 truncate">{{ row.note }}</span>{% endif %}
+        </a>
+        <button type="button" class="btn btn-ghost shrink-0 text-slate-400 hover:text-rose-500"
+                hx-post="{% url 'bookmark_drop' row.pk %}" hx-target="#bookmarks" hx-swap="outerHTML"
+                aria-label="Убрать из закладок">
+          <i class="fa-solid fa-bookmark"></i>
+        </button>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% empty %}
+  <p class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-400">
+    Пока пусто. Значок закладки в шапке помечает материал, книгу, курс лекций или преподавателя —
+    отсюда к ним потом и возвращаться.
+  </p>
+  {% endfor %}
+</div>

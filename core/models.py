@@ -101,6 +101,11 @@ class Term(models.Model):
         return f"Семестр {self.number}"
 
 
+# Курс не хранится нигде: он считается от года зачисления, а «выпускник» — это уже
+# не курс, а его отсутствие. Отсюда отдельное значение для фильтра (см. Team.grade_key).
+ALUMNI = "alumni"
+
+
 class Team(models.Model):
     STAGE_CHOICES = (
         ("bachelor", "Бакалавриат"),
@@ -141,3 +146,13 @@ class Team(models.Model):
         if date.today().year > self.graduation_year():
             return f"Выпускник {self.graduation_year()} года"
         return f"Студент {self.get_grade_level()} курса"
+
+    def grade_key(self):
+        """Курс как значение фильтра: «3» или «alumni» (`ALUMNI`).
+
+        Той же развилкой, что и `get_grade_str`, и это не совпадение: подпись в списке
+        и отбор по курсу обязаны сходиться. Разъедься они — человек с подписью
+        «Выпускник 2026 года» не нашёлся бы среди выпускников.
+        """
+        graduated = self.year_of_admission == self.ALUMNI_YEAR or date.today().year > self.graduation_year()
+        return ALUMNI if graduated else str(self.get_grade_level())

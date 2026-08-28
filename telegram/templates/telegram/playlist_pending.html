@@ -1,0 +1,10 @@
+{% if created %}🎬 <b>Новый курс лекций</b>{% else %}📝 <b>Курс вернулся на проверку</b>{% endif %}
+<a href="{{ url }}">{{ playlist.title }}</a>
+{% if playlist.synopsis %}
+<blockquote>{{ playlist.synopsis }}</blockquote>{% endif %}
+
+<b>Предмет:</b> {{ playlist.subject.name }}
+{% if playlist.terms.all %}<b>Семестры:</b> {% for term in playlist.terms.all %}{{ term.number }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}{% if playlist.teachers.all %}<b>Преподаватели:</b> {% for teacher in playlist.teachers.all %}{{ teacher.short_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}<b>Год:</b> {{ playlist.year }} · <b>Записей:</b> {{ playlist.lectures.count }}
+<b>{% if created %}Завёл{% else %}Правил{% endif %}:</b> {{ editor.full_name }}

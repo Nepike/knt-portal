@@ -1,6 +1,10 @@
 {% extends "core/base.html" %}
+{% load static %}
 
 {% block title %}{% if playlist %}Правка курса{% else %}Новый курс{% endif %}{% endblock %}
+
+{# Перетаскивание записей — как файлов в материалах; на остальных страницах плагин не грузим #}
+{% block plugins %}<script defer src="{% static 'core/vendor/alpine-sort.min.js' %}"></script>{% endblock %}
 
 {% block content %}
 <div class="w-full max-w-2xl mx-auto">
@@ -24,9 +28,81 @@
     {% include "core/inputs.html" with field=form.terms %}
     {% include "core/inputs.html" with field=form.teachers %}
 
+    {% if playlist %}
+    {% comment %}
+      Записи правятся тут же, а не на своей странице: поле у них ровно одно. Так же
+      живут файлы материала — оттуда взяты и имена полей (name-<номер>, delete-<номер>).
+
+      Удаление помечается, а не происходит сразу: одной кнопкой рядом с названием
+      слишком легко снести двухчасовую лекцию, а обратно её только перезаливать.
+      Пока не нажато «Сохранить», ничего не случилось.
+    {% endcomment %}
+    <div class="border-t border-slate-200 dark:border-slate-800 pt-5">
+      <p class="text-sm font-semibold mb-1">Записи</p>
+      {% if lectures %}
+      <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
+        Удалённая запись уносит с собой и видео — вернуть его можно только новой загрузкой.
+      </p>
+      {% comment %}
+        Порядок меняется перетаскиванием, как файлы у материала. Строки тут рисует
+        шаблон, а не Alpine, поэтому и обработчика у x-sort нет: плагин физически
+        переставляет узлы, а вместе с ними едут и скрытые input name="order" — браузер
+        отправляет поля в порядке разметки, и вьюхе остаётся пронумеровать присланное.
+
+        Номера строк убраны намеренно: после перетаскивания напечатанная единица врала бы
+        до перезагрузки, а место записи и так видно по её месту в списке. Слева вместо
+        номера — ручка, за которую тянут.
+      {% endcomment %}
+      <div x-sort>
+        {% for one in lectures %}
+        <div x-sort:item="{{ one.pk }}" x-data="{ gone: false }"
+             class="flex items-center gap-2 mb-2" :class="gone && 'opacity-50'">
+          <button type="button" x-sort:handle class="btn btn-ghost !px-1 shrink-0 touch-none cursor-grab active:cursor-grabbing"
+                  aria-label="Переставить">
+            <i class="fa-solid fa-grip-vertical text-slate-400"></i>
+          </button>
+          <input name="name-{{ one.pk }}" value="{{ one.title }}" maxlength="150" :disabled="gone"
+                 class="min-w-0 flex-1 h-11 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition"
+                 :class="gone && 'line-through'">
+          <span class="hidden sm:block w-24 text-xs text-slate-400 text-right">
+            {% if one.prefix %}{{ one.human_duration }}{% else %}{{ one.stage }}{% endif %}
+          </span>
+          <input type="hidden" name="order" value="{{ one.pk }}">
+          <input type="checkbox" name="delete-{{ one.pk }}" x-model="gone" class="hidden">
+          <button type="button" @click="gone = !gone" class="btn btn-ghost shrink-0"
+                  :aria-label="gone ? 'Вернуть' : 'Удалить запись'">
+            <i class="fa-solid" :class="gone ? 'fa-rotate-left' : 'fa-trash'"></i>
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-xs text-slate-500 dark:text-slate-400">
+        Пока ни одной. Записи сдаются на странице курса.
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="flex gap-2">
       <button type="submit" class="btn btn-primary">{% if playlist %}Сохранить{% else %}Завести курс{% endif %}</button>
     </div>
   </form>
+
+  {% if playlist %}
+  <div x-data="{ confirming: false }" class="mt-8 pt-5 border-t border-slate-200 dark:border-slate-800">
+    <button type="button" x-show="!confirming" @click="confirming = true" class="btn btn-ghost text-rose-500">
+      <i class="fa-solid fa-trash"></i>Удалить курс
+    </button>
+    <div x-show="confirming" x-cloak class="flex flex-wrap items-center gap-3">
+      <span class="text-sm">Удалить курс вместе со всеми записями и видео?</span>
+      <form method="post" action="{% url 'playlist_delete' playlist.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">Удалить</button>
+      </form>
+      <button type="button" @click="confirming = false" class="btn btn-ghost">Отмена</button>
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

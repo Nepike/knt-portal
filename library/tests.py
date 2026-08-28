@@ -103,6 +103,45 @@ class BookListTests(TestCase):
         self.assertNotIn("HX-Push-Url", self.htmx(q="зорич", page=2).headers)
 
 
+class FiltersSurviveTests(BookListTests):
+    """Открыл книгу, вернулся — подбор на месте. До этого «Библиотека» вела в начало
+    списка, и поиск с фильтрами приходилось набирать заново на каждой книге."""
+
+    def test_a_card_carries_the_picked_filters_into_its_link(self):
+        """По этой строке страница книги и узнаёт, куда возвращать по «Библиотека»."""
+        response = self.get(subject=self.matan.pk, q="Зорич")
+
+        self.assertContains(
+            response,
+            f"{reverse('book_detail', args=[self.zorich.pk])}?subject={self.matan.pk}&amp;q=",
+        )
+
+    def test_the_book_page_returns_to_the_same_picking(self):
+        page = self.client.get(
+            reverse("book_detail", args=[self.zorich.pk]), {"subject": self.matan.pk, "sort": "new"},
+        )
+
+        self.assertEqual(page.context["back_url"], f"{reverse('book_list')}?subject={self.matan.pk}&sort=new")
+
+    def test_without_a_picking_the_link_is_just_the_list(self):
+        page = self.client.get(reverse("book_detail", args=[self.zorich.pk]))
+
+        self.assertEqual(page.context["back_url"], reverse("book_list"))
+
+    def test_an_empty_filter_does_not_hang_in_the_address(self):
+        """Иначе в строке висело бы «?q=&subject=&term=»."""
+        page = self.client.get(reverse("book_detail", args=[self.zorich.pk]), {"q": "", "term": self.first.pk})
+
+        self.assertEqual(page.context["back_url"], f"{reverse('book_list')}?term={self.first.pk}")
+
+    def test_the_page_number_is_left_behind(self):
+        """Вернувшись, человек ждёт свой список, а не третью его страницу — порции
+        догружаются маячком, и номер в адресе к ним не относится."""
+        page = self.client.get(reverse("book_detail", args=[self.zorich.pk]), {"term": self.first.pk, "page": 3})
+
+        self.assertNotIn("page", page.context["back_url"])
+
+
 class SortingTests(TestCase):
     """Порядок книг: по скачиваниям, по свежести, по алфавиту."""
 

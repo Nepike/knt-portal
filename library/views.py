@@ -6,9 +6,11 @@ from django.db.models import OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from attachments.models import File, human_size
+from bookmarks.views import button as bookmark_button
 from attachments.uploads import (
     check_pending, check_uploads, max_upload_size, pending_uploads, saved_files, sync_files, upload_limits,
 )
@@ -28,7 +30,7 @@ SORTS = {
 SORT_LABELS = {"popular": "Популярные", "new": "Новые", "title": "По названию"}
 
 
-def _visible(user):
+def visible(user):
     """Неопубликованную книгу видят только принёсший её и модерация."""
     if _may_moderate(user):
         return Book.objects.all()
@@ -43,11 +45,26 @@ def _may_edit(user, book):
     return book.uploader_id == user.pk or _may_moderate(user)
 
 
+def _query(params):
+    """Выбранный подбор строкой запроса.
+
+    Пустые параметры выбрасываем, иначе в адресе висело бы «?q=&subject=&term=&sort=popular».
+    `page` тоже: он про порцию, а не про подбор, — вернувшись со страницы книги, человек
+    ждёт список, а не третью его страницу.
+    """
+    return urlencode({key: value for key, value in params.items() if value and key != "page"})
+
+
 def _filters_url(request):
-    """Адрес списка с текущими фильтрами: такую ссылку можно переслать, а F5 не сбросит поиск.
-    Пустые параметры выбрасываем, иначе в строке висело бы «?q=&subject=&term=&sort=popular»."""
-    query = urlencode({key: value for key, value in request.GET.items() if value and key != "page"})
+    """Адрес списка с текущими фильтрами: такую ссылку можно переслать, а F5 не сбросит поиск."""
+    query = _query(request.GET)
     return f"{request.path}?{query}" if query else request.path
+
+
+def _list_url(params):
+    """Адрес списка с выбранным подбором — со страницы книги есть куда вернуться."""
+    query = _query(params)
+    return f"{reverse('book_list')}?{query}" if query else reverse("book_list")
 
 
 def book_list(request):
@@ -62,7 +79,7 @@ def book_list(request):
     # (мультивыбор), сумма молча удвоится. Подзапрос от джойнов не зависит.
     totals = File.objects.filter(book=OuterRef("pk")).values("book").annotate(n=Sum("downloads")).values("n")
     books = (
-        _visible(request.user)
+        visible(request.user)
         .annotate(downloads=Coalesce(Subquery(totals), 0))
         .prefetch_related("subjects", "terms", "files")
     )
@@ -78,6 +95,8 @@ def book_list(request):
     context = {
         "page": page, "books": page.object_list, "q": q, "form": form,
         "sort": sort, "sorts": SORT_LABELS.items(),
+        # Подбор едет в ссылку каждой карточки — со страницы книги есть куда вернуться.
+        "filters": _query(request.GET),
     }
     if not request.headers.get("HX-Request"):
         return render(request, "library/books.html", context)
@@ -93,10 +112,16 @@ def book_list(request):
 
 def book_detail(request, pk):
     book = get_object_or_404(
-        _visible(request.user).select_related("uploader").prefetch_related("subjects", "terms", "files"), pk=pk
+        visible(request.user).select_related("uploader").prefetch_related("subjects", "terms", "files"), pk=pk
     )
     return render(request, "library/book_detail.html", {
         "book": book,
+        # Ссылка «Библиотека» ведёт не в начало списка, а туда, откуда пришли: подбор
+        # приезжает сюда в адресе карточки. Иначе поиск и фильтры слетали бы на каждой
+        # открытой книге — как было до этого.
+        "back_url": _list_url(request.GET),
+        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        "bookmark": bookmark_button(request.user, book),
         "may_edit": _may_edit(request.user, book),
         "may_moderate": _may_moderate(request.user),
     })
@@ -110,7 +135,7 @@ def _files_left(request, book):
 
 def book_edit(request, pk=None):
     """Одна вьюха на создание и правку: поля и работа с файлами одинаковые."""
-    book = get_object_or_404(_visible(request.user), pk=pk) if pk else None
+    book = get_object_or_404(visible(request.user), pk=pk) if pk else None
     if book and not _may_edit(request.user, book):
         return HttpResponseForbidden("Эту книгу может редактировать только тот, кто её добавил.")
 
@@ -162,7 +187,7 @@ def book_edit(request, pk=None):
 
 @require_POST
 def book_delete(request, pk):
-    book = get_object_or_404(_visible(request.user), pk=pk)
+    book = get_object_or_404(visible(request.user), pk=pk)
     if not _may_edit(request.user, book):
         return HttpResponseForbidden("Удалить книгу может только тот, кто её добавил.")
     book.delete()  # файлы уедут каскадом, блобы снимет post_delete

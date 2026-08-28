@@ -11,6 +11,7 @@ from django.core.files.base import ContentFile
 
 from PIL import Image as PilImage
 
+from core.models import Team
 from core.widgets import AccentSelect, AccentSelectMultiple
 
 from .models import User
@@ -196,3 +197,24 @@ class ProfileForm(forms.ModelForm):
         if commit:
             user.save()
         return user
+
+
+class StudentFilterForm(forms.Form):
+    """Подбор для списка людей. Поисковая строка живёт отдельно в шаблоне — у неё
+    своя разметка с лупой, как в библиотеке.
+
+    Форма только рисует: значения вьюха разбирает сама и отдаёт сюда уже разобранными
+    (`initial`). Так селект всегда показывает ровно то, что применено, — а не пустоту,
+    если группа не подошла к выбранному курсу.
+    """
+
+    course = forms.ChoiceField(label="Курс", required=False, widget=AccentSelect())
+    team = forms.ModelChoiceField(
+        label="Группа", queryset=Team.objects.none(), required=False, widget=AccentSelect(search=True),
+    )
+
+    def __init__(self, *args, courses=(), teams=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Пустой вариант первым — это «любой курс», без него сбросить выбор было бы нечем.
+        self.fields["course"].choices = [("", "")] + list(courses)
+        self.fields["team"].queryset = Team.objects.all() if teams is None else teams
