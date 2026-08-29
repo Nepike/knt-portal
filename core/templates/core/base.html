@@ -118,9 +118,11 @@
               Своя рамка тут показывается, чужие — нигде (в лентах и чатах заглушка).
               С рамкой квадрат берут крупнее: она утапливает лицо на 10%, и при той же
               коробке аватар стал бы мельче. Пара размеров та же, что в профиле.
+              -my-1.5 снимает разницу из раскладки: иначе блок аккаунта у надевшего
+              рамку становился выше остальных.
             {% endcomment %}
             {% if my_frame %}
-              {% include "core/_avatar.html" with person=request.user box="w-14 h-14" text="text-sm" worn=my_frame only %}
+              {% include "core/_avatar.html" with person=request.user box="w-14 h-14 -my-1.5" text="text-sm" worn=my_frame only %}
             {% else %}
               {% include "core/_avatar.html" with person=request.user box="w-11 h-11 rounded-[22%]" text="text-sm" frame="p-0.5" only %}
             {% endif %}

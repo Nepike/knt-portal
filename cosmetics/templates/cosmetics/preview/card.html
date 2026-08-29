@@ -6,7 +6,7 @@
   (preview/page.html). Выбор шаблона по виду вещи живёт в cosmetics/views.py.
 
   Классы те же, что на живой странице (h-24 шапка, пара 120/96 у аватара, наезд
-  -mt-12) — поэтому предпросмотр не может разойтись с тем, что человек получит.
+  -mt-9) — поэтому предпросмотр не может разойтись с тем, что человек получит.
 
   Фон под карточкой — НЫНЕШНИЙ надетый: видно, как покупка уживётся с уже надетым.
 {% endcomment %}
@@ -24,9 +24,10 @@
       {% endif %}
     </div>
     <div class="px-4 pb-4">
-      <div class="relative -mt-12 flex items-end gap-3">
+      <div class="relative -mt-9 flex items-end gap-3">
         {% if frame %}
-          {% include "core/_avatar.html" with person=request.user box="w-30 h-30" text="text-3xl" worn=frame only %}
+          {# -my-3 — как в профиле: рамка не должна растить строку и уводить имя вниз #}
+          {% include "core/_avatar.html" with person=request.user box="w-30 h-30 -my-3" text="text-3xl" worn=frame only %}
         {% else %}
           {% include "core/_avatar.html" with person=request.user box="w-24 h-24 rounded-[22%]" text="text-3xl" frame="p-1" only %}
         {% endif %}

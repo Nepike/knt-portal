@@ -78,7 +78,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-856 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+851 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails
@@ -111,3 +111,8 @@ Stylesheets are the one thing not in the repository: `core/static/core/css/base.
 by Tailwind (the Dockerfile builds it in a separate stage), so a local run without
 `tailwindcss -i theme/input.css -o core/static/core/css/base.css` renders unstyled. Seed commands
 (`seed_books`, `seed_materials`) fill the catalogues with something to look at.
+
+The cosmetics catalogue travels as a fixture instead: `manage.py loaddata cosmetics` installs the
+frames, headers and backgrounds. Only rows — the files themselves already sit in the shared R2
+bucket the fixture points at, so it is the same catalogue everywhere and no re-upload is involved.
+Primary keys are kept on purpose, which makes a second run an update rather than a duplicate.

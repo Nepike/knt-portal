@@ -5,7 +5,7 @@
   по центру идёт колонка контента — та же доля ширины (75%), что и на живой странице.
 
   Все размеры внутри — доли от настоящих (768px колонки), отсюда и странные числа:
-  аватар 120px это 15.6% ширины колонки, наезд на шапку 48px — 6.25%. Иначе
+  аватар 120px это 15.6% ширины колонки, наезд на шапку 36px — 4.7%. Иначе
   предпросмотр показывал бы не то, что человек получит.
 
   Рамке и шапке этот шаблон не достаётся: в таком масштабе их не разглядеть, у них
@@ -35,9 +35,14 @@
           {% endif %}
         </div>
         <div class="px-[3%] pb-[3%]">
-          <div class="relative -mt-[6.25%] flex items-end gap-2">
+          <div class="relative -mt-[4.7%] flex items-end gap-2">
             {% if frame %}
-              {% include "core/_avatar.html" with person=request.user box="w-[15.6%] aspect-square" text="text-xs" worn=frame only %}
+              {% comment %}
+                -my — та же поправка, что в профиле, в долях: половина разницы 15.6−12.5.
+                Процентный отступ сверху-снизу считается от ШИРИНЫ строки — от неё же
+                взята и ширина аватара, так что доли сходятся.
+              {% endcomment %}
+              {% include "core/_avatar.html" with person=request.user box="w-[15.6%] aspect-square -my-[1.55%]" text="text-xs" worn=frame only %}
             {% else %}
               {% include "core/_avatar.html" with person=request.user box="w-[12.5%] aspect-square rounded-[22%]" text="text-xs" frame="p-0.5" only %}
             {% endif %}

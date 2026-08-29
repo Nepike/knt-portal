@@ -537,7 +537,7 @@ class SessionForCommandTests(TestCase):
 
 
 class StudentListTests(TestCase):
-    """Раздел заведён, чтобы НАЙТИ человека. Топ — приятная добавка, но главное поиск."""
+    """Раздел заведён, чтобы НАЙТИ человека: поиск по имени и отбор по курсу."""
 
     @classmethod
     def setUpTestData(cls):
@@ -619,16 +619,6 @@ class StudentListTests(TestCase):
     def test_a_junk_sort_does_not_break_the_page(self):
         self.assertEqual(self.get(sort="; drop table").status_code, 200)
 
-    def test_the_top_shows_who_did_the_most(self):
-        self.earn(self.anna, 9000)
-        self.earn(self.petr, 5000)
-
-        top = self.get().context["top"]
-
-        self.assertEqual([person.full_name for person in top], [
-            "Сидорова Анна", "Петров Пётр", "Иванов Иван",
-        ])
-
     def test_a_person_who_left_is_not_listed(self):
         User.objects.filter(pk=self.petr.pk).update(is_active=False)
 
@@ -655,19 +645,6 @@ class StudentListTests(TestCase):
 
         self.assertIn("Выпускник", rows)
         self.assertNotIn(alumni.number, rows)
-
-    def test_the_service_group_is_not_offered_as_a_group(self):
-        """Её номер «000000» ничего не значит, а отбор по ней — это ровно курс
-        «Выпускники», который тут же рядом."""
-        alumni = Team.objects.create(
-            number="000000", profile="Выпускники", course_code="—",
-            stage="bachelor", year_of_admission=Team.ALUMNI_YEAR,
-        )
-
-        listed = self.get().context["form"].fields["team"].queryset
-
-        self.assertIn(self.team, listed)
-        self.assertNotIn(alumni, listed)
 
     def test_a_live_search_answers_with_the_list_alone(self):
         chunk = self.client.get(reverse("student_list"), {"q": "Петров"}, headers={"HX-Request": "true"})
@@ -703,66 +680,36 @@ class StudentListTests(TestCase):
 
         self.assertEqual(self.names(self.get(course=ALUMNI)), ["Сидорова Анна"])
 
-    def test_the_group_filter_keeps_only_its_members(self):
-        self.assertEqual(self.names(self.get(team=self.team.pk)), ["Иванов Иван", "Петров Пётр"])
-
-    def test_a_group_from_another_course_narrows_to_nothing(self):
-        """Фильтры складываются: курс И группа. Тупик тут честнее, чем молчаливое
-        игнорирование одного из двух."""
-        older = Team.objects.create(
+    def test_an_empty_course_says_it_is_the_course_and_not_the_site(self):
+        """«Пока никого» тут читалось бы как «людей нет вовсе», хотя дело в фильтре."""
+        empty = Team.objects.create(
             number="Б05-999", profile="Программирование", course_code="03.03.01",
             stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
         )
 
-        found = self.get(course=str(self.team.get_grade_level()), team=older.pk)
+        found = self.get(course=str(empty.get_grade_level()))
 
         self.assertEqual(self.names(found), [])
-        # И говорим об этом честно: «пока никого» тут читалось бы как «людей нет вовсе».
-        self.assertContains(found, "Под такой подбор никто не попал")
+        self.assertContains(found, "На этом курсе никого нет")
 
-    def test_the_group_list_shrinks_to_the_chosen_course(self):
-        older = Team.objects.create(
-            number="Б05-999", profile="Программирование", course_code="03.03.01",
-            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
-        )
-
-        listed = self.get(course=str(self.team.get_grade_level())).context["form"].fields["team"].queryset
-
-        self.assertIn(self.team, listed)
-        self.assertNotIn(older, listed)
-
-    def test_the_chosen_group_stays_in_the_list_even_off_course(self):
-        """Иначе своего же значения в списке не оказалось бы и сменить его было бы нечем."""
-        older = Team.objects.create(
-            number="Б05-999", profile="Программирование", course_code="03.03.01",
-            stage="bachelor", year_of_admission=self.team.year_of_admission - 2,
-        )
-
-        found = self.get(course=str(self.team.get_grade_level()), team=older.pk)
-
-        self.assertIn(older, found.context["form"].fields["team"].queryset)
-
-    def test_junk_in_the_filters_does_not_break_the_page(self):
-        self.assertEqual(self.get(course="; drop table", team="ой").status_code, 200)
+    def test_junk_in_the_filter_does_not_break_the_page(self):
+        self.assertEqual(self.get(course="; drop table").status_code, 200)
         self.assertEqual(self.names(self.get(course="; drop table")), self.names(self.get()))
 
-    def test_changing_the_course_brings_the_filters_back_with_the_list(self):
-        """Набор групп в селекте после смены курса другой — без oob-замены он остался бы
-        прежним, и в нём предлагались бы чужие группы."""
+    def test_the_chosen_course_goes_into_the_address(self):
+        """F5 не сбрасывает подбор, а ссылку можно переслать."""
         chunk = self.client.get(
             reverse("student_list"), {"course": str(self.team.get_grade_level())},
             headers={"HX-Request": "true"},
         )
 
-        self.assertContains(chunk, 'id="student-filters"')
-        self.assertContains(chunk, "hx-swap-oob")
         self.assertIn("course=", chunk["HX-Push-Url"])
 
-    def test_loading_the_next_batch_does_not_touch_the_filters(self):
-        """Каждая порция иначе перерисовывала бы селекты — и сбрасывала бы открытый список."""
+    def test_loading_the_next_batch_does_not_touch_the_address(self):
+        """Порция — это про место в списке, а не про подбор."""
         chunk = self.client.get(reverse("student_list"), {"page": 1}, headers={"HX-Request": "true"})
 
-        self.assertNotContains(chunk, "hx-swap-oob")
+        self.assertNotIn("HX-Push-Url", chunk)
 
     def test_the_menu_leads_here_and_lights_up(self):
         page = self.get()

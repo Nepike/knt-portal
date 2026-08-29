@@ -224,14 +224,26 @@ def quality_args(encoder, quality):
     return ["-c:v", "libx264", "-crf", str(quality)]
 
 
-def encode(ffmpeg, source, target, recipe, encoder, quality):
+def cut_at(recipe, fps):
+    """До какой секунды резать, чтобы готовое не оказалось ДЛИННЕЕ потолка.
+
+    `-t 8` берёт кадры, НАЧИНАЮЩИЕСЯ раньше восьмой секунды, а последний из них ещё
+    и длится: при 29.97 к/с выходит 8.008 с — и приёмка отвергает собственную выпечку
+    за превышение на восемь миллисекунд. Отступаем на кадр, он и есть вся разница.
+
+    Исходник короче потолка это не трогает: резать нечего, длина остаётся своя.
+    """
+    return recipe.seconds - 1 / fps if fps else recipe.seconds
+
+
+def encode(ffmpeg, source, target, recipe, encoder, quality, cut):
     # Вписываем с обрезкой, а не растягиванием: исходник ровно 6:1 не бывает почти
     # никогда, и простой scale расплющил бы шапку. Обрезается лишнее по краям.
     fit = (f"scale={recipe.width}:{recipe.height}:force_original_aspect_ratio=increase,"
            f"crop={recipe.width}:{recipe.height}")
     args = [
         ffmpeg, "-hide_banner", "-v", "error", "-y", "-i", str(source),
-        "-t", str(recipe.seconds), "-vf", fit,
+        "-t", f"{cut:.4f}", "-vf", fit,
         "-pix_fmt", "yuv420p", "-profile:v", "high",
         # Оглавление вперёд — то самое требование, ради которого спека и заведена.
         "-movflags", "+faststart",
@@ -259,10 +271,12 @@ def bake(ffmpeg, encoder, source, name, recipe, out):
     # istochnik.mp4, и второй молча затирал бы первый.
     video = out / f"{source.stem}-{name}.mp4"
     poster = out / f"{source.stem}-{name}.jpg"
+    about = source_info(ffmpeg, source)
+    cut = cut_at(recipe, about["fps"] if about else 0)
 
     for attempt in range(TRIES):
         quality = QUALITY + attempt * STEP
-        done = encode(ffmpeg, source, video, recipe, encoder, quality)
+        done = encode(ffmpeg, source, video, recipe, encoder, quality, cut)
         if done.returncode:
             raise SystemExit(f"ffmpeg не справился:\n{done.stderr.strip()}")
         size = video.stat().st_size
