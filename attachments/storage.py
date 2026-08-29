@@ -23,6 +23,7 @@ CONTENT_TYPES = {
     ".m3u8": "application/vnd.apple.mpegurl",
     ".mp4": "video/mp4",
     ".m4s": "video/iso.segment",
+    ".json": "application/json",  # пекарня кладёт свой manifest.json рядом с набором
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",

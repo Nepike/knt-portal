@@ -2,8 +2,10 @@
 
 Владельцем берём книгу — она проще всех, но проверяется код attachments.
 """
+import ast
 import json
 import os
+import re
 from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import unquote
@@ -431,6 +433,65 @@ class ContentTypeTests(SimpleTestCase):
     def test_the_unknown_is_a_stream_of_bytes(self):
         """Честнее, чем угадать неверно: браузер предложит сохранить, а не покажет мусор."""
         self.assertEqual(content_type("archive.чтотото"), "application/octet-stream")
+
+
+# Встроенные переменные nginx, которые раздача берёт как есть. Всё остальное обязано
+# быть объявлено в самих конфигах — иначе nginx не поднимется вовсе.
+NGINX_BUILTIN = {"uri", "host", "slice_range", "upstream_cache_status", "http_origin", "scheme"}
+
+
+class NginxConfigTests(SimpleTestCase):
+    """Два файла nginx связаны переменными, и разъезжаются они молча.
+
+    Проверять здесь, а не на сервере, потому что там это уже авария: сниппет, попросивший
+    переменную, которой нет, роняет ВЕСЬ nginx — вместе с двумя чужими сайтами на той же
+    машине. Ровно так и вышло 30.08.2026.
+    """
+
+    def setUp(self):
+        root = settings.BASE_DIR
+        self.site = (root / "nginx.conf").read_text(encoding="utf-8")
+        self.files = (root / "nginx-files.conf").read_text(encoding="utf-8")
+
+    def declared(self, text):
+        """Переменные, которые этот файл заводит сам: map ... $имя { и set $имя."""
+        return set(re.findall(r"^\s*map\s+\S+\s+\$(\w+)\s*\{", text, re.M)) | set(
+            re.findall(r"^\s*set\s+\$(\w+)\s", text, re.M))
+
+    def used(self, text):
+        """Переменные, которые файл читает. Строки-комментарии не в счёт — там и примеры,
+        и рассказ о том, чего в конфиге уже нет."""
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        return {name for name in re.findall(r"\$(\w+)", code) if not name.isdigit()}
+
+    def test_the_snippet_asks_for_nothing_that_is_not_declared(self):
+        known = self.declared(self.site) | self.declared(self.files) | NGINX_BUILTIN
+        self.assertEqual(self.used(self.files) - known, set())
+
+    def test_the_site_file_asks_for_nothing_that_is_not_declared(self):
+        known = self.declared(self.site) | NGINX_BUILTIN | {
+            "remote_addr", "proxy_add_x_forwarded_for", "request_uri", "http_upgrade",
+        }
+        self.assertEqual(self.used(self.site) - known, set())
+
+    def test_the_cors_map_says_the_same_as_the_settings(self):
+        """Список источников в nginx — вынужденная копия CSRF_TRUSTED_ORIGINS: настроек
+        Django nginx не читает. Копия, за которой никто не следит, однажды разъедется,
+        и лекции перестанут заводиться ровно на том домене, что забыли.
+
+        Читаем prod.py разбором, а не импортом: боевые настройки требуют переменных
+        окружения, которых в тестах нет.
+        """
+        block = re.search(r"map \$http_origin \$cors_origin \{(.*?)\}", self.site, re.S)
+        in_nginx = set(re.findall(r'"(https://[^"]+)"\s+"https://', block.group(1)))
+
+        source = (settings.BASE_DIR / "knt" / "settings" / "prod.py").read_text(encoding="utf-8")
+        found = next(
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Assign)
+            and any(getattr(target, "id", "") == "CSRF_TRUSTED_ORIGINS" for target in node.targets)
+        )
+        self.assertEqual(in_nginx, set(ast.literal_eval(found.value)))
 
 
 # Бакет объявляем явно: без него ручки загрузки честно отвечают «прямая загрузка
