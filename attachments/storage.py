@@ -1,3 +1,4 @@
+import mimetypes
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -10,6 +11,38 @@ from django.core.files.storage import FileSystemStorage
 # Длина FileField по умолчанию. Ключ обязан влезать: иначе запись не сохранится вовсе,
 # а хранилище молча урезало бы имя и разошлось с тем, что записано в базе.
 KEY_MAX = 100
+
+# Тип содержимого по расширению — СВОЙ список, а не один mimetypes.
+#
+# Тип попадает В САМ ОБЪЕКТ хранилища при заливке, и потом браузер получает именно его:
+# на попадании в кеш nginx заголовок хранилища побеждает наш. Значит объявлять тип
+# должны одинаково и сайт, и пекарня — а mimetypes на Windows читает реестр и на чужой
+# машине отвечает что попало. `.m4s` он не знает вовсе ни на одной системе, и куски
+# лекций уезжали в R2 никем: браузер получал `application/x-www-form-urlencoded`.
+CONTENT_TYPES = {
+    ".m3u8": "application/vnd.apple.mpegurl",
+    ".mp4": "video/mp4",
+    ".m4s": "video/iso.segment",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".pdf": "application/pdf",
+}
+
+
+def content_type(name):
+    """Чем объект объявляется браузеру.
+
+    Неизвестное — потоком байтов: это честнее, чем угадать неверно. С octet-stream
+    браузер предложит сохранить файл, а с неверным типом попробует показать и покажет
+    мусор. Отдельно от `mimetypes` только то, что мы кладём сами (см. CONTENT_TYPES).
+    """
+    suffix = Path(name).suffix.lower()
+    if suffix in CONTENT_TYPES:
+        return CONTENT_TYPES[suffix]
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
 def random_key(folder, filename):

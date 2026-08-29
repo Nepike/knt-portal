@@ -1,5 +1,4 @@
 import json
-import mimetypes
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
@@ -16,7 +15,7 @@ from economy import rewards
 from .hls import MANIFEST_TYPE, manifest
 from .media import MEDIA_CACHE, file_pk, hls_key, media_key
 from .models import File, human_size
-from .storage import file_storage
+from .storage import content_type, file_storage
 from .uploads import (
     MAX_DIRECT_SIZE, MAX_PARTS, abort_multipart, begin_multipart, check_name, direct_upload,
     finish_multipart, max_upload_size, multipart, part_size, part_urls, sign_upload, uploaded_parts,
@@ -56,10 +55,11 @@ def _deliver(name):
         parts = urlsplit(storage.url(name))
         target = f"{ACCEL_R2}{parts.path}?{parts.query}"
 
-    # Тип обязаны поставить мы: при X-Accel-Redirect заголовок приложения побеждает,
-    # и с дефолтным text/html браузер показал бы pdf текстом, а картинку — ничем.
-    content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
-    return HttpResponse(content_type=content_type, headers={"X-Accel-Redirect": target})
+    # Тип ставим и мы: с дефолтным text/html браузер показал бы pdf текстом, а картинку —
+    # ничем. Но побеждает он только на промахе кеша — на попадании до браузера доезжает
+    # тип, записанный в самом объекте хранилища. Поэтому список один на оба конца
+    # (storage.content_type), и заливка объявляет ровно то же самое.
+    return HttpResponse(content_type=content_type(name), headers={"X-Accel-Redirect": target})
 
 
 @login_not_required
@@ -133,7 +133,12 @@ def hls_piece(request, token, name):
             f"public, max-age={SEGMENT_MAX_AGE}, immutable" if settings.MEDIA_ACCEL
             else f"private, max-age={MEDIA_CACHE}"
         )
-        return _allow_our_origin(request, response)
+        # Разрешение на боевом ставит nginx, а не мы. Под X-Accel-Redirect сегмент
+        # приходит из хранилища через кеш, и наш заголовок до браузера не доезжает —
+        # зато остаётся вторым источником одного и того же, а два разрешения браузер
+        # считает ошибкой. Так лекторий и лёг 30.08.2026. Пусть источник будет один.
+        # В разработке ответ — редирект от нас, и заголовок наш (см. nginx-files.conf).
+        return response if settings.MEDIA_ACCEL else _allow_our_origin(request, response)
 
     try:
         text = manifest(key)

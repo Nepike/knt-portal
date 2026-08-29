@@ -9,8 +9,11 @@ push to `main`.
 > [knt-portal-legacy](https://github.com/Nepike/knt-portal-legacy) — the `import_legacy*`
 > management commands exist to carry data across.
 
-The whole site is behind a login: `LoginRequiredMiddleware` is global and pages opt out explicitly,
-so there is nothing to see without an account.
+The site is behind a login: `LoginRequiredMiddleware` is global and pages opt out explicitly. What
+a visitor without an account gets is the applicants' page at `/about/` — the root sends them there
+instead of to the login form — and the contacts page at `/contacts/`, plus the support form and the
+login pages themselves. They get no sidebar at all: the chrome switches to a three-item bar across
+the top, where the student layout would have put a column of locked doors.
 
 ## Stack
 
@@ -78,7 +81,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-851 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+877 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails

@@ -12,6 +12,9 @@
 """
 
 SECTIONS = {
+    # Меню у незалогиненного своё: эти два раздела есть только в нём.
+    "applicants": {"applicants"},
+    "contacts": {"contacts"},
     "chats": {"chat_list", "chat_detail"},
     "materials": {"material_list", "material_detail", "material_new", "material_edit"},
     "library": {"book_list", "book_detail", "book_new", "book_edit"},

@@ -531,13 +531,20 @@ def fetch_source(url, target):
     return target.stat().st_size
 
 
-def put_file(url, path):
+def put_file(url, path, content_type=None):
     """Положить один кусок, с повторами. Ссылка живёт часами, так что она переживает
-    и паузу между попытками; пауза растёт, чтобы не добивать и без того плохую связь."""
+    и паузу между попытками; пауза растёт, чтобы не добивать и без того плохую связь.
+
+    Тип содержимого приходит от сайта и отправляется как есть: он записывается в сам
+    объект хранилища и потом уходит браузеру. Без него urllib подставляет свой,
+    `application/x-www-form-urlencoded`, и куски лекций лежали в R2 именно с ним.
+    Угадывать тип здесь нельзя — mimetypes на Windows читает реестр и отвечает по-своему.
+    """
     body = path.read_bytes()
+    headers = {"Content-Type": content_type} if content_type else {}
     for attempt in range(1, PUT_TRIES + 1):
         try:
-            request = urllib.request.Request(url, data=body, method="PUT")
+            request = urllib.request.Request(url, data=body, headers=headers, method="PUT")
             with urllib.request.urlopen(request, timeout=120):
                 return
         except Exception as error:  # noqa: BLE001 — сеть отказывает десятком разных способов
@@ -558,9 +565,10 @@ def upload(site, token, job_token, folder):
     done = 0
     for start in range(0, len(names), SIGN_BATCH):
         batch = names[start:start + SIGN_BATCH]
-        urls = talk(site, token, "/intake/sign/", {"token": job_token, "names": batch})["urls"]
+        answer = talk(site, token, "/intake/sign/", {"token": job_token, "names": batch})
+        urls, types = answer["urls"], answer.get("types") or {}
         with ThreadPoolExecutor(max_workers=UPLOAD_THREADS) as pool:
-            for _ in pool.map(lambda name: put_file(urls[name], beside[name]), batch):
+            for _ in pool.map(lambda n: put_file(urls[n], beside[n], types.get(n)), batch):
                 done += 1
         say(f"    залито {done} из {len(names)}")
     return len(names)

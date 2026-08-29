@@ -4,9 +4,10 @@ from attachments.models import human_size
 
 from .widgets import AccentSelect, AccentSelectMultiple
 
-# Картинка обращения едет в телеграм ЧЕРЕЗ ОЧЕРЕДЬ, байтами в самой задаче: на сайте
-# у неё нет владельца, и в хранилище она осталась бы сиротой. Отсюда и потолок скромнее,
-# чем у картинок галереи, — это всё-таки сообщение в брокере, а не файл на диске.
+# Потолок для картинки, приложенной к обращению, — общий у поддержки и обратной связи.
+# Она едет в телеграм ЧЕРЕЗ ОЧЕРЕДЬ, байтами в самой задаче: на сайте у неё нет владельца,
+# и в хранилище она осталась бы сиротой. Отсюда и потолок скромнее, чем у картинок
+# галереи, — это всё-таки сообщение в брокере, а не файл на диске.
 MAX_SUPPORT_IMAGE = 5 * 1024 * 1024
 
 SUBJECTS = [
@@ -53,6 +54,39 @@ class SupportForm(forms.Form):
         это как раз частый случай) — без контакта ответить будет некуда."""
         super().__init__(*args, **kwargs)
         if known:
+            del self.fields["contact"]
+
+    def clean_image(self):
+        image = self.cleaned_data["image"]
+        if image and image.size > MAX_SUPPORT_IMAGE:
+            raise forms.ValidationError(f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
+        return image
+
+
+class FeedbackForm(forms.Form):
+    """Вопрос со страницы контактов. Сестра SupportForm: так же ничего не хранит и так же
+    уходит в телеграм — но в другой чат и к другим людям.
+
+    Темы нет намеренно. В поддержку пишут про поломки, и там список тем помогает
+    рассортировать; сюда пишет абитуриент с одним вопросом, и выбор из пяти пунктов
+    перед ним — лишняя ступенька на ровном месте.
+
+    Капчи, которая стояла на старом сайте, тоже нет: от нас её роль играет ограничитель
+    частоты в самой странице (core/throttle.py), и он не заставляет человека разгадывать
+    картинки, чтобы спросить про общежитие.
+    """
+
+    text = forms.CharField(label="Вопрос", max_length=2000, widget=forms.Textarea(attrs={"rows": 4}))
+    image = forms.ImageField(label="Картинка", required=False)
+    name = forms.CharField(label="Как вас зовут", max_length=100)
+    contact = forms.CharField(label="Почта, телеграм или ВК для ответа", max_length=100)
+
+    def __init__(self, *args, known=False, **kwargs):
+        """`known` — человек вошёл на сайт. Тогда ни имени, ни контакта не спрашиваем:
+        и то и другое есть в его профиле, ссылка на который уедет в чат."""
+        super().__init__(*args, **kwargs)
+        if known:
+            del self.fields["name"]
             del self.fields["contact"]
 
     def clean_image(self):

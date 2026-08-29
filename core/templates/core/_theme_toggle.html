@@ -1,0 +1,10 @@
+{% comment %}
+  Кнопка стоит в обеих шапках — и у гостя, и у вошедшего. Отдельным файлом, чтобы
+  переключение не разъехалось со скриптом в <head>: там читается тот же ключ
+  localStorage и тот же класс на <html>.
+{% endcomment %}
+<button type="button" class="btn btn-ghost shrink-0" aria-label="Сменить тему"
+        @click="document.documentElement.classList.toggle('dark'); localStorage.setItem('color-scheme', document.documentElement.classList.contains('dark') ? 'dark' : 'light')">
+  <i class="fa-solid fa-moon text-xl dark:!hidden"></i>
+  <i class="fa-solid fa-sun text-xl !hidden dark:!block"></i>
+</button>

@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 # у живого чата (команда /get_chat_id, см. management/commands/bot.py).
 MODERATION = "moderation"
 SUPPORT = "support"
+# Отдельно от поддержки не для порядка: в поддержку пишут про сломанный сайт, а сюда —
+# про поступление и общежитие, и отвечают на это разные люди.
+FEEDBACK = "feedback"
 
 
 def notify(chat_name, template, context=None, image=None):

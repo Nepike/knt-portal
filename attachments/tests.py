@@ -28,7 +28,7 @@ from users.models import User
 from . import hls
 from .media import MEDIA_CACHE, file_url, hls_key, hls_url, media_key, media_url, redirect_url
 from .models import File
-from .storage import drop_prefix, file_storage, random_key
+from .storage import content_type, drop_prefix, file_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
     MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, UPLOAD_SALT,
@@ -376,6 +376,61 @@ class PlayerHeadersTests(TestCase):
 
         self.assertEqual(answer.status_code, 204)
         self.assertIn("Range", answer["Access-Control-Allow-Headers"])
+
+    def segment(self):
+        return hls_url(file_storage().save("lectures/abc/0/seg_1.m4s", ContentFile(b"x")))
+
+    def test_a_segment_under_nginx_carries_no_permission_of_ours(self):
+        """Байты сегмента идут из хранилища мимо нас, и разрешение ставит nginx.
+
+        Наш заголовок туда всё равно не доезжает, зато остаётся ВТОРЫМ источником
+        одного и того же. Однажды оба сработали разом, браузер увидел два разрешения,
+        счёл это ошибкой и отверг ответ — так лекторий и лёг 30.08.2026.
+        """
+        with override_settings(MEDIA_ACCEL=True):
+            response = self.client.get(self.segment(), headers={"Origin": OURS})
+
+        self.assertIn("X-Accel-Redirect", response)
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+
+    def test_a_segment_without_nginx_carries_ours(self):
+        """В разработке nginx нет, ответ отдаём мы сами — и разрешение наше."""
+        response = self.client.get(self.segment(), headers={"Origin": OURS})
+
+        self.assertNotIn("X-Accel-Redirect", response)
+        self.assertEqual(response["Access-Control-Allow-Origin"], OURS)
+
+    def test_a_manifest_carries_ours_either_way(self):
+        """Манифест мы собираем сами на каждый запрос — он через nginx не проходит,
+        и разрешение на нём остаётся нашим даже на боевом."""
+        with override_settings(MEDIA_ACCEL=True):
+            self.assertEqual(self.get()["Access-Control-Allow-Origin"], OURS)
+
+    def test_a_segment_is_declared_a_video_and_not_a_form(self):
+        """`.m4s` не знает ни один mimetypes, и без своего списка сегмент уезжал
+        браузеру как `application/octet-stream`, а из хранилища — и вовсе как
+        `application/x-www-form-urlencoded`."""
+        with override_settings(MEDIA_ACCEL=True):
+            response = self.client.get(self.segment())
+
+        self.assertEqual(response["Content-Type"], "video/iso.segment")
+
+
+class ContentTypeTests(SimpleTestCase):
+    """Чем объект объявляется браузеру. Список свой, потому что тот же самый нужен
+    пекарне при заливке, а mimetypes на Windows читает реестр и отвечает по-своему."""
+
+    def test_the_pipelines_own_extensions_are_known(self):
+        self.assertEqual(content_type("0/seg1.m4s"), "video/iso.segment")
+        self.assertEqual(content_type("master.m3u8"), "application/vnd.apple.mpegurl")
+        self.assertEqual(content_type("0/init_0.mp4"), "video/mp4")
+
+    def test_everything_else_falls_back_to_the_system_list(self):
+        self.assertEqual(content_type("Конспект.pdf"), "application/pdf")
+
+    def test_the_unknown_is_a_stream_of_bytes(self):
+        """Честнее, чем угадать неверно: браузер предложит сохранить, а не покажет мусор."""
+        self.assertEqual(content_type("archive.чтотото"), "application/octet-stream")
 
 
 # Бакет объявляем явно: без него ручки загрузки честно отвечают «прямая загрузка

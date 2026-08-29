@@ -19,6 +19,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from attachments.storage import content_type
 from attachments.uploads import sign_download, sign_put, under
 
 from .models import MediaJob, sweep, take
@@ -193,14 +194,17 @@ def sign(request):
     if job is None or not job.prefix:
         return _gone()
 
-    urls = {}
+    urls, types = {}, {}
     for name in list(body.get("names") or [])[:MAX_SIGNED]:
         # Имя даёт пекарня, а ключ подписываем мы: «../» увело бы запись в чужую папку.
         clean = posixpath.normpath(str(name)).lstrip("/")
         if ".." in clean.split("/"):
             return JsonResponse({"error": f"нехорошее имя: {name}"}, status=400)
         urls[name] = sign_put(f"{job.prefix}/{clean}")
-    return JsonResponse({"urls": urls})
+        # Тип объявляем МЫ, а не пекарня: он записывается в сам объект и потом уходит
+        # браузеру, а список расширений должен быть один на оба конца (storage.content_type).
+        types[name] = content_type(clean)
+    return JsonResponse({"urls": urls, "types": types})
 
 
 def _incomplete(job):

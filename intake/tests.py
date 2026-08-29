@@ -492,6 +492,22 @@ class QueueTests(TestCase):
 
         self.assertIn(f"{prefix}/0/seg00000.m4s", urls["0/seg00000.m4s"])
 
+    def test_the_bakery_is_told_what_type_to_declare(self):
+        """Тип записывается в сам объект хранилища и потом уходит браузеру, а на попадании
+        в кеш побеждает именно он. Пекарня раньше не объявляла никакого, и urllib
+        подставлял свой — куски лекций лежали в R2 как `x-www-form-urlencoded`.
+        Угадывать тип на её стороне нельзя: mimetypes на Windows читает реестр.
+        """
+        token = self.claim()["token"]
+        self.call("intake_plan", token=token, manifest=made_manifest())
+
+        types = self.call(
+            "intake_sign", token=token, names=["0/seg00000.m4s", "master.m3u8"],
+        ).json()["types"]
+
+        self.assertEqual(types["0/seg00000.m4s"], "video/iso.segment")
+        self.assertEqual(types["master.m3u8"], "application/vnd.apple.mpegurl")
+
     def test_climbing_out_of_the_folder_is_refused(self):
         token = self.claim()["token"]
         self.call("intake_plan", token=token, manifest=made_manifest())

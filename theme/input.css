@@ -132,6 +132,19 @@ html { color-scheme: light; }
     @apply hover:bg-transparent dark:hover:bg-transparent;
   }
 
+  /* Пункт горизонтального меню в шапке — его видит только гость. Не вариант .nav-link:
+     там раскладка колонки (иконка + подпись через gap-3), а тут пилюля с одним словом. */
+  .top-link {
+    @apply px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition;
+    @apply text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800;
+  }
+  .top-link-active {
+    @apply bg-accent/10 text-accent;
+  }
+  .top-link-off {
+    @apply pointer-events-none opacity-40 cursor-not-allowed select-none text-slate-400 dark:text-slate-500;
+  }
+
 
   .field > input,
   .field > textarea {
@@ -187,6 +200,88 @@ html { color-scheme: light; }
      занимает всю ширину, и полей по бокам, где он проглядывал бы, там нет. */
   .panel { @apply rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900; }
   .panel-glass { @apply bg-white/75 dark:bg-slate-900/75 backdrop-blur-md border-white/70 dark:border-white/10; }
+
+  /* Шапка витринной страницы: снимок под белым текстом — плазма у абитуриентов,
+     карта у контактов. Тонировка у них РАЗНАЯ, и это не прихоть: плазма тёмная, её
+     надо осветлять, а карта светлая, её надо гасить. Одна обработка на двоих делала
+     из карты белый лист.
+
+     Заливка поверх снимка красит шапку в палитру сайта, но контраст текста держит уже
+     не она: раньше держала, и ради этого приходилось топить снимок до неразличимости.
+     Теперь за текст отвечает своя подложка (.hero-scrim) или сама форма заливки
+     (.hero-veil-side) — а снимок остаётся видимым. Пробы вариантов и замеры контраста
+     лежат отдельным листом, см. историю правок. */
+  .hero-photo {
+    @apply absolute inset-0 w-full h-full object-cover select-none pointer-events-none;
+  }
+  .hero-photo-plasma { filter: brightness(1.05) saturate(1.18); }
+
+  /* Плазма: заливка фирменным градиентом под тем же углом, что и .bg-brand-gradient.
+     Плотность подобрана замером — ровно посередине между двумя пробами: вдвое светлее
+     старого сайта и заметно темнее варианта «плазма во всю силу». Контраст белого
+     текста в худшей точке при этом 3.99 — выше, чем у обоих (3.58 и 2.29).
+
+     Тёмный конец набирает силу рано (28%): к правому нижнему углу, где лежат абзацы,
+     заливка должна быть плотной, а левый верхний с логотипом может оставаться прозрачным. */
+  .hero-veil {
+    @apply absolute inset-0;
+    background-image: linear-gradient(135deg,
+      color-mix(in srgb, var(--color-brand-cyan) 18%, transparent) 0%,
+      color-mix(in srgb, var(--color-brand-violet) 72%, transparent) 28%,
+      color-mix(in srgb, #2e1065 97%, transparent) 100%);
+  }
+
+  /* Карта: заливка со старого сайта — непрозрачная в том углу, где текст, и почти
+     прозрачная в противоположном, где карта выходит наружу.
+
+     Два отличия от оригинала, оба ради читаемости. Цвет фирменный, а не старый
+     #ba83fc: тот светлый сам по себе, и белым по нему видно плохо даже без карты
+     под ним. И добавлена средняя точка: градиент из двух цветов набирает полную
+     непрозрачность только у самого края, поэтому правый край каждой строки всё
+     равно попадал на полупрозрачное. Замер поднялся с 1.3 до 4.0. */
+  .hero-veil-map {
+    @apply absolute inset-0;
+    background-image: linear-gradient(280deg,
+      rgb(111 255 255 / 0.1) 0%,
+      color-mix(in srgb, var(--color-brand-violet) 80%, transparent) 45%,
+      var(--color-brand-violet) 100%);
+  }
+
+  /* В тёмной теме фирменный цвет у сайта другой — не фиолетовый, а циан (см. .dark выше),
+     и шапки идут за ним: рисунок заливки тот же, гамма синяя.
+
+     Плотный конец берётся тёмный, а не сам циан: он светлый (яркость 0.52), и белым
+     по нему не прочитать ничего. Циан остаётся там, где заливка прозрачна, — то есть
+     ровно там, где сквозь неё виден снимок. */
+  .dark .hero-veil {
+    background-image: linear-gradient(135deg,
+      color-mix(in srgb, var(--color-brand-cyan) 20%, transparent) 0%,
+      color-mix(in srgb, #0e7490 74%, transparent) 28%,   /* cyan-700 */
+      color-mix(in srgb, #083344 97%, transparent) 100%); /* cyan-950 */
+  }
+  .dark .hero-veil-map {
+    background-image: linear-gradient(280deg,
+      color-mix(in srgb, var(--color-brand-cyan) 12%, transparent) 0%,
+      color-mix(in srgb, #0e7490 84%, transparent) 45%,
+      #0e7490 100%);
+  }
+
+  /* Вопрос-ответ на странице для абитуриентов. Гармошка на голом <details>, без скрипта:
+     так она открывается и до загрузки js, слушается клавиатуры и — главное — находится
+     поиском по странице, Ctrl+F разворачивает закрытый ответ сам.
+     Свой маркер-треугольник у summary снимаем в обе стороны: webkit просит псевдоэлемент,
+     остальные слушаются list-style. */
+  .faq > summary {
+    @apply flex items-start justify-between gap-4 cursor-pointer select-none px-5 py-4 font-medium;
+    @apply hover:text-accent transition-colors list-none;
+  }
+  .faq > summary::-webkit-details-marker { display: none; }
+  .faq > summary > i { @apply shrink-0 mt-1 text-sm text-slate-400 transition-transform; }
+  .faq[open] > summary > i { @apply rotate-180; }
+  .faq > p { @apply px-5 text-slate-600 dark:text-slate-400 leading-relaxed; }
+  .faq > p:last-child { @apply pb-5; }
+  .faq > p + p { @apply mt-3; }
+  .faq a { @apply text-accent hover:underline; }
 
   /* Плитка косметики: картинка на плашке своей ступени. Одна на инвентарь и магазин.
      Цвет ступени приезжает одной переменной, всё остальное считается от неё — новая

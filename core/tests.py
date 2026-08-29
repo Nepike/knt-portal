@@ -293,6 +293,158 @@ class OpenSectionsTests(TestCase):
         self.assertNotIn("бета", page.lower())
 
 
+class ApplicantsPageTests(TestCase):
+    """Единственная страница, открытая всему интернету, и меню, которое видит гость."""
+
+    def page(self):
+        return self.client.get(reverse("applicants"))
+
+    def test_a_guest_lands_on_it_from_the_root(self):
+        """Раньше корень уводил гостя на форму входа. На knt-mipt.ru приходят и те,
+        кто сюда только собирается поступать, — им нужна витрина, а не замок."""
+        self.assertRedirects(self.client.get("/"), reverse("applicants"))
+
+    def test_a_student_still_lands_in_materials(self):
+        self.client.force_login(make_user("reader@x.ru"))
+
+        self.assertRedirects(self.client.get("/"), reverse("material_list"))
+
+    def test_it_opens_without_logging_in(self):
+        self.assertEqual(self.page().status_code, 200)
+
+    def test_the_answers_came_over_from_the_old_site(self):
+        page = self.page().content.decode()
+
+        self.assertIn("Абитуриентам о КНТ", page)
+        self.assertIn("34 бюджетных и 5 платных мест", page)   # Поступление
+        self.assertIn("военной кафедрой", page)                # Обучение
+        self.assertIn("Есть ли у вас столовая?", page)         # Кампус
+
+    def test_a_guest_gets_three_menu_items(self):
+        page = self.page().content.decode()
+        menu = page.split('<nav')[1].split('</nav>')[0]
+
+        self.assertIn(f'href="{reverse("applicants")}"', menu)
+        self.assertIn(f'href="{reverse("material_list")}"', menu)
+        self.assertIn(f'href="{reverse("contacts")}"', menu)
+        # Разделов сайта в меню гостя нет вовсе: за каждым всё равно форма входа.
+        for hidden in ("shop", "wall", "chat_list", "book_list", "student_list"):
+            self.assertNotIn(reverse(hidden), menu, hidden)
+
+    def test_the_section_lights_up(self):
+        self.assertEqual(self.page().context["section"], "applicants")
+
+    def test_a_guest_gets_no_sidebar_at_all(self):
+        """Три пункта в колонке шириной в 256 пикселей — и целая шапка ради кнопки темы."""
+        guest = self.page().content.decode()
+        self.client.force_login(make_user("reader@x.ru"))
+        student = self.client.get(reverse("material_list")).content.decode()
+
+        self.assertNotIn("<aside", guest)
+        self.assertIn("<aside", student)
+
+    def test_the_footer_leads_here(self):
+        """«О факультете» в подвале — эта самая страница; раньше там стояла решётка."""
+        for page in (self.page(), self.client.get(reverse("support"))):
+            footer = page.content.decode().split("<footer")[1]
+
+            self.assertIn(f'href="{reverse("applicants")}"', footer)
+            self.assertNotIn('href="#"', footer)
+
+    def test_a_student_gets_the_usual_menu_and_no_applicants_item(self):
+        """Иначе пункт для абитуриентов болтался бы в меню у тех, кто давно поступил."""
+        self.client.force_login(make_user("reader@x.ru"))
+
+        page = self.client.get(reverse("material_list")).content.decode()
+        menu = page.split('<nav')[1].split('</nav>')[0]
+
+        self.assertIn(f'href="{reverse("shop")}"', menu)
+        self.assertNotIn(reverse("applicants"), menu)
+
+    def test_the_address_answer_leads_to_the_contacts_section(self):
+        """Со старого сайта этот ответ и вёл в «Контакты» — там телефоны и схема проезда."""
+        page = self.page().content.decode()
+
+        self.assertIn("улица Максимова, дом 4", page)
+        self.assertIn(f'href="{reverse("contacts")}"', page)
+
+
+class ContactsPageTests(TestCase):
+    """Вторая страница, открытая всему интернету: адрес, люди и форма вопроса."""
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+
+    def page(self):
+        return self.client.get(reverse("contacts"))
+
+    def test_it_opens_without_logging_in(self):
+        self.assertEqual(self.page().status_code, 200)
+
+    def test_everything_came_over_from_the_old_site(self):
+        page = self.page().content.decode()
+
+        self.assertIn("ул. Максимова, 4", page)
+        self.assertIn("Давтян Александр Георгиевич", page)      # деканат
+        self.assertIn("tel:+74991965311", page)
+        self.assertIn("Актуальный состав студсовета", page)     # студсовет
+        self.assertIn("Приходько Дарья", page)                  # общежития
+        self.assertIn("mailto:khmelevskii.aa@mipt.ru", page)    # обучение
+        self.assertIn("Попов Алексей Васильевич", page)         # глава студсовета
+        self.assertIn("mailto:knt.student.council@gmail.com", page)
+
+    def test_the_section_lights_up(self):
+        self.assertEqual(self.page().context["section"], "contacts")
+
+    def test_a_question_reaches_the_feedback_chat_and_not_support(self):
+        """Разные чаты не для порядка: про поступление и про сломанный сайт отвечают разные люди."""
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("contacts"), {
+                "text": "До какого числа подают документы?",
+                "name": "Абитуриент", "contact": "abit@mail.ru",
+            })
+
+        self.assertRedirects(response, reverse("contacts"))
+        chat, template, context = sent.call_args.args
+        self.assertEqual(chat, "feedback")
+        self.assertEqual(template, "telegram/feedback.html")
+        self.assertIsNone(context["author"])
+        self.assertEqual(context["contact"], "abit@mail.ru")
+
+    def test_without_a_name_and_a_contact_there_is_nowhere_to_answer(self):
+        with patch("core.views.notify") as sent:
+            response = self.client.post(reverse("contacts"), {"text": "Вопрос"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "contact", "Обязательное поле.")
+        sent.assert_not_called()
+
+    def test_a_logged_in_person_is_asked_for_neither(self):
+        """И имя, и связь есть в профиле — ссылка на него уезжает в чат."""
+        self.client.force_login(make_user("reader@x.ru"))
+
+        fields = self.page().context["form"].fields
+        self.assertNotIn("name", fields)
+        self.assertNotIn("contact", fields)
+
+    def test_a_flood_stops_reaching_the_chat(self):
+        payload = {"text": "спам", "name": "спам", "contact": "spam@x.ru"}
+        with patch("core.views.notify") as sent:
+            for _ in range(14):
+                self.client.post(reverse("contacts"), payload)
+
+        self.assertEqual(sent.call_count, 10)
+
+    def test_the_message_says_who_asked_and_how_to_answer(self):
+        text = render_to_string("telegram/feedback.html", {
+            "author": None, "text": "Есть ли общежитие?", "name": "Абитуриент", "contact": "abit@mail.ru",
+        })
+
+        self.assertIn("Есть ли общежитие?", text)
+        self.assertIn("Абитуриент", text)
+        self.assertIn("abit@mail.ru", text)
+
+
 class TeacherSectionTests(TestCase):
     """Раздел преподавателей целиком — не только чтение, но и отзывы."""
 

@@ -1,0 +1,172 @@
+{% extends "core/base.html" %}
+{% load static %}
+
+{% block title %}Контакты{% endblock %}
+
+{% comment %}
+  Содержимое перенесено со старого сайта: адрес, деканат, студсовет, кому что писать
+  и форма. Порядок тот же и не случаен — сначала способы спросить живого человека,
+  форма последней: ответ на неё приходит не мгновенно.
+
+  TODO (контент): состав деканата поменяется, и контактов станет больше. Каждый человек
+  здесь — один блок в сетке, добавить нового значит скопировать шесть строк.
+{% endcomment %}
+{% block meta %}
+<meta name="description" content="Как добраться до КНТ: Москва, улица Максимова, 4. Телефоны деканата, состав студсовета и форма обратной связи.">
+<meta property="og:title" content="Контакты КНТ">
+<meta property="og:description" content="Москва, улица Максимова, 4. Деканат, студсовет и форма обратной связи.">
+<meta property="og:url" content="{{ request.build_absolute_uri }}">
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-8">
+
+  {% comment %}
+    Шапка той же формы, что у абитуриентов, но снимок и заливка — со старого сайта
+    (.hero-veil-map). Непрозрачный угол приходится ровно на текст, прозрачный —
+    на карту.
+
+    Снимок обрезан по кварталу вокруг Максимова, 4, а не взят целиком: на старом сайте
+    карта лежала в натуральную величину и была видна крупно, а вписанная целиком она
+    отъезжает на полрайона и перестаёт что-либо показывать.
+
+    Колонка текста уже обычной (max-w-lg): чем дальше строка уходит вправо, тем прозрачнее
+    над ней заливка и тем светлее карта под ней. Замер: белый текст держится на 1.3–1.9,
+    это заметно бледно. Старая заливка светлая сама по себе (#ba83fc), и упирается всё
+    в неё — с фирменным фиолетовым та же картинка даёт 3.99.
+
+    TODO (карта): снимок сделан с Google Maps. Для страницы, открытой всему интернету,
+    правильнее виджет Яндекса или лицензированный тайл с подписью.
+  {% endcomment %}
+  <section class="relative overflow-hidden rounded-2xl px-6 sm:px-10 py-10 sm:py-14 text-white">
+    <img src="{% static 'core/img/map.jpg' %}" alt="" class="hero-photo">
+    <div class="hero-veil-map"></div>
+
+    <div class="relative">
+      <h1 class="font-extrabold leading-tight text-3xl sm:text-4xl">Наш адрес</h1>
+      <p class="font-bold text-lg mt-3">г. Москва, ул. Максимова, 4</p>
+      <p class="mt-4 max-w-lg text-white/90 leading-relaxed">
+        На общественном транспорте: автобусы 60, 105, 800 от метро Щукинская или автобусы
+        100, 253, 681 от метро Октябрьское поле до остановки «Площадь Академика Курчатова».
+      </p>
+      <div class="mt-6 flex flex-wrap gap-3">
+        <a href="https://yandex.ru/maps/?ol=biz&oid=1105332125&ll=37.473563%2C55.801774&z=15" target="_blank" rel="noopener"
+           class="btn border border-white/40 bg-white/15 text-white hover:bg-white/25"><i class="fa-brands fa-yandex"></i>Яндекс.Карты</a>
+        <a href="https://www.google.com/maps/place/@55.8015064,37.4747247,17.04z" target="_blank" rel="noopener"
+           class="btn border border-white/40 bg-white/15 text-white hover:bg-white/25"><i class="fa-brands fa-google"></i>Google Maps</a>
+      </div>
+    </div>
+  </section>
+
+  {# ===== Деканат ===== #}
+  <section>
+    <h2 class="text-2xl font-bold mb-4">Деканат</h2>
+    <div class="grid gap-4 sm:grid-cols-2">
+
+      <div class="panel p-6 flex flex-col items-center text-center">
+        <img src="{% static 'core/img/davtjan.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
+        <p class="mt-4 font-bold">Давтян Александр Георгиевич</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель учебного блока</p>
+        <a href="tel:+74991965311" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑53‑11</a>
+      </div>
+
+      <div class="panel p-6 flex flex-col items-center text-center">
+        <img src="{% static 'core/img/mih.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
+        <p class="mt-4 font-bold">Михалева Ольга Владимировна</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель административного блока</p>
+        <a href="tel:+74991964974" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑49‑74</a>
+      </div>
+
+    </div>
+  </section>
+
+  {# ===== Студсовет ===== #}
+  <section>
+    <h2 class="text-2xl font-bold mb-4">Студсовет</h2>
+    {# Состав живёт в гуглодоке и меняется чаще, чем страница, — поэтому ссылка, а не список #}
+    <a href="https://docs.google.com/document/d/1hlOSBm2-kxn7j5eyoPK8GqI_Kjcu_q4CV99hGzSWALc/edit?usp=sharing"
+       target="_blank" rel="noopener"
+       class="panel flex items-center gap-4 p-5 transition hover:border-accent/50 hover:-translate-y-0.5">
+      <i class="fa-solid fa-file-lines text-2xl text-accent"></i>
+      <span class="flex-1 min-w-0">
+        <span class="block font-medium">Актуальный состав студсовета</span>
+        <span class="block text-sm text-slate-500 dark:text-slate-400">Google Документы</span>
+      </span>
+      <i class="fa-solid fa-arrow-up-right-from-square text-slate-400"></i>
+    </a>
+  </section>
+
+  {# ===== Кому что писать ===== #}
+  <section>
+    <h2 class="text-2xl font-bold mb-4">Кому что писать</h2>
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+
+      <div class="panel p-5">
+        <p class="font-bold">По вопросам проживания в общежитиях</p>
+        <p class="mt-2">Приходько Дарья</p>
+        <div class="mt-2 flex flex-col gap-1 text-sm">
+          <a href="https://t.me/onthewaytoabbeyroad" target="_blank" rel="noopener" class="text-accent hover:underline"><i class="fa-brands fa-telegram"></i> t.me/onthewaytoabbeyroad</a>
+          <a href="https://vk.com/onthewaytoabbeyroad" target="_blank" rel="noopener" class="text-accent hover:underline"><i class="fa-brands fa-vk"></i> vk.com/onthewaytoabbeyroad</a>
+        </div>
+      </div>
+
+      <div class="panel p-5">
+        <p class="font-bold">По вопросам обучения в КНТ</p>
+        <p class="mt-2">Хмелевский Александр Александрович</p>
+        <div class="mt-2 flex flex-col gap-1 text-sm">
+          <a href="tel:+74991969361" class="text-accent hover:underline"><i class="fa-solid fa-phone"></i> +7&nbsp;(499)&nbsp;196‑93‑61</a>
+          <a href="mailto:khmelevskii.aa@mipt.ru" class="text-accent hover:underline"><i class="fa-solid fa-envelope"></i> khmelevskii.aa@mipt.ru</a>
+        </div>
+      </div>
+
+      {# TODO (контент): заголовок мой, а не с формулировки заказчика — переименуйте, если мимо #}
+      <div class="panel p-5">
+        <p class="font-bold">По вопросам студенческой жизни</p>
+        <p class="mt-2">Попов Алексей Васильевич</p>
+        <div class="mt-2 flex flex-col gap-1 text-sm">
+          <a href="https://t.me/ukoyaki" target="_blank" rel="noopener" class="text-accent hover:underline"><i class="fa-brands fa-telegram"></i> t.me/ukoyaki</a>
+          <a href="mailto:knt.student.council@gmail.com" class="text-accent hover:underline"><i class="fa-solid fa-envelope"></i> knt.student.council@gmail.com</a>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  {# ===== Форма ===== #}
+  {# id — якорь: на него ведут ссылки «написать нам» с других страниц #}
+  {% comment %}
+    Форма сеткой в две колонки: имя и контакт — короткие поля и встают парой, всё
+    остальное во всю ширину. Так у формы получается ритм, а не столбик одинаковых
+    полос. Кнопка тоже во всю ширину: узкая рядом с широкими полями смотрелась
+    обрубком, а тут она — единственное действие на карточке, и мельчить ей незачем.
+
+    Вошедшему полей имени и контакта нет вовсе (см. FeedbackForm), и сетка тогда
+    просто становится одноколоночной — сама, без отдельной ветки в шаблоне.
+  {% endcomment %}
+  <section id="feedback" class="panel overflow-hidden">
+    <div class="border-b border-slate-200 dark:border-slate-800 px-6 sm:px-8 py-5 text-center">
+      <h2 class="text-2xl font-bold">Если есть другие вопросы</h2>
+      <p class="mt-1 text-slate-500 dark:text-slate-400">Напишите — ответим на указанный контакт.</p>
+    </div>
+
+    <form method="post" enctype="multipart/form-data"
+          class="px-6 sm:px-8 py-7 w-full max-w-2xl mx-auto grid gap-5 sm:grid-cols-2">
+      {% csrf_token %}
+
+      <div class="sm:col-span-2">{% include "core/inputs.html" with field=form.text %}</div>
+
+      {% if form.name %}{% include "core/inputs.html" with field=form.name %}{% endif %}
+      {% if form.contact %}{% include "core/inputs.html" with field=form.contact %}{% endif %}
+
+      <div class="sm:col-span-2">
+        {% include "attachments/_image_pick.html" with field=form.image %}
+        {% if form.image.errors %}<p class="mt-1.5 text-xs text-rose-500">{{ form.image.errors.0 }}</p>{% endif %}
+      </div>
+
+      <button type="submit" class="sm:col-span-2 btn btn-primary w-full h-12 text-base">
+        <i class="fa-solid fa-paper-plane"></i>Отправить
+      </button>
+    </form>
+  </section>
+</div>
+{% endblock %}
