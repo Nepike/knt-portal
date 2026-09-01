@@ -8,5 +8,6 @@ urlpatterns = [
     path("intake/plan/", views.plan, name="intake_plan"),
     path("intake/sign/", views.sign, name="intake_sign"),
     path("intake/commit/", views.commit, name="intake_commit"),
+    path("intake/release/", views.release, name="intake_release"),
     path("intake/fail/", views.fail, name="intake_fail"),
 ]

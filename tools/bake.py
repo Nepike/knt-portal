@@ -67,7 +67,9 @@ DENOISE = "1:2:3:5"
 # Заливка готового: ссылки берём порциями, куски льём по несколько разом. Каждый кусок
 # маленький, и последовательно две тысячи ушли бы часами на одних рукопожатиях.
 SIGN_BATCH = 200
-UPLOAD_THREADS = 4
+# Потоков заливки. Упирается тут не канал, а рукопожатия: кусок весит мегабайт-другой,
+# и на каждый — своё соединение с хранилищем. Четырёх было мало ровно поэтому.
+UPLOAD_THREADS = 12
 # Попыток на кусок. Кусков у двухчасовой лекции около двух с половиной тысяч, и хоть
 # один ответ по дороге теряется почти наверняка. Без повторов такая осечка стоила бы
 # двадцати минут выпечки и всего залитого: задание закрылось бы «не вышло».
@@ -79,7 +81,25 @@ def say(text=""):
 
 
 def human(size):
-    return f"{size / 1024:.0f} КБ" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f} МБ"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} КБ"
+    if size < 1024 ** 3:
+        return f"{size / 1024 ** 2:.1f} МБ"
+    return f"{size / 1024 ** 3:.2f} ГБ"
+
+
+def took(started):
+    """Сколько прошло с отметки `time.monotonic()`."""
+    seconds = time.monotonic() - started
+    if seconds < 60:
+        return f"{seconds:.1f} с"
+    return f"{int(seconds) // 60} мин {int(seconds) % 60:02d} с"
+
+
+def rate(size, started):
+    """Скорость фазы. Обе сетевые фазы упираются в канал, и без этого числа непонятно,
+    чинить пекарню или звонить провайдеру."""
+    return f"{size / max(time.monotonic() - started, 0.001) / 1024 ** 2:.1f} МБ/с"
 
 
 def dotenv():
@@ -519,7 +539,15 @@ def talk(site, token, where, body):
         with urllib.request.urlopen(request, timeout=60) as answer:
             return json.load(answer)
     except urllib.error.HTTPError as error:
-        detail = json.loads(error.read() or b"{}").get("error", "")
+        # Приёмка отвечает JSON с причиной, но до неё ещё надо дойти: 404 на ручку,
+        # которой на сайте пока нет, и 502 от nginx приезжают HTML-страницей. Разбор
+        # такой в лоб падал бы JSONDecodeError вместо внятного «сайт ответил 404»,
+        # и как раз на самой полезной ошибке — «пекарня новее сайта».
+        try:
+            answer = json.loads(error.read() or b"{}")
+        except ValueError:
+            answer = {}
+        detail = answer.get("error", "") if isinstance(answer, dict) else ""
         raise SystemExit(f"приёмка ответила {error.code}: {detail or error.reason}")
 
 
@@ -554,7 +582,7 @@ def put_file(url, path, content_type=None):
 
 
 def upload(site, token, job_token, folder):
-    """Залить готовый набор напрямую в хранилище.
+    """Залить готовый набор напрямую в хранилище. Возвращает (кусков, байт).
 
     Кусков тысячи, поэтому ссылки берём порциями, а сами куски льём по несколько разом:
     каждый маленький, и последовательно они уходили бы часами на одних рукопожатиях.
@@ -562,7 +590,8 @@ def upload(site, token, job_token, folder):
     files = sorted(path for path in folder.rglob("*") if path.is_file())
     names = [path.relative_to(folder).as_posix() for path in files]
     beside = dict(zip(names, files))
-    done = 0
+    sizes = {name: path.stat().st_size for name, path in beside.items()}
+    started, done, weight = time.monotonic(), 0, 0
     for start in range(0, len(names), SIGN_BATCH):
         batch = names[start:start + SIGN_BATCH]
         answer = talk(site, token, "/intake/sign/", {"token": job_token, "names": batch})
@@ -570,8 +599,9 @@ def upload(site, token, job_token, folder):
         with ThreadPoolExecutor(max_workers=UPLOAD_THREADS) as pool:
             for _ in pool.map(lambda n: put_file(urls[n], beside[n], types.get(n)), batch):
                 done += 1
-        say(f"    залито {done} из {len(names)}")
-    return len(names)
+        weight += sum(sizes[name] for name in batch)
+        say(f"    залито {done} из {len(names)} · {rate(weight, started)}")
+    return done, weight
 
 
 def serve_once(site, token, ffmpeg, encoder, denoise, known):
@@ -588,23 +618,47 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
         return True
 
     workshop = Path(tempfile.mkdtemp(prefix="bake-"))
+    whole = time.monotonic()
     try:
         source = workshop / (job["name"] or "source")
         say("  качаю сырьё…")
-        say(f"  сырьё: {human(fetch_source(job['source'], source))}")
+        clock = time.monotonic()
+        weight = fetch_source(job["source"], source)
+        say(f"  сырьё: {human(weight)} за {took(clock)} · {rate(weight, clock)}")
 
+        clock = time.monotonic()
         out, made = bake_lecture(ffmpeg, encoder, source, job["recipe"], recipe, workshop / "out", denoise)
         if problem := spec.check_ladder(recipe, made):
             raise SystemExit(problem)
+        baking = time.monotonic() - clock
+        say(f"  испеклось за {took(clock)}")
 
         plan = talk(site, token, "/intake/plan/", {"token": job["token"], "manifest": made})
         say(f"  папка: {plan['prefix']}")
-        upload(site, token, job["token"], out)
+        clock = time.monotonic()
+        pieces, sent = upload(site, token, job["token"], out)
+        say(f"  залито: {pieces} кусков, {human(sent)} за {took(clock)}")
         talk(site, token, "/intake/commit/", {"token": job["token"]})
-        say("  готово")
+        # Доля видеокарты — то самое число, ради которого таймеры и заведены. Пока она
+        # меньше половины, машина большую часть времени ждёт сеть, а не считает, и печь
+        # быстрее надо не подбором качества, а тем, чтобы фазы шли внахлёст.
+        say(f"  готово за {took(whole)}, из них на видеокарте "
+            f"{baking / max(time.monotonic() - whole, 0.001) * 100:.0f}%")
     except SystemExit as error:
         say(f"  НЕ ВЫШЛО: {error}")
         talk(site, token, "/intake/fail/", {"token": job["token"], "error": str(error)[:300]})
+    except KeyboardInterrupt:
+        # Ctrl+C — это НЕ отказ: печь лекцию по-прежнему можно, просто некому прямо
+        # сейчас. Сказать `fail` было бы неправдой — запись загорелась бы человеку
+        # красным «не обработалась» и осталась бы такой навсегда, потому что из отказа
+        # задание вынимают только руками. Промолчать — оставить её «обрабатывается»
+        # на весь CLAIM_TIMEOUT, пока сайт не сочтёт машину упавшей. Поэтому `release`.
+        say(f"\n  остановлено на {took(whole)} — возвращаю задание в очередь")
+        try:
+            talk(site, token, "/intake/release/", {"token": job["token"]})
+        except (SystemExit, OSError, ValueError) as error:
+            say(f"  ! сайту не сказалось ({error}) — задание вернётся в очередь само, через час")
+        raise
     except Exception as error:  # noqa: BLE001 — что угодно, лишь бы сказать это сайту
         say(f"  СЛОМАЛОСЬ: {error}")
         talk(site, token, "/intake/fail/", {"token": job["token"], "error": f"{type(error).__name__}: {error}"[:300]})
@@ -619,15 +673,23 @@ def serve(args, ffmpeg, encoder, denoise, known, site, token):
     if not site or not token:
         raise SystemExit("для очереди нужны INTAKE_URL и INTAKE_TOKEN")
     say(f"пекарня ждёт работы: {site}, опрос раз в {args.every} с")
-    while True:
-        try:
-            worked = serve_once(site, token, ffmpeg, encoder, denoise, known)
-        except SystemExit as error:  # приёмка недоступна — не повод умирать
-            say(f"  приёмка молчит: {error}")
-            worked = False
-        if args.once:
-            return 0
-        time.sleep(1 if worked else args.every)
+    try:
+        while True:
+            try:
+                worked = serve_once(site, token, ffmpeg, encoder, denoise, known)
+            except SystemExit as error:  # приёмка недоступна — не повод умирать
+                say(f"  приёмка молчит: {error}")
+                worked = False
+            if args.once:
+                return 0
+            time.sleep(1 if worked else args.every)
+    except KeyboardInterrupt:
+        # Один обработчик на весь цикл: Ctrl+C ловится и в ожидании работы, и внутри
+        # задания — оттуда он приходит уже после того, как `serve_once` вернул задание
+        # в очередь. Выключить пекарню на ночь — обычное дело, а не поломка, и трейсбека
+        # это не заслуживает.
+        say("пекарня остановлена")
+        return 0
 
 
 def main(argv=None):
@@ -690,4 +752,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)  # разовая выпечка, прерванная руками: код как у всей консоли

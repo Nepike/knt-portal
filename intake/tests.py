@@ -1,8 +1,11 @@
+import io
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
+import urllib.error
 from datetime import timedelta
 from math import ceil
 from pathlib import Path
@@ -12,7 +15,7 @@ from django.conf import settings
 from django.core import signing
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils import timezone
 
 from attachments.models import File
@@ -346,6 +349,19 @@ class TokenAgreementTests(SimpleTestCase):
             with self.subTest(token=token):
                 self.assertEqual(bool(views.unusable(token)), bool(bake.token_problem(token)))
 
+    def test_every_door_the_bakery_knocks_on_exists(self):
+        """Адреса ручек пекарня складывает строкой, а не берёт по имени — своего Django
+        у неё нет. Опечатку в такой строке ловить нечем, и нашлась бы она посреди
+        выпечки, когда работа уже сделана, а сказать о ней некому.
+        """
+        source = Path(bake.__file__).read_text(encoding="utf-8")
+        doors = sorted(set(re.findall(r'"(/intake/[a-z]+/)"', source)))
+
+        self.assertIn("/intake/claim/", doors)  # регулярка сама могла разъехаться с кодом
+        for door in doors:
+            with self.subTest(door):
+                self.assertTrue(resolve(door))
+
 
 class BakeryTests(SimpleTestCase):
     """Пекарня без ffmpeg: то, что можно проверить, не запуская кодировщик."""
@@ -377,6 +393,44 @@ class BakeryTests(SimpleTestCase):
 
         self.assertEqual(known, spec.RECIPES)
         self.assertIn("локальная", whence)
+
+    def test_an_error_page_that_is_not_json_still_names_the_code(self):
+        """Ручка, которой на сайте ещё нет, отвечает 404 HTML-страницей, а 502 приезжает
+        от nginx. Разбор в лоб падал бы JSONDecodeError как раз на самой полезной
+        ошибке — «пекарня новее сайта»."""
+        page = io.BytesIO(b"<html>Not Found</html>")
+        broken = urllib.error.HTTPError("https://knt-mipt.ru/intake/release/", 404, "Not Found", {}, page)
+
+        with mock.patch.object(bake.urllib.request, "urlopen", side_effect=broken), \
+                self.assertRaises(SystemExit) as caught:
+            bake.talk("https://knt-mipt.ru", "OqRZ7yTn3xK1", "/intake/release/", {})
+
+        self.assertIn("404", str(caught.exception))
+
+    def test_stopping_the_bakery_hands_the_job_back_instead_of_failing_it(self):
+        """Ctrl+C — обычный способ выключить пекарню на ночь. Сказать сайту `fail`
+        значило бы зажечь человеку красное «не обработалась» и оставить его так
+        навсегда: из отказа задание вынимают руками. Поэтому `release` — и лекция
+        просто ждёт следующей машины.
+
+        Заодно проверяем, что прерывание идёт дальше: проглоти пекарня его здесь,
+        Ctrl+C переставал бы её останавливать.
+        """
+        job = {"id": 1, "recipe": "lecture", "token": "подпись",
+               "source": "https://r2/get", "name": "zapis.mkv"}
+        knocked = []
+
+        def talk(site, token, where, body):
+            knocked.append(where)
+            return {"job": job} if where == "/intake/claim/" else {}
+
+        with mock.patch.object(bake, "talk", talk), mock.patch.object(bake, "say"), \
+                mock.patch.object(bake, "fetch_source", side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):
+            bake.serve_once("https://knt-mipt.ru", "OqRZ7yTn3xK1", "ffmpeg", bake.NVENC, "", spec.RECIPES)
+
+        self.assertIn("/intake/release/", knocked)
+        self.assertNotIn("/intake/fail/", knocked)
 
 
 def made_manifest(duration=600.0, segments=None):
@@ -587,6 +641,30 @@ class QueueTests(TestCase):
         self.assertEqual(lecture.prefix, prefix)
         swept.assert_called_once_with("lectures/старый")
 
+    def test_a_bakery_stopped_by_hand_gives_the_job_straight_back(self):
+        """Ctrl+C на пекарне — не отказ: печь лекцию по-прежнему можно, просто некому
+        в эту минуту. Без этой ручки запись висела бы «обрабатывается» весь
+        CLAIM_TIMEOUT, пока сайт не сочтёт машину упавшей."""
+        token = self.claim()["token"]
+
+        answer = self.call("intake_release", token=token)
+
+        job = MediaJob.objects.get()
+        self.assertEqual(answer.status_code, 200)
+        self.assertEqual(job.status, MediaJob.Status.WAITING)
+        self.assertIsNone(job.claimed_at)
+        self.assertIsNotNone(self.claim())  # следующая берёт сразу, а не через час
+
+    def test_the_stopped_bakery_cannot_come_back_to_its_job(self):
+        """Задание к тому времени могла взять другая машина, и доделавшая своё первая
+        снесла бы её папку. Токен умирает вместе с возвратом в очередь."""
+        token = self.claim()["token"]
+        self.call("intake_release", token=token)
+
+        answer = self.call("intake_plan", token=token, manifest=made_manifest())
+
+        self.assertEqual(answer.status_code, 409)
+
     def test_a_failure_reaches_the_person(self):
         """Иначе лекция висит «обрабатывается» вечно, и никто не знает почему."""
         token = self.claim()["token"]
@@ -690,6 +768,33 @@ class LeftoverTests(TestCase):
 
         swept.assert_called_once_with(prefix)
         self.assertEqual(MediaJob.objects.get().prefix, "")
+
+    def test_a_stopped_bakery_sweeps_what_it_had_already_uploaded(self):
+        """Останавливают чаще всего на заливке — она дольше всего. Папка к этой минуте
+        уже с гигабайтом кусков, а следующая выпечка заведёт свою: брошенную потом
+        не найти ничем, ночная уборка занятые заданием папки не трогает."""
+        token = self.claim()
+        prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_release", token=token)
+
+        swept.assert_called_once_with(prefix)
+        self.assertEqual(MediaJob.objects.get().prefix, "")
+
+    def test_a_stopped_bakery_does_not_touch_the_lecture_that_is_still_playing(self):
+        """Перепечка, прерванная руками. Папка задания в этот момент — набор
+        ОПУБЛИКОВАННОЙ лекции, и снять её значило бы погасить лекцию насовсем."""
+        live = self.bake()
+        MediaJob.objects.update(status=MediaJob.Status.WAITING)
+        token = self.claim()
+
+        with self.swept() as swept, self.captureOnCommitCallbacks(execute=True):
+            self.call("intake_release", token=token)
+
+        self.lecture.refresh_from_db()
+        self.assertEqual(self.lecture.prefix, live)
+        swept.assert_not_called()
 
     def test_a_failed_bake_does_not_touch_the_lecture_that_is_still_playing(self):
         live = self.bake()
