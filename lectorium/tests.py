@@ -17,6 +17,7 @@ from intake.models import MediaJob
 from teachers.models import Teacher
 from users.models import User
 
+from .forms import PlaylistForm
 from .models import Lecture, Playlist
 
 
@@ -517,6 +518,20 @@ class PlaylistFormTests(LectoriumTests):
         """Лекции выкладывают не все подряд: печь их дорого."""
         self.assertEqual(self.create(self.stranger).status_code, 403)
         self.assertEqual(Playlist.objects.count(), 0)
+
+    def test_the_long_pickers_can_be_searched(self):
+        """Предметов под восемьдесят, преподавателей за сотню — без поиска до нужного
+        приходится листать колесом. Семестрам он, наоборот, ни к чему: их дюжина
+        и они по порядку, а лишнее поле ввода только отнимает первый тык.
+
+        Флаг живёт на виджете (core.widgets), и потерять его при правке формы —
+        дело одной строки: именно так поиск и пропал у предмета до 01.09.2026.
+        """
+        fields = PlaylistForm().fields
+
+        self.assertTrue(fields["subject"].widget.search)
+        self.assertTrue(fields["teachers"].widget.search)
+        self.assertFalse(fields["terms"].widget.search)
 
     def test_editing_a_published_course_sends_it_back_to_review(self):
         """Иначе одобренное можно было бы тихо подменить."""

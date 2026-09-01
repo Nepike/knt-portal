@@ -10,7 +10,9 @@ class PlaylistForm(forms.ModelForm):
         model = Playlist
         fields = ("title", "subject", "terms", "teachers", "synopsis", "year")
         widgets = {
-            "subject": AccentSelect,
+            # С поиском: предметов под восемьдесят, и листать их до нужного — мучение.
+            # Семестрам ниже он ни к чему, их дюжина и они по порядку.
+            "subject": AccentSelect(search=True),
             "terms": AccentSelectMultiple,
             "teachers": AccentSelectMultiple(search=True),
             "synopsis": forms.Textarea(attrs={"rows": 3}),

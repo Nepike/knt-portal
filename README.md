@@ -81,7 +81,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-880 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+881 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails
