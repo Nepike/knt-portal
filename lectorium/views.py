@@ -230,6 +230,9 @@ def playlist_list(request):
     playlists = filters.apply(playlists, chosen)
     filters.narrow(form, visible_playlists(request.user), chosen)
 
+    # Год здесь — год, когда курс читали, поэтому свежие сверху; id последним, иначе
+    # на границе порций курсы с одинаковым ключом перескакивают. Тем же порядком
+    # список разбивается на годы в шаблоне: regroup собирает только идущие подряд.
     ordered = playlists.distinct().order_by("-year", "-created", "-id")
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
 
@@ -238,6 +241,9 @@ def playlist_list(request):
         # Подбор едет в ссылку каждой карточки — со страницы курса есть куда вернуться.
         "filters": filters.query(request.GET),
         "may_add": _may_add(request.user),
+        # Заголовок года не должен повториться на стыке порций: сравниваем с годом
+        # курса, стоящего прямо перед первым на этой странице.
+        "carry_year": ordered[page.start_index() - 2].year if page.number > 1 else None,
     }
     if not request.headers.get("HX-Request"):
         return render(request, "lectorium/playlists.html", context)

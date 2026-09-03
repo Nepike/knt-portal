@@ -12,8 +12,9 @@ from django.contrib.auth.views import (
 )
 from django.contrib.sessions.models import Session
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Count, Q, Sum
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Lower
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
@@ -28,6 +29,7 @@ from materials.models import Material
 
 from .forms import MAX_AVATAR_DATA, ProfileForm, RegisterUserForm, StudentFilterForm
 from .models import User
+from .roster import RosterForm
 from .sessions import alive
 
 
@@ -288,24 +290,78 @@ class PasswordResetConfirmView(BasePasswordResetConfirmView):
         return response
 
 
+def _passwordless(user):
+    """Аккаунт без пароля: случайный не знает никто, свой человек задаст по ссылке."""
+    user.set_password(secrets.token_urlsafe(16))
+    user.must_change_password = False
+    return user
+
+
+def _welcome(request, user):
+    """Приглашение — то же письмо восстановления пароля, только другим текстом."""
+    mail = PasswordResetForm({"email": user.email})
+    mail.is_valid()
+    mail.save(
+        request=request,
+        email_template_name="users/welcome_email.txt",
+        subject_template_name="users/welcome_subject.txt",
+    )
+
+
+def _register_all(request, people):
+    """Завести всю ведомость разом.
+
+    Знакомые почты пропускаем: выгрузку формы носят целиком и не по одному разу —
+    новых ответов с прошлой загрузки прибавилось, а старые никуда не делись, и вычищать
+    их руками перед каждой загрузкой никто не станет. Заодно это делает безопасной
+    повторную загрузку после исправления файла.
+    """
+    wanted = [person.email.lower() for person in people]
+    known = set(
+        User.objects.annotate(lowered=Lower("email"))
+        .filter(lowered__in=wanted)
+        .values_list("lowered", flat=True)
+    )
+    fresh = [person for person in people if person.email.lower() not in known]
+
+    # Заводим одной транзакцией, а письма шлём после неё: приглашение, ушедшее в
+    # откатившуюся базу, ведёт по ссылке, за которой никого нет.
+    with transaction.atomic():
+        for person in fresh:
+            _passwordless(person).save()
+    for person in fresh:
+        _welcome(request, person)
+
+    if not fresh:
+        messages.info(request, "Все из файла уже зарегистрированы")
+    else:
+        was = len(people) - len(fresh)
+        messages.success(request, f"Заведено аккаунтов: {len(fresh)}, письма отправлены"
+                                  + (f". Уже были на сайте: {was}" if was else ""))
+    return redirect("user_new")
+
+
 @permission_required("users.add_user", raise_exception=True)
 def user_new(request):
-    form = RegisterUserForm(request.POST or None, creator=request.user)
-    if request.method == "POST" and form.is_valid():
-        user = form.save(commit=False)
-        user.set_password(secrets.token_urlsafe(16))  # пароля не знает никто — студент задаст свой по ссылке
-        user.must_change_password = False
+    """Регистрация: по одному человеку руками или курсом сразу — файлом ответов формы.
+
+    Обе формы на одной странице, и различает их имя кнопки: заводят людей в одном
+    и том же месте, а вторая страница только пряталась бы.
+    """
+    posted = request.method == "POST"
+    bulk = posted and "roster" in request.POST
+
+    form = RegisterUserForm(request.POST if posted and not bulk else None, creator=request.user)
+    roster = RosterForm(request.POST, request.FILES) if bulk else RosterForm()
+
+    if bulk and roster.is_valid():
+        return _register_all(request, roster.people)
+    if posted and not bulk and form.is_valid():
+        user = _passwordless(form.save(commit=False))
         user.save()
         form.save_m2m()
-
-        mail_form = PasswordResetForm({"email": user.email})
-        mail_form.is_valid()
-        mail_form.save(
-            request=request,
-            email_template_name="users/welcome_email.txt",
-            subject_template_name="users/welcome_subject.txt",
-        )
+        _welcome(request, user)
         messages.success(request, f"Аккаунт создан, письмо отправлено на {user.email}")
         return redirect("user_new")
 
-    return render(request, "users/user_new.html", {"form": form})
+    return render(request, "users/user_new.html", {"form": form, "roster": roster})

@@ -28,6 +28,7 @@ daphne==4.2.3
 Django==6.0.6
 django-environ==0.13.0
 django-storages==1.14.6
+et_xmlfile==2.0.0
 frozenlist==1.8.0
 gunicorn==23.0.0
 h11==0.16.0
@@ -41,6 +42,7 @@ Markdown==3.10.3
 msgpack==1.2.1
 multidict==6.7.1
 nh3==0.3.6
+openpyxl==3.1.5
 packaging==26.2
 pillow==12.2.0
 prompt_toolkit==3.0.53

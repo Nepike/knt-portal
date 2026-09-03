@@ -19,6 +19,7 @@ from users.models import User
 
 from .forms import PlaylistForm
 from .models import Lecture, Playlist
+from .views import PAGE_SIZE
 
 
 def make_user(email="u@t.local", surname="Иванов", **extra):
@@ -169,6 +170,59 @@ class FilterTests(LectoriumTests):
         self.assertEqual(found.lectures_count, self.algebra.lectures.count())
 
 
+class YearGroupingTests(LectoriumTests):
+    """Курсы разбиты по годам, свежие сверху. Устройство то же, что у материалов
+    (regroup по уже отсортированному списку), и ломается оно так же — на стыке порций."""
+
+    def setUp(self):
+        self.client.force_login(self.author)
+
+    def course(self, title, year):
+        playlist = self.make_playlist(title, lectures=0)
+        playlist.year = year
+        playlist.save(update_fields=["year"])
+        return playlist
+
+    def body(self, **params):
+        return self.client.get(reverse("playlist_list"), params).content.decode()
+
+    def heading(self, year):
+        """Год именно заголовком, а не где попало на странице."""
+        return f">{year}<"
+
+    def test_the_fresh_year_stands_above_the_old_one(self):
+        self.course("Старый курс", 2023)
+        self.course("Новый курс", 2025)
+
+        body = self.body()
+
+        self.assertLess(body.index(self.heading(2025)), body.index(self.heading(2023)))
+        self.assertLess(body.index("Новый курс"), body.index("Старый курс"))
+
+    def test_the_year_is_written_once_over_the_whole_group(self):
+        """До заголовков год стоял в подписи каждой карточки и повторялся сколько угодно раз."""
+        for number in range(3):
+            self.course(f"Курс {number}", 2025)
+
+        self.assertEqual(self.body().count(self.heading(2025)), 1)
+
+    def test_the_next_portion_does_not_repeat_the_year(self):
+        for number in range(PAGE_SIZE + 5):
+            self.course(f"Курс {number:02}", 2025)
+
+        body = self.body(page=2)
+
+        self.assertEqual(body.count("panel rounded-2xl"), 5)
+        self.assertNotIn(self.heading(2025), body)  # год уже написан над прошлой порцией
+
+    def test_a_year_that_starts_in_the_middle_of_a_portion_gets_its_heading(self):
+        for number in range(PAGE_SIZE + 3):
+            self.course(f"Курс {number:02}", 2025)
+        self.course("Прошлогодний", 2023)
+
+        self.assertIn(self.heading(2023), self.body(page=2))
+
+
 class DetailTests(LectoriumTests):
     """Страница курса: плеер на выбранной записи, остальные — списком рядом."""
 
@@ -228,6 +282,20 @@ class DetailTests(LectoriumTests):
 
         self.assertContains(page, self.playlist.title)
         self.assertContains(page, "3 записи")
+
+    def test_the_list_of_records_scrolls_inside_the_panel(self):
+        """Курс из тридцати записей иначе растянул бы страницу втрое против плеера."""
+        self.assertContains(self.open(), "overflow-y-auto overscroll-contain")
+
+    def test_the_open_record_is_marked_for_the_list_to_scroll_to_it(self):
+        """Переход на запись — это перезагрузка, и без метки прокрутка каждый раз
+        показывала бы начало курса, даже когда играет двадцать пятая."""
+        third = self.playlist.lectures.all()[2]
+
+        page = self.open(lecture=third.pk)
+
+        self.assertContains(page, f'data-current="{third.pk}"')
+        self.assertNotContains(page, f'data-current="{self.playlist.lectures.first().pk}"')
 
     def test_every_ready_record_shows_its_own_frame(self):
         page = self.open()

@@ -1,3 +1,4 @@
+import argparse
 import io
 import json
 import os
@@ -406,6 +407,44 @@ class BakeryTests(SimpleTestCase):
             bake.talk("https://knt-mipt.ru", "OqRZ7yTn3xK1", "/intake/release/", {})
 
         self.assertIn("404", str(caught.exception))
+
+    def test_a_dropped_connection_returns_the_job_instead_of_burning_it(self):
+        """Связь отвалилась посреди задания. Лекция тут ни при чём, печь её можно, —
+        а `fail` зажёг бы человеку красное «не обработалась» из-за чужого VPN.
+
+        И главное: отчитаться пекарня в эту минуту тоже не может, связи-то нет.
+        Падение на самом отчёте убивало демона ровно тогда, когда он должен был пережить
+        осечку и взять следующее задание, — так и случилось 02.09.2026.
+        """
+        job = {"id": 17, "recipe": "lecture", "token": "подпись",
+               "source": "https://r2/get", "name": "zapis.mkv"}
+        knocked = []
+
+        def talk(site, token, where, body):
+            knocked.append(where)
+            if where == "/intake/claim/":
+                return {"job": job}
+            raise urllib.error.URLError("подключение отвергнуто")
+
+        with mock.patch.object(bake, "talk", talk), mock.patch.object(bake, "say"), \
+                mock.patch.object(bake, "fetch_source", side_effect=urllib.error.URLError("оборвалось")):
+            worked = bake.serve_once("https://knt-mipt.ru", "OqRZ7yTn3xK1", "ffmpeg",
+                                     bake.NVENC, "", spec.RECIPES)
+
+        self.assertTrue(worked)  # вернулись живыми, а не улетели трейсбеком наружу
+        self.assertIn("/intake/release/", knocked)
+        self.assertNotIn("/intake/fail/", knocked)
+
+    def test_a_site_that_does_not_answer_at_all_leaves_the_daemon_waiting(self):
+        """`talk` заворачивает в SystemExit только ОТВЕТЫ сайта, а «не отвечает вовсе»
+        приезжает сырым URLError — мимо ветки «приёмка молчит»."""
+        args = argparse.Namespace(once=True, every=1)
+
+        with mock.patch.object(bake, "serve_once", side_effect=urllib.error.URLError("нет связи")), \
+                mock.patch.object(bake, "say"):
+            code = bake.serve(args, "ffmpeg", bake.NVENC, "", spec.RECIPES, "https://knt-mipt.ru", "tok")
+
+        self.assertEqual(code, 0)
 
     def test_stopping_the_bakery_hands_the_job_back_instead_of_failing_it(self):
         """Ctrl+C — обычный способ выключить пекарню на ночь. Сказать сайту `fail`

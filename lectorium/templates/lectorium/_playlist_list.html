@@ -2,8 +2,23 @@
 {% comment %}
   Сетка карточек курсов. Отдельным файлом, потому что тем же куском отвечает подбор
   и подгрузка следующей порции — на странице она подменяет содержимое #playlist-list.
+
+  Курсы разбиты по годам, свежие сверху: год у курса — это когда его читали, и год
+  для лектория примета не менее важная, чем предмет. regroup собирает только ИДУЩИЕ
+  ПОДРЯД элементы, чего и надо — список уже отсортирован по году. Ровно как у материалов.
 {% endcomment %}
-{% for playlist in playlists %}
+{% regroup playlists by year as years %}
+{% for group in years %}
+{# заголовок года пропускаем, если порция начинается тем же годом, которым кончилась прошлая #}
+{% if not forloop.first or group.grouper != carry_year %}
+{# на всю ширину сетки: иначе заголовок встал бы карточкой в первую колонку #}
+<div class="sm:col-span-2 lg:col-span-3 flex items-center gap-3 pt-2">
+  <h2 class="text-lg font-bold shrink-0">{{ group.grouper }}</h2>
+  <span class="h-px flex-1 bg-slate-200 dark:bg-slate-800"></span>
+</div>
+{% endif %}
+
+{% for playlist in group.list %}
 <a href="{{ playlist.get_absolute_url }}{% if filters %}?{{ filters }}{% endif %}"
    class="panel rounded-2xl overflow-hidden flex flex-col hover:border-accent transition group">
   <div class="aspect-video bg-slate-100 dark:bg-slate-800 overflow-hidden">
@@ -20,9 +35,10 @@
   </div>
 
   <div class="p-4 flex-1 flex flex-col">
-    <h2 class="font-semibold leading-snug line-clamp-2">{{ playlist.title }}</h2>
+    <h3 class="font-semibold leading-snug line-clamp-2">{{ playlist.title }}</h3>
+    {# Года тут нет: он написан заголовком прямо над карточкой, и в подписи повторял бы сам себя. #}
     <p class="text-xs text-slate-400 mt-1">
-      {{ playlist.subject.name }} · {{ playlist.year }}
+      {{ playlist.subject.name }}
       · {{ playlist.lectures_count }} {{ playlist.lectures_count|plural:"лекция,лекции,лекций" }}
     </p>
     {% comment %}
@@ -52,11 +68,14 @@
     {% endif %}
   </div>
 </a>
-{% empty %}
+{% endfor %}
+{% endfor %}
+
+{% if not playlists %}
 <p class="sm:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-10 text-center text-slate-400">
   {% if filters %}Ничего не нашлось{% else %}Пока ни одного курса{% endif %}
 </p>
-{% endfor %}
+{% endif %}
 
 {% if page.has_next %}
 {# маячок: попал в зону видимости — подтянул следующую порцию (подбор едет в querystring) #}

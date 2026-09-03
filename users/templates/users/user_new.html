@@ -19,5 +19,43 @@
 
     <button type="submit" class="btn btn-primary w-full">Создать аккаунт</button>
   </form>
+
+  <div class="mt-10 pt-8 border-t border-slate-200 dark:border-slate-800">
+    <h2 class="font-semibold mb-1">Сразу всей группой</h2>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mb-5">
+      Выгрузка ответов формы (.xlsx). Нужны столбцы с ФИО, почтой и группой; день рождения
+      и телеграм возьмём, если они там есть. Кто уже на сайте — пропустим.
+    </p>
+
+    <form method="post" enctype="multipart/form-data" class="space-y-4">
+      {% csrf_token %}
+
+      {% comment %}
+        Проблемы списком и над кнопкой: их бывает столько же, сколько строк в файле,
+        и пока хоть одна жива, не заведён никто — это и надо сказать первой строкой,
+        иначе пустая страница читается как «ничего не произошло».
+      {% endcomment %}
+      {% if roster.non_field_errors %}
+      <div class="rounded-btn border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-sm p-3">
+        <p class="font-medium">Не завели никого — поправьте файл и загрузите снова:</p>
+        <ul class="list-disc pl-5 mt-1 space-y-0.5">
+          {% for problem in roster.non_field_errors %}<li>{{ problem }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {# Файл выбирают кнопкой: голый input рядом с полями сайта выглядит чужим. #}
+      <div x-data="{ picked: '' }">
+        <input type="file" name="{{ roster.file.html_name }}" accept=".xlsx" class="hidden" x-ref="input"
+               @change="picked = $event.target.files.length ? $event.target.files[0].name : ''">
+        <button type="button" @click="$refs.input.click()" class="btn btn-secondary w-full">
+          <i class="fa-solid fa-file-excel"></i><span class="truncate" x-text="picked || 'Выбрать файл'"></span>
+        </button>
+      </div>
+      {% if roster.file.errors %}<p class="text-xs text-rose-500">{{ roster.file.errors.0 }}</p>{% endif %}
+
+      <button type="submit" name="roster" value="1" class="btn btn-primary w-full">Завести всех из файла</button>
+    </form>
+  </div>
 </div>
 {% endblock %}

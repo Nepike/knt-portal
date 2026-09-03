@@ -126,9 +126,11 @@ class AvatarField(forms.CharField):
         return _thumbnail(raw)
 
 
-def _handle(value, host):
+def handle(value, host):
     """Из «https://t.me/ivan», «@ivan» и «ivan» одинаково получается «ivan».
-    Люди приносят ссылку целиком, а в шаблоне она приклеивается к адресу второй раз."""
+    Люди приносят ссылку целиком, а в шаблоне она приклеивается к адресу второй раз.
+
+    Наружу — ради ведомости (`roster`): в форме на телеграм отвечают так же вольно."""
     tail = value.strip().rpartition(f"{host}/")[2]
     return tail.split("?")[0].strip("/@")
 
@@ -179,10 +181,10 @@ class ProfileForm(forms.ModelForm):
         return upload
 
     def clean_tg_page(self):
-        return _handle(self.cleaned_data["tg_page"], "t.me")
+        return handle(self.cleaned_data["tg_page"], "t.me")
 
     def clean_vk_page(self):
-        return _handle(self.cleaned_data["vk_page"], "vk.com")
+        return handle(self.cleaned_data["vk_page"], "vk.com")
 
     def save(self, commit=True):
         user = super().save(commit=False)

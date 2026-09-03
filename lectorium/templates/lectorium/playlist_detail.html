@@ -84,7 +84,31 @@
       </p>
     </div>
 
-    <ol class="flex flex-col gap-1">
+    {% comment %}
+      Высота списка ограничена, дальше он прокручивается сам: курс из тридцати записей
+      иначе растягивал бы страницу втрое против плеера, а форма сдачи и правка курса
+      уезжали бы под самый низ, куда никто не долистает.
+
+      relative — чтобы offsetTop строки считался от самого списка, а не от чего попало
+      выше по дереву. overscroll-contain — чтобы жест по списку не утекал в прокрутку
+      страницы (тем же приёмом живёт длинный селект, core/inputs.html).
+
+      Прокрутка к открытой записи: переход на запись — это перезагрузка страницы,
+      и список каждый раз показывал бы начало курса, даже когда играет двадцать пятая.
+      Ставим scrollTop сами, а не scrollIntoView: тот тянет за собой и прокрутку самой
+      страницы, а на узком экране панель лежит под плеером — и страница бы к ней прыгала.
+
+      Дважды: сразу — чтобы список не мигнул началом курса, и ещё раз по готовности
+      шрифтов. До их подмены строки ниже на пару пикселей каждая, и на третьем десятке
+      записей эта мелочь набегает в сотню — открытая уезжала из середины к краю.
+    {% endcomment %}
+    <ol class="relative flex flex-col gap-1 max-h-[70dvh] overflow-y-auto overscroll-contain"
+        x-data x-init="const show = () => {
+                         const now = $el.querySelector('[data-current]')
+                         if (now) $el.scrollTop = now.offsetTop - ($el.clientHeight - now.clientHeight) / 2
+                       }
+                       show()
+                       document.fonts.ready.then(show)">
       {% for one in lectures %}
       <li>
         {% comment %}
@@ -92,6 +116,7 @@
           выглядит поломкой. И кадра у неё ещё нет — вместо него песочные часы.
         {% endcomment %}
         <a {% if one.prefix %}href="?{% if filters %}{{ filters }}&amp;{% endif %}lecture={{ one.pk }}"{% endif %}
+           {% if one.pk == lecture.pk %}data-current="{{ one.pk }}"{% endif %}
            class="flex gap-2 items-start rounded-lg p-2
                   {% if one.prefix %}hover:bg-slate-100 dark:hover:bg-slate-800{% endif %}
                   {% if one.pk == lecture.pk %}bg-accent/10{% endif %}">

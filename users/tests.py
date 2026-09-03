@@ -2,11 +2,13 @@ import logging
 import re
 import time
 from base64 import b64encode
-from datetime import timedelta
+from datetime import date, timedelta
 from io import BytesIO, StringIO
 
 from django.conf import settings
+from django.contrib.messages import get_messages
 from django.contrib.sessions.models import Session
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -14,6 +16,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from openpyxl import Workbook
 from PIL import Image as PilImage
 
 from attachments.media import media_url
@@ -723,3 +726,256 @@ class StudentListTests(TestCase):
         page = self.client.get(reverse("profile", args=[self.ivan.pk]))
 
         self.assertEqual(page.context["section"], "")
+
+
+# Шапка ведомости — ровно та, что приезжает выгрузкой гугл-формы: с отметкой времени
+# первым столбцом и интересным фактом посередине, до которых нам дела нет.
+ROSTER_HEADER = (
+    "Отметка времени", "ФИО", "Удобная почта", "ДР", "Группа", "Интересный факт о Вас", "Телеграм",
+)
+
+
+def make_roster(rows, header=ROSTER_HEADER):
+    book = Workbook()
+    sheet = book.active
+    sheet.append(list(header))
+    for row in rows:
+        sheet.append(list(row))
+    buffer = BytesIO()
+    book.save(buffer)
+    return SimpleUploadedFile(
+        "ведомость.xlsx", buffer.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def line(fio, email, group, birthday=None, tg="", fact="—"):
+    return (timezone.now().replace(tzinfo=None), fio, email, birthday, group, fact, tg)
+
+
+class RegisterOneTests(TestCase):
+    """Регистрация по одному человеку — как было до ведомости."""
+
+    def setUp(self):
+        self.team = Team.objects.create(
+            number="Б07-101", profile="Биотех", course_code="07",
+            stage="bachelor", year_of_admission=2021,
+        )
+        self.boss = make_user("boss@t.local", is_staff=True, is_superuser=True)
+        self.client.force_login(self.boss)
+
+    def test_an_account_is_created_without_a_password_and_invited(self):
+        self.client.post(reverse("user_new"), {
+            "surname": "Сёмин", "name": "Георгий", "patronymic": "Сергеевич",
+            "email": "egor@t.local", "team": self.team.pk,
+        })
+
+        student = User.objects.get(email="egor@t.local")
+        self.assertFalse(student.must_change_password)  # пароль он задаёт сам, по ссылке
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("password/reset/", mail.outbox[0].body)
+
+    def test_the_page_is_closed_to_those_who_may_not_register_anyone(self):
+        self.client.force_login(make_user("student@t.local"))
+
+        self.assertEqual(self.client.get(reverse("user_new")).status_code, 403)
+
+
+class RosterTests(TestCase):
+    """Регистрация курса ведомостью — выгрузкой ответов гугл-формы."""
+
+    def setUp(self):
+        # Латинская M — ровно так магистратура записана в базе, а в форме люди пишут
+        # кириллическую. См. LOOKALIKE в roster.py.
+        self.team = Team.objects.create(
+            number="M07-601", profile="Биотех", course_code="07",
+            stage="master", year_of_admission=2025,
+        )
+        self.boss = make_user("boss@t.local", is_staff=True, is_superuser=True)
+        self.client.force_login(self.boss)
+
+    def load(self, rows, header=ROSTER_HEADER):
+        return self.client.post(
+            reverse("user_new"), {"roster": "1", "file": make_roster(rows, header)}, follow=True,
+        )
+
+    def students(self):
+        return User.objects.exclude(pk=self.boss.pk)
+
+    def test_the_whole_course_is_registered_from_one_file(self):
+        self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
+            line("Соловьев Александр Алексеевич", "solovev@phystech.edu", "M07-601"),
+        ])
+
+        self.assertEqual(self.students().count(), 2)
+        olga = User.objects.get(email="berezhol@mail.ru")
+        self.assertEqual((olga.surname, olga.name, olga.patronymic), ("Бережная", "Ольга", "Михайловна"))
+        self.assertEqual(olga.team, self.team)
+
+    def test_everyone_gets_a_letter_with_a_link_to_set_a_password(self):
+        self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
+            line("Соловьев Александр Алексеевич", "solovev@phystech.edu", "M07-601"),
+        ])
+
+        self.assertEqual(sorted(sum((letter.to for letter in mail.outbox), [])),
+                         ["berezhol@mail.ru", "solovev@phystech.edu"])
+        self.assertIn("password/reset/", mail.outbox[0].body)
+
+    def test_a_group_that_is_not_in_the_base_stops_the_whole_file(self):
+        """Половина курса, заведённая молча, хуже, чем ни одного: узнать потом,
+        кто не попал, будет неоткуда."""
+        answer = self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
+            line("Соловьев Александр Алексеевич", "solovev@phystech.edu", "М07-999"),
+        ])
+
+        self.assertFalse(self.students().exists())
+        self.assertFalse(mail.outbox)
+        self.assertContains(answer, "группы «М07-999» нет в базе")
+
+    def test_a_latin_letter_in_the_group_number_is_the_same_group(self):
+        """В одной и той же выгрузке соседствуют «М07-601» кириллицей и латиницей —
+        глазами эту разницу не увидеть, и отказ по ней человеку не объяснить."""
+        self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "М07-601"),
+            line("Екимова Кристина Сергеевна", "krist@gmail.com", "M07-601"),
+        ])
+
+        self.assertEqual(self.students().filter(team=self.team).count(), 2)
+
+    def test_people_already_on_the_site_are_skipped_and_counted(self):
+        """Выгрузку носят целиком и не по одному разу: ответов прибавилось,
+        а старые никуда не делись."""
+        make_user("berezhol@mail.ru")
+
+        answer = self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
+            line("Соловьев Александр Алексеевич", "solovev@phystech.edu", "M07-601"),
+        ])
+
+        self.assertEqual(self.students().count(), 2)
+        self.assertEqual([letter.to for letter in mail.outbox], [["solovev@phystech.edu"]])
+        self.assertTrue(any("Уже были на сайте: 1" in str(one)
+                            for one in get_messages(answer.wsgi_request)))
+
+    def test_a_known_address_in_another_case_is_still_the_same_person(self):
+        """Иначе рядом с Ivan@ завёлся бы ivan@, и войти он не смог бы ни тем ни другим.
+
+        Заглавные буквы именно у ЗАВЕДЁННОГО: сравнение приводит к нижнему регистру
+        обе стороны, и проверять надо ту, что лежит в базе, — вторая приведена всегда.
+        """
+        make_user("BerezhOl@mail.ru")
+
+        self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601")])
+
+        self.assertEqual(self.students().count(), 1)
+
+    def test_a_missing_column_is_named(self):
+        header = ("Отметка времени", "ФИО", "Удобная почта", "ДР", "Интересный факт о Вас")
+
+        answer = self.load([(timezone.now().replace(tzinfo=None), "Бережная Ольга Михайловна",
+                             "berezhol@mail.ru", None, "—")], header)
+
+        self.assertContains(answer, "не нашлось столбцов: группа")
+        self.assertFalse(self.students().exists())
+
+    def test_the_column_is_found_by_a_word_and_not_by_the_whole_question(self):
+        """Вопросы в форме пишет человек, и шапка у каждой формы своя."""
+        header = ("Ваше ФИО полностью", "E-mail", "Дата рождения", "Номер группы", "Ник в телеграме")
+
+        self.load([("Бережная Ольга Михайловна", "berezhol@mail.ru",
+                    date(2003, 7, 15), "M07-601", "@olga")], header)
+
+        olga = User.objects.get(email="berezhol@mail.ru")
+        self.assertEqual((olga.birthday, olga.tg_page), (date(2003, 7, 15), "olga"))
+
+    def test_a_person_without_a_patronymic_is_registered_all_the_same(self):
+        self.load([line("Бережная Ольга", "berezhol@mail.ru", "M07-601")])
+
+        self.assertEqual(User.objects.get(email="berezhol@mail.ru").patronymic, "")
+
+    def test_one_word_instead_of_a_name_is_a_problem(self):
+        answer = self.load([line("Бережная", "berezhol@mail.ru", "M07-601")])
+
+        self.assertContains(answer, "в ФИО меньше двух слов")
+        self.assertFalse(self.students().exists())
+
+    def test_the_birthday_and_the_telegram_are_taken_as_they_are(self):
+        self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601",
+                        birthday=date(2003, 7, 15), tg="@OlgaBerezhnaya")])
+
+        olga = User.objects.get(email="berezhol@mail.ru")
+        self.assertEqual(olga.birthday, date(2003, 7, 15))
+        self.assertEqual(olga.tg_page, "OlgaBerezhnaya")  # без «@», как и в профиле
+
+    def test_a_date_typed_by_hand_is_understood_too(self):
+        """Столбец в форме мог быть текстовым — тогда дата приезжает строкой."""
+        self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601",
+                        birthday="15.07.2003")])
+
+        self.assertEqual(User.objects.get(email="berezhol@mail.ru").birthday, date(2003, 7, 15))
+
+    def test_an_unreadable_birthday_does_not_stop_the_course(self):
+        """День рождения необязателен, и валить из-за него весь курс не за что."""
+        self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601",
+                        birthday="как-нибудь летом")])
+
+        self.assertIsNone(User.objects.get(email="berezhol@mail.ru").birthday)
+
+    def test_spaces_around_the_answers_do_not_matter(self):
+        """В настоящей выгрузке хвостовой пробел был у трёх ответов из шести."""
+        self.load([line("Екимова Кристина Сергеевна ", "krist.ekimova@gmail.com ", " M07-601 ")])
+
+        self.assertTrue(User.objects.filter(email="krist.ekimova@gmail.com").exists())
+
+    def test_the_same_address_twice_in_one_file_is_a_problem(self):
+        answer = self.load([
+            line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
+            line("Бережная О. М.", "berezhol@mail.ru", "M07-601"),
+        ])
+
+        self.assertContains(answer, "уже встречалась")
+        self.assertFalse(self.students().exists())
+
+    def test_something_that_is_not_an_address_is_a_problem(self):
+        answer = self.load([line("Бережная Ольга Михайловна", "берёзка", "M07-601")])
+
+        self.assertContains(answer, "не похоже на почту")
+        self.assertFalse(self.students().exists())
+
+    def test_junk_instead_of_a_table_does_not_break_the_page(self):
+        answer = self.client.post(reverse("user_new"), {
+            "roster": "1", "file": SimpleUploadedFile("ведомость.xlsx", b"not a workbook at all"),
+        }, follow=True)
+
+        self.assertContains(answer, "нужна таблица .xlsx")
+        self.assertFalse(self.students().exists())
+
+    def test_an_empty_file_field_does_not_register_anyone(self):
+        answer = self.client.post(reverse("user_new"), {"roster": "1"}, follow=True)
+
+        self.assertEqual(answer.status_code, 200)
+        self.assertFalse(self.students().exists())
+
+    def test_a_refused_file_leaves_nothing_behind(self):
+        """Разобранная ведомость живёт ровно один запрос: ни строки в базе, ни следа
+        в сессии. Передумали, обновили страницу, вернулись завтра — начинаем с чистого."""
+        self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "М07-999")])
+
+        again = self.client.get(reverse("user_new"))
+
+        self.assertFalse(self.students().exists())
+        self.assertFalse(again.context["roster"].is_bound)
+        self.assertNotContains(again, "нет в базе")
+        # Кроме служебного: ключей входа и отметки последнего запроса (`SEEN_KEY`).
+        left = [key for key in self.client.session.keys()
+                if not key.startswith("_auth") and key != SEEN_KEY]
+        self.assertEqual(left, [])
+
+    def test_the_roster_does_not_touch_the_form_for_one_person(self):
+        """Обе формы на одной странице, и пустая соседка не должна краснеть чужими ошибками."""
+        answer = self.load([line("Бережная", "berezhol@mail.ru", "M07-601")])
+
+        self.assertFalse(answer.context["form"].errors)

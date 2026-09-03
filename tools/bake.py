@@ -551,6 +551,21 @@ def talk(site, token, where, body):
         raise SystemExit(f"приёмка ответила {error.code}: {detail or error.reason}")
 
 
+def tell(site, token, where, body):
+    """Отчитаться о судьбе задания, не падая.
+
+    Отдельно от `talk`, потому что отчёт — единственный запрос, который делается уже
+    ПОСЛЕ поломки, и связи в этот момент чаще всего и нет: её обрыв и есть самая частая
+    причина отказа. Падение здесь убивало пекарню ровно тогда, когда она должна была
+    пережить осечку и взять следующее задание, — так 02.09.2026 и умер демон, доложив
+    об отвалившемся VPN. Не дошло — не беда: задание вернётся в очередь само.
+    """
+    try:
+        talk(site, token, where, body)
+    except (SystemExit, OSError, ValueError) as error:
+        say(f"  ! сайту не сказалось ({error}) — задание вернётся в очередь само, через час")
+
+
 def fetch_source(url, target):
     """Скачать сырьё прямо из хранилища. Потоком: лекция весит гигабайты, в память
     такое не берут."""
@@ -614,7 +629,7 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
     say(f"задание #{job['id']} · {job['recipe']}")
     recipe = known.get(job["recipe"])
     if recipe is None:
-        talk(site, token, "/intake/fail/", {"token": job["token"], "error": f"нет рецепта {job['recipe']}"})
+        tell(site, token, "/intake/fail/", {"token": job["token"], "error": f"нет рецепта {job['recipe']}"})
         return True
 
     workshop = Path(tempfile.mkdtemp(prefix="bake-"))
@@ -646,7 +661,13 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
             f"{baking / max(time.monotonic() - whole, 0.001) * 100:.0f}%")
     except SystemExit as error:
         say(f"  НЕ ВЫШЛО: {error}")
-        talk(site, token, "/intake/fail/", {"token": job["token"], "error": str(error)[:300]})
+        tell(site, token, "/intake/fail/", {"token": job["token"], "error": str(error)[:300]})
+    except OSError as error:
+        # Оборвалась связь — с сайтом, с хранилищем, с чем угодно. Лекция тут ни при чём,
+        # печь её по-прежнему можно, и `fail` был бы напраслиной: человек увидел бы
+        # красное «не обработалась» из-за чужого отвалившегося VPN. Возвращаем в очередь.
+        say(f"  СВЯЗЬ ОБОРВАЛАСЬ: {error}")
+        tell(site, token, "/intake/release/", {"token": job["token"]})
     except KeyboardInterrupt:
         # Ctrl+C — это НЕ отказ: печь лекцию по-прежнему можно, просто некому прямо
         # сейчас. Сказать `fail` было бы неправдой — запись загорелась бы человеку
@@ -654,14 +675,11 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
         # задание вынимают только руками. Промолчать — оставить её «обрабатывается»
         # на весь CLAIM_TIMEOUT, пока сайт не сочтёт машину упавшей. Поэтому `release`.
         say(f"\n  остановлено на {took(whole)} — возвращаю задание в очередь")
-        try:
-            talk(site, token, "/intake/release/", {"token": job["token"]})
-        except (SystemExit, OSError, ValueError) as error:
-            say(f"  ! сайту не сказалось ({error}) — задание вернётся в очередь само, через час")
+        tell(site, token, "/intake/release/", {"token": job["token"]})
         raise
     except Exception as error:  # noqa: BLE001 — что угодно, лишь бы сказать это сайту
         say(f"  СЛОМАЛОСЬ: {error}")
-        talk(site, token, "/intake/fail/", {"token": job["token"], "error": f"{type(error).__name__}: {error}"[:300]})
+        tell(site, token, "/intake/fail/", {"token": job["token"], "error": f"{type(error).__name__}: {error}"[:300]})
     finally:
         # Сырьё и готовое весят десятки гигабайт — на диске пекарни им не место.
         shutil.rmtree(workshop, ignore_errors=True)
@@ -677,7 +695,10 @@ def serve(args, ffmpeg, encoder, denoise, known, site, token):
         while True:
             try:
                 worked = serve_once(site, token, ffmpeg, encoder, denoise, known)
-            except SystemExit as error:  # приёмка недоступна — не повод умирать
+            # Приёмка недоступна — не повод умирать. Мало `SystemExit`: в него `talk`
+            # заворачивает только ОТВЕТЫ сайта, а «сайт не отвечает вовсе» приезжает
+            # сырым URLError, то есть OSError, и мимо этой ветки убивало демона.
+            except (SystemExit, OSError, ValueError) as error:
                 say(f"  приёмка молчит: {error}")
                 worked = False
             if args.once:
