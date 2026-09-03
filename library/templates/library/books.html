@@ -1,6 +1,9 @@
 {% extends "core/base.html" %}
 
 {% block title %}Библиотека{% endblock %}
+{# Лента без конца: подвал под ней всё равно недостижим, а мелькать при подгрузке #}
+{# успевает. Ссылки из него — внизу боковой панели, они там на экране всегда. #}
+{% block footer %}{% endblock %}
 
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-3 mb-6">

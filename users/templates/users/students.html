@@ -2,6 +2,9 @@
 {% load text_extras %}
 
 {% block title %}Студенты{% endblock %}
+{# Лента без конца: подвал под ней всё равно недостижим, а мелькать при подгрузке #}
+{# успевает. Ссылки из него — внизу боковой панели, они там на экране всегда. #}
+{% block footer %}{% endblock %}
 
 {% block content %}
 <h1 class="text-2xl font-bold text-center mb-6">Поиск студентов</h1>

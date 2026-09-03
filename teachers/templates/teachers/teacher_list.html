@@ -2,6 +2,9 @@
 {% load text_extras attachment_extras %}
 
 {% block title %}Преподаватели{% endblock %}
+{# Лента без конца: подвал под ней всё равно недостижим, а мелькать при подгрузке #}
+{# успевает. Ссылки из него — внизу боковой панели, они там на экране всегда. #}
+{% block footer %}{% endblock %}
 
 {% block content %}
 {% if top %}

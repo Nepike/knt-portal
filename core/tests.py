@@ -673,3 +673,44 @@ class LegacyFileKeyTests(SimpleTestCase):
     def test_a_title_that_is_all_punctuation_still_gives_a_name(self):
         self.assertEqual(self.name("...", "1_0_x.pdf"), "file.pdf")
         self.assertEqual(self.name("", "1_0_x"), "file")
+
+
+class FooterTests(TestCase):
+    """Подвал и его ссылки.
+
+    У списков конца нет: подвал под ними недостижим, пока не догрузишь весь каталог,
+    а до тех пор он успевает мелькнуть на каждой подгрузке. Поэтому там его нет вовсе,
+    а ссылки переехали в меню аккаунта — оттуда они доступны с любой страницы и не стоят
+    боковой панели ни пикселя высоты.
+    """
+
+    # Страницы с бесконечной лентой. Закладок тут нет намеренно: они показываются
+    # целиком, без подгрузки, и подвал под ними достижим.
+    ENDLESS = ["material_list", "book_list", "playlist_list", "teacher_list", "student_list", "wallet"]
+
+    def setUp(self):
+        self.client.force_login(make_user("reader@t.local"))
+
+    def test_the_endless_lists_have_no_footer(self):
+        for name in self.ENDLESS:
+            with self.subTest(page=name):
+                self.assertNotContains(self.client.get(reverse(name)), "<footer")
+
+    def test_every_link_of_the_footer_is_reachable_from_an_endless_list(self):
+        """Ради этого всё и затевалось: с ленты материалов до поддержки было не добраться,
+        не догрузив весь каталог."""
+        page = self.client.get(reverse("material_list"))
+
+        for name in ["applicants", "contacts", "support"]:
+            with self.subTest(link=name):
+                self.assertContains(page, f'href="{reverse(name)}"')
+        self.assertContains(page, "vk.com/knt_mipt")
+
+    def test_a_page_that_ends_keeps_its_footer(self):
+        self.assertContains(self.client.get(reverse("bookmark_list")), "<footer")
+
+    def test_a_guest_keeps_the_footer_he_has_nowhere_else_to_go_from(self):
+        """Боковой панели у гостя нет, и ссылки ему больше взять неоткуда."""
+        self.client.logout()
+
+        self.assertContains(self.client.get(reverse("applicants")), "<footer")

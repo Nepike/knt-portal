@@ -133,18 +133,37 @@
             </span>
             <i class="fa-solid fa-chevron-down text-slate-400 transition" :class="open && 'rotate-180'"></i>
           </button>
+          {% comment %}
+            Средней группой — ссылки бывшего подвала. У списков материалов, книг, курсов,
+            преподавателей и студентов конца нет: подвал под ними недостижим, пока
+            не догрузишь весь каталог, — а «Поддержка» может понадобиться с любой страницы
+            и сразу. Здесь они на одно нажатие от чего угодно и не отнимают у панели
+            ни пикселя высоты: на ноутбуке она и без того впритык.
+
+            Значкам задана ширина: без неё подписи начинаются на разном отступе, и на семи
+            пунктах вместо трёх эта рассинхронизация уже бросается в глаза.
+          {% endcomment %}
           <div x-show="open" x-cloak @click.outside="open = false" x-transition.origin.bottom
                class="absolute bottom-full left-0 right-0 mb-1 z-10 flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
             <a href="{% url 'profile' request.user.pk %}"
-               class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user"></i>Профиль</a>
-            {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus"></i>Регистрация студента</a>{% endif %}
-            {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key"></i>Админка</a>{% endif %}
+               class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user w-4 text-center text-slate-400"></i>Профиль</a>
+            {% if perms.users.add_user %}<a href="{% url 'user_new' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-user-plus w-4 text-center text-slate-400"></i>Регистрация студента</a>{% endif %}
+            {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key w-4 text-center text-slate-400"></i>Админка</a>{% endif %}
+
+            <div class="my-1 border-t border-slate-200 dark:border-slate-800"></div>
+            <a href="{% url 'applicants' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-circle-info w-4 text-center text-slate-400"></i>О факультете</a>
+            <a href="{% url 'contacts' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-envelope w-4 text-center text-slate-400"></i>Контакты</a>
+            <a href="{% url 'support' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-life-ring w-4 text-center text-slate-400"></i>Поддержка</a>
+            <a href="https://vk.com/knt_mipt" target="_blank" rel="noopener" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-brands fa-vk w-4 text-center text-slate-400"></i>ВКонтакте</a>
+
+            <div class="my-1 border-t border-slate-200 dark:border-slate-800"></div>
             <form method="post" action="{% url 'logout' %}">
               {% csrf_token %}
-              <button type="submit" class="w-full flex items-center gap-1 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Выйти</button>
+              <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-rose-500"><i class="fa-solid fa-right-from-bracket w-4 text-center"></i>Выйти</button>
             </form>
           </div>
         </div>
+
     </div>
   </aside>
   {# h-lvh по той же причине, что и у панели: затемнение не должно обрываться выше края окна #}

@@ -89,6 +89,11 @@
       иначе растягивал бы страницу втрое против плеера, а форма сдачи и правка курса
       уезжали бы под самый низ, куда никто не долистает.
 
+      30rem — это ровно шесть записей и седьмая наполовину; обрезанная строка и говорит,
+      что список едет дальше. Считаем в rem, а не в долях экрана: «шесть записей» должно
+      быть шестью и на ноутбуке, и на большом мониторе. Но на низком окне доля всё-таки
+      нужна — min() не даёт панели перерасти сам экран.
+
       relative — чтобы offsetTop строки считался от самого списка, а не от чего попало
       выше по дереву. overscroll-contain — чтобы жест по списку не утекал в прокрутку
       страницы (тем же приёмом живёт длинный селект, core/inputs.html).
@@ -102,7 +107,7 @@
       шрифтов. До их подмены строки ниже на пару пикселей каждая, и на третьем десятке
       записей эта мелочь набегает в сотню — открытая уезжала из середины к краю.
     {% endcomment %}
-    <ol class="relative flex flex-col gap-1 max-h-[70dvh] overflow-y-auto overscroll-contain"
+    <ol class="relative flex flex-col gap-1 max-h-[min(30rem,70dvh)] overflow-y-auto overscroll-contain"
         x-data x-init="const show = () => {
                          const now = $el.querySelector('[data-current]')
                          if (now) $el.scrollTop = now.offsetTop - ($el.clientHeight - now.clientHeight) / 2
