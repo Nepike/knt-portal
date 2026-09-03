@@ -49,7 +49,16 @@ jobs:
           script_stop: true
           script: |
             cd /srv/knt
-            git pull --ff-only
+            #git pull --ff-only
+            # Диагностика
+            echo "=== Checking DNS ==="
+            nslookup github.com || host github.com || dig github.com
+            echo "=== Checking curl ==="
+            curl -I https://github.com/Nepike/knt-portal.git 2>&1 || true
+            echo "=== Git config ==="
+            git config -l | grep remote
+            echo "=== Attempting pull ==="
+            git pull https://github.com/Nepike/knt-portal.git --ff-only
             docker compose up -d --build
             docker image prune -f
 
