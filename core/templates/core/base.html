@@ -46,7 +46,9 @@
   сейчас, поэтому лишней прокрутки не появляется.
 {% endcomment %}
 <body x-data="{ sidebar: false }" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-      {% if request.user.is_authenticated %}data-live{% endif %} class="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+      {# data-live — и признак «сокету есть куда подключаться», и чей это экран: по нему #}
+      {# чат отличает своё сообщение от чужого, не спрашивая сервер (chats/events.py). #}
+      {% if request.user.is_authenticated %}data-live="{{ request.user.pk }}"{% endif %} class="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
   {% comment %}
     Левая панель — только для вошедших. Гостю показывать нечего: за каждым разделом
     всё равно форма входа, а три пункта в колонке шириной в 256 пикселей выглядят

@@ -90,6 +90,30 @@ html { color-scheme: light; }
   }
 
 
+  /* Эмодзи. Шрифт называем явно: иначе часть символов браузер рисует текстовым
+     начертанием основного шрифта, и в одном ряду оказываются цветные и чёрно-белые.
+     Своего набора картинок (Twemoji и подобных) не держим — это мегабайты вендора. */
+  .emoji {
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", sans-serif;
+    font-variant-emoji: emoji;
+    line-height: 1;
+  }
+
+  /* Тонкая полоса прокрутки внутри скруглённого поля. Системная в Windows широкая,
+     с квадратными кнопками-стрелками, и в поле ввода чата она вставала впритык к
+     скруглённой рамке — угол рамки оставался, а полоса шла мимо него прямой. */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-slate-400) transparent;
+  }
+  .scroll-slim::-webkit-scrollbar { width: 6px; }
+  .scroll-slim::-webkit-scrollbar-track { background: transparent; }
+  .scroll-slim::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--color-slate-300);
+  }
+  .dark .scroll-slim::-webkit-scrollbar-thumb { background: var(--color-slate-600); }
+
   /* Пункт меню сообщения в чате. На узком экране крупнее — это шторка под палец. */
   .msg-action {
     @apply w-full flex items-center gap-3 px-4 py-3 text-base text-left transition-colors;

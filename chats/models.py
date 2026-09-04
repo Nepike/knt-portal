@@ -158,7 +158,7 @@ class Message(models.Model):
         "self", verbose_name="ответ на", on_delete=models.SET_NULL,
         null=True, blank=True, related_name="replies",
     )
-    # TODO: вложения — nullable FK message на attachments.File/Image (вместе с R2, M2)
+    # Вложения — со стороны attachments: File.message и Image.message.
 
     created = models.DateTimeField("создано", default=timezone.now)
     edited = models.DateTimeField("изменено", null=True, blank=True)

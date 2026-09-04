@@ -1,0 +1,33 @@
+{% load attachment_extras %}
+{% comment %}
+  Вложения сообщения. Картинки — сеткой, документы — строками под ней.
+
+  В ленте показываем миниатюру, а полный размер грузится, только когда картинку
+  открыли: снимок с телефона даже после сжатия весит сотни килобайт, и десяток таких
+  в переписке съел бы мобильный трафик ради картинок размером с ноготь.
+
+  Ширину задаём здесь, а не пузырю: пузырь у нас по содержимому (w-fit), и сетка
+  внутри него схлопнулась бы в ничто. Одна картинка идёт своей формы, несколько —
+  квадратами: так одиночное фото не превращается в марку, а десяток не растягивает
+  ленту на три экрана.
+{% endcomment %}
+{% with shots=m.images.all papers=m.files.all %}
+{% if shots %}
+<div class="w-64 sm:w-72 mt-1 grid gap-1 {% if shots|length == 1 %}grid-cols-1{% elif shots|length < 5 %}grid-cols-2{% else %}grid-cols-3{% endif %}">
+  {% for shot in shots %}
+  <button type="button" @click="lightbox = '{{ shot.image|media }}'"
+          class="block overflow-hidden rounded-lg bg-slate-200 dark:bg-slate-700 {% if shots|length > 1 %}aspect-square{% endif %}">
+    {# Не через `default`: он подставит значение ПОСЛЕ фильтра, и media получит строку #}
+    <img src="{% if shot.preview %}{{ shot.preview|media }}{% else %}{{ shot.image|media }}{% endif %}" alt="{{ shot.name }}" loading="lazy" decoding="async"
+         class="w-full {% if shots|length == 1 %}h-auto max-h-80{% else %}h-full{% endif %} object-cover">
+  </button>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if papers %}
+<div class="min-w-56 sm:min-w-64 mt-1">
+  {% for file in papers %}{% include "attachments/_file.html" %}{% endfor %}
+</div>
+{% endif %}
+{% endwith %}

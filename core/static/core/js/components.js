@@ -1,8 +1,18 @@
-// Курсор ленты чата для hx-vals: id последнего сообщения в DOM. Читаем из DOM,
-// а не держим в шаблоне — иначе после первой догрузки курсор устареет.
+// Края ленты чата для hx-vals. Читаем из DOM, а не держим в шаблоне — иначе после
+// первой же догрузки курсор устареет.
+const feedEdges = () => document.querySelectorAll("#messages [data-id]");
+
+// Нижний край: докуда мы дочитали, отсюда сервер отдаёт новое.
 window.lastMessageId = () => {
-  const items = document.querySelectorAll("#messages [data-id]");
+  const items = feedEdges();
   return items.length ? items[items.length - 1].dataset.id : 0;
+};
+
+// Верхний: правку сообщения, которого у нас на экране нет, htmx выбросил бы с ошибкой
+// в консоль — за этот край сервер oob-замены не шлёт.
+window.firstMessageId = () => {
+  const items = feedEdges();
+  return items.length ? items[0].dataset.id : 0;
 };
 
 // Размер файла для списка выбранных — пара к human_size() из attachments/models.py.
@@ -23,11 +33,17 @@ let pickedFiles = 0;
 // Текст задаёт браузер, свой показать нельзя.
 const warnOnLeave = (event) => event.preventDefault();
 
-// По сокету приходит ТОЛЬКО {"chat": id}: разметка у каждого получателя своя, поэтому
-// её клиент забирает обычным запросом. События вешаем на <body> — оттуда их берёт htmx
-// через hx-trigger="… from:body".
+// По сокету приходит {chat} и, если появилось новое сообщение, ещё {msg, author}.
+// Разметка у каждого получателя своя, поэтому её клиент забирает обычным запросом —
+// а вот счётчик непрочитанных считает сам. События вешаем на <body>, оттуда их берёт
+// htmx через hx-trigger="… from:body":
+//   chats:event   — список чатов слева;
+//   chats:recount — счётчик у сервера (правка, удаление: сколько их, тут не вычислить);
+//   chats:current — лента открытого чата;
+//   chats:sync    — всё сразу, после обрыва связи или возвращения на вкладку.
 window.chatSocket = (() => {
-  if (!document.body.hasAttribute("data-live")) return { sync() {} }; // не залогинен — некуда
+  const me = document.body.dataset.live;
+  if (!me) return { sync() {} }; // не залогинен — некуда
 
   const fire = (name, detail) => document.body.dispatchEvent(new CustomEvent(name, { detail, bubbles: true }));
   const openChat = () => document.querySelector("[data-chat-id]")?.dataset.chatId;
@@ -42,15 +58,65 @@ window.chatSocket = (() => {
     fire("chats:sync");
   }
 
-  // Вкладка в фоне — ленту не трогаем: запрос за сообщениями пометил бы их
-  // прочитанными, а человек их не видел. Копим флаг и догоняем при возврате.
-  function deliver(chat) {
+  // Счётчик держим у себя. Раньше за каждым чужим сообщением каждая вкладка каждого
+  // участника шла на сервер за одним числом, и в чате курса это сотня запросов на
+  // одно сообщение — при том, что по сокету уже пришло всё, чтобы прибавить единицу.
+  // Точка правды прежняя: chats:sync и любая перезагрузка берут число у сервера.
+  function count(chat, author, reading) {
+    const badge = document.getElementById("unread-badge");
+    if (!badge || String(author) === me || reading) return; // своё и прочитанное не считаем
+    badge.textContent = Number(badge.textContent || 0) + 1;
+    badge.classList.remove("hidden");
+    paintTitle();
+  }
+
+  // Число и в заголовке вкладки: фоновая вкладка иначе никак не показывает, что написали,
+  // — её не видно целиком, а бейдж живёт внутри страницы.
+  const plainTitle = document.title;
+  function paintTitle() {
+    const badge = document.getElementById("unread-badge");
+    const unread = badge && !badge.classList.contains("hidden") ? Number(badge.textContent) : 0;
+    document.title = unread ? `(${unread}) ${plainTitle}` : plainTitle;
+  }
+  // Счётчик перерисовывает и сервер (chats:recount, chats:sync). Отличать его подмену
+  // от прочих незачем: перерисовка заголовка — это чтение одного узла.
+  document.body.addEventListener("htmx:afterSettle", paintTitle);
+  paintTitle();
+
+  // Собеседник дочитал до `upto` — переставляем галочки у своих сообщений. Разметку за
+  // этим не перезапрашиваем: состояние тут двоичное, и класс на месте меняется дешевле.
+  function ticks(upto, by) {
+    if (String(by) === me) return; // это мы сами прочитали чужое, свои галочки ни при чём
+    document.querySelectorAll("#messages [data-tick]").forEach((tick) => {
+      if (Number(tick.dataset.tick) > upto) return;
+      tick.classList.replace("fa-check", "fa-check-double");
+      tick.classList.add("text-accent");
+    });
+  }
+
+  function deliver({ chat, msg, author, read, by, kind }) {
+    const open = String(chat) === openChat();
+    // Прочтение не трогает ни ленту, ни счётчик: только галочки открытого чата
+    if (read) {
+      if (open) ticks(read, by);
+      return;
+    }
+    // Открытый чат на видимой вкладке сейчас сходит за сообщением и пометит прочитанным
+    if (msg) count(chat, author, open && !document.hidden);
+
+    // Вкладка в фоне — ленту не трогаем: запрос за сообщениями пометил бы их
+    // прочитанными, а человек их не видел. Копим флаг и догоняем при возврате.
     if (document.hidden) {
       missed = true;
       return;
     }
-    fire("chats:event", { chat });
-    if (String(chat) === openChat()) fire("chats:current", { chat });
+    // Обновляем ровно то, что могло измениться (вид изменения приходит в событии,
+    // см. chats/events.py). Реакция не трогает ни счётчик, ни список чатов; правка
+    // меняет строку в списке, но не счётчик; удаление — и то и другое.
+    if (!msg && kind !== "react" && kind !== "edit") fire("chats:recount");
+    if (kind !== "react") fire("chats:event", { chat });
+    // Своё сообщение вкладка уже показала в ответ на отправку — второй раз не ходим
+    if (open && !(msg && document.getElementById(`msg-${msg}`))) fire("chats:current", { chat });
   }
 
   function connect() {
@@ -61,7 +127,7 @@ window.chatSocket = (() => {
       stopFallback();
       if (recovered) sync(); // пока лежали, события шли мимо — догоняем по курсору
     };
-    socket.onmessage = (event) => deliver(JSON.parse(event.data).chat);
+    socket.onmessage = (event) => deliver(JSON.parse(event.data));
     socket.onclose = () => {
       // 1, 2, 4… до 30с: если сервер лежит, не добиваем его переподключениями
       const wait = Math.min(1000 * 2 ** attempt++, 30000);
@@ -683,26 +749,72 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  Alpine.data("chat", () => ({
+  // Сжатие фото перед отправкой. Снимок с телефона — это 4000 пикселей и мегабайты,
+  // а в ленте он показывается в триста: остальное едет впустую, через мобильный интернет
+  // студента и в наш бакет, за который платят. Жмём в webp — он держит и прозрачность
+  // (скриншоты), и текст лучше jpeg; где его нет, canvas молча вернёт png.
+  const shrink = async (file, side, quality) => {
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((done) => canvas.toBlob(done, "image/webp", quality));
+    return blob;
+  };
+
+  const renamed = (blob, name, suffix) =>
+    new File([blob], `${name.replace(/\.[^.]+$/, "")}${suffix}`, { type: blob.type });
+
+  // Сложить файлы в скрытое поле формы: своей записи у files нет, но DataTransfer
+  // отдаёт готовый FileList — так браузер и отправит их обычным multipart.
+  const carry = (input, files) => {
+    const box = new DataTransfer();
+    files.forEach((file) => box.items.add(file));
+    input.files = box.files;
+  };
+
+  Alpine.data("chat", (listUrl, limits) => ({
     replyTo: null,
+    picked: [], // выбранные вложения: { id, name, file, preview?, url? }
+    attachOpen: false,
+    busy: false, // идёт сжатие — отправлять пока нечего
+    lightbox: "",
+    typed: 0, // длина набранного: по ней у самого потолка показываем остаток
+    // Enter на телефоне — перенос строки: там он на экранной клавиатуре, и отправлять
+    // им значит рассылать обрывки фраз. Отправка кнопкой, она рядом с полем.
+    coarse: matchMedia("(pointer: coarse)").matches,
     pinned: true, // держимся низа, пока человек не прокрутил вверх
-    menu: null, // открытое меню сообщения: { id, author, preview, react, edit, del }
+    below: 0, // сколько сообщений пришло, пока лента прокручена вверх
+    readers: false, // открыто окно «кто прочитал»
+    menu: null, // открытое меню сообщения: { id, author, preview, react, edit, del, readers }
     sheet: false, // узкий экран — меню показываем шторкой снизу
     pos: null, // позиция попапа; пока null, меню держим невидимым (ещё не примерено к экрану)
     init() {
       const box = this.$refs.box;
-      const pin = () => this.toBottom();
+      this.draftKey = `chat-draft:${this.$el.dataset.chatId}`;
+      this.restore();
+      // Открываемся не на конце, а на черте «непрочитанные», если она есть: иначе после
+      // ночи в чате курса человек попадает в конец и листает назад, гадая, где остановился.
+      const start = () => {
+        const mark = box.querySelector("[data-unread]");
+        if (mark) box.scrollTop = mark.offsetTop - 12;
+        else this.toBottom();
+      };
       // Высота ленты растёт уже ПОСЛЕ init: догружаются аватары и шрифты,
       // поэтому одного скролла мало — длинный диалог остался бы вверху.
-      pin();
-      requestAnimationFrame(pin);
-      window.addEventListener("load", pin, { once: true });
+      start();
+      requestAnimationFrame(start);
+      window.addEventListener("load", start, { once: true });
       box.querySelectorAll("img").forEach((img) => {
-        if (!img.complete) img.addEventListener("load", pin, { once: true });
+        if (!img.complete) img.addEventListener("load", start, { once: true });
       });
 
       box.addEventListener("scroll", () => {
         this.pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
+        if (this.pinned) this.below = 0; // долистал сам — считать больше нечего
       });
 
       // Подгрузка истории вставляет сообщения СВЕРХУ — запоминаем позицию,
@@ -711,6 +823,7 @@ document.addEventListener("alpine:init", () => {
         this.loadingHistory = e.detail.target.id === "history-top";
         this.prevHeight = box.scrollHeight;
         this.prevTop = box.scrollTop;
+        this.prevCount = box.querySelectorAll("[data-id]").length;
       });
       this.$el.addEventListener("htmx:afterSwap", () => {
         if (this.loadingHistory) {
@@ -719,30 +832,170 @@ document.addEventListener("alpine:init", () => {
           return;
         }
         this.dedupe();
+        // Пока лента не у низа, приехавшее вниз не видно — считаем его для кнопки
+        if (!this.pinned) this.below += box.querySelectorAll("[data-id]").length - this.prevCount;
         this.toBottom();
       });
       // Не hx-on на форме: оттуда не достать Alpine-состояние (replyTo).
       this.$el.addEventListener("htmx:afterRequest", (e) => {
         if (e.detail.successful && e.detail.elt.matches?.("form.chat-send")) {
           e.detail.elt.reset();
+          this.grow(); // reset очищает текст, но высоту поле держит свою, выставленную
           this.replyTo = null;
+          this.clear();
+          this.forget();
           this.toBottom(true); // своё сообщение всегда показываем
         }
+      });
+
+      // Чат мог исчезнуть, пока страница открыта: группу удалили, из неё исключили.
+      // Слева он из списка пропадёт сам, а эта половина осталась бы жить с открытой
+      // перепиской и молча ловить 404 на каждую догрузку — htmx на них не подменяет
+      // ничего. Уводим на список, а он уже скажет, что произошло.
+      //
+      // Сверяемся с адресом: 404 прилетает и на отдельное сообщение, если его снесли
+      // из админки, — выгонять из-за него живого человека из живого чата незачем.
+      const own = `/chats/${this.$el.dataset.chatId}/`;
+      this.$el.addEventListener("htmx:responseError", (e) => {
+        const { status, responseURL } = e.detail.xhr;
+        if (status === 404 && responseURL.includes(own)) location.assign(listUrl + "?gone=1");
+        else if (status === 429) this.$dispatch("toast", { type: "warning", text: "Слишком часто. Подождите немного" });
+        else if (status === 422) this.$dispatch("toast", { type: "warning", text: e.detail.xhr.responseText });
       });
     },
     reply(data) {
       this.replyTo = data;
       this.$refs.input.focus();
     },
+
+    // --- вложения -------------------------------------------------------------
+    addPhotos(event) {
+      this.take([...event.target.files], true);
+      event.target.value = ""; // иначе тот же файл второй раз не выбрать
+    },
+    addDocs(event) {
+      this.take([...event.target.files], false);
+      event.target.value = "";
+    },
+    // Из буфера и перетаскиванием: картинку жмём, остальное отправляем как есть
+    dropped(event) {
+      const files = [...(event.dataTransfer || event.clipboardData).files];
+      if (!files.length) return;
+      event.preventDefault();
+      this.take(files.filter((f) => f.type.startsWith("image/")), true);
+      this.take(files.filter((f) => !f.type.startsWith("image/")), false);
+    },
+    async take(files, asPhoto) {
+      const room = limits.files - this.picked.length;
+      if (files.length > room) {
+        this.$dispatch("toast", { type: "warning", text: `Не больше ${limits.files} вложений за раз` });
+      }
+      this.busy = true;
+      try {
+        for (const file of files.slice(0, Math.max(room, 0))) {
+          const item = asPhoto ? await this.asPhoto(file) : this.asDoc(file);
+          if (item) this.picked.push(item);
+        }
+      } finally {
+        this.busy = false;
+        this.load();
+      }
+    },
+    heavy(name) {
+      this.$dispatch("toast", { type: "warning", text: `«${name}» слишком большой` });
+      return null;
+    },
+    async asPhoto(file) {
+      // Сжатое бывает тяжелее исходника — у уже маленькой картинки. Тогда шлём исходник.
+      const small = await shrink(file, 2560, 0.85).catch(() => null);
+      const body = small && small.size < file.size ? renamed(small, file.name, ".webp") : file;
+      if (body.size > limits.photo) return this.heavy(file.name);
+      const thumb = await shrink(file, 400, 0.7).catch(() => null);
+      return {
+        id: `${Date.now()}-${Math.random()}`,
+        name: body.name,
+        file: body,
+        preview: thumb ? renamed(thumb, file.name, ".thumb.webp") : null,
+        url: URL.createObjectURL(thumb || body),
+      };
+    },
+    asDoc(file) {
+      if (file.size > limits.doc) return this.heavy(file.name);
+      return { id: `${Date.now()}-${Math.random()}`, name: file.name, file, preview: null, url: "" };
+    },
+    drop(id) {
+      const gone = this.picked.find((item) => item.id === id);
+      if (gone?.url) URL.revokeObjectURL(gone.url);
+      this.picked = this.picked.filter((item) => item.id !== id);
+      this.load();
+    },
+    // Раскладываем выбранное по полям-носителям. Фото и миниатюры сервер сопоставляет
+    // по порядку, поэтому либо миниатюры есть у всех, либо не шлём ни одной: пропусти
+    // одна (не собрался canvas) — и дальше каждое фото получило бы чужую.
+    load() {
+      const photos = this.picked.filter((item) => item.url);
+      const thumbs = photos.map((item) => item.preview);
+      carry(this.$refs.photoBox, photos.map((item) => item.file));
+      carry(this.$refs.previewBox, thumbs.every(Boolean) ? thumbs : []);
+      carry(this.$refs.docBox, this.picked.filter((item) => !item.url).map((item) => item.file));
+    },
+    clear() {
+      this.picked.forEach((item) => item.url && URL.revokeObjectURL(item.url));
+      this.picked = [];
+      this.load();
+    },
+    // Поле ввода растёт под текст. Сначала auto — иначе scrollHeight помнит прежнюю
+    // высоту и поле умеет только расти. Потолок задан в разметке (max-h), оттуда же
+    // берётся и прокрутка: JS про число строк ничего не знает и знать не должен.
+    // Черновик переживает уход со страницы: набрал длинное, отвлёкся на другой чат —
+    // и всё пропадало. Хранится у этого браузера и только до отправки.
+    restore() {
+      try {
+        this.$refs.input.value = localStorage.getItem(this.draftKey) || "";
+      } catch { /* приватный режим — просто без черновиков */ }
+      this.grow();
+    },
+    remember() {
+      try {
+        const text = this.$refs.input.value;
+        text ? localStorage.setItem(this.draftKey, text) : localStorage.removeItem(this.draftKey);
+      } catch { /* см. restore */ }
+    },
+    forget() {
+      try { localStorage.removeItem(this.draftKey); } catch { /* см. restore */ }
+    },
+    grow() {
+      const box = this.$refs.input;
+      box.style.height = "auto";
+      // Рамку добавляем отдельно: scrollHeight её не считает, а высота у поля меряется
+      // по внешнему краю (border-box). Без этих двух пикселей текст никогда не влезает
+      // целиком, и поле показывает полосу прокрутки уже на второй строке.
+      box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`;
+      this.typed = box.value.length;
+      this.remember();
+    },
+    send(event) {
+      if (event.isComposing || event.shiftKey || this.coarse) return; // перенос строки
+      event.preventDefault();
+      if (this.busy) return; // фото ещё сжимается: уехал бы один текст, без него
+      if (this.$refs.input.value.trim() || this.picked.length) this.$refs.input.form.requestSubmit();
+    },
     openMenu(event) {
       const bubble = event.target.closest("[data-msg]");
-      // ссылки, чипы реакций и цитата работают сами; выделение текста — тоже не вызов меню
-      if (!bubble || event.target.closest("a, button") || String(getSelection())) return;
+      if (!bubble || event.target.closest("a, button")) return; // ссылки, чипы реакций и цитата работают сами
+      // Выделение текста — не вызов меню. Но именно ЭТОГО пузыря: раньше сверялись
+      // с выделением где угодно на странице, и одна давняя выделенная строчка в шапке
+      // запирала меню совсем — до клика по пустому месту.
+      const picked = getSelection();
+      if (picked && !picked.isCollapsed && bubble.contains(picked.anchorNode)) return;
       event.preventDefault();
       const d = bubble.dataset;
       this.sheet = innerWidth < 640;
       this.pos = null;
-      this.menu = { id: d.msg, author: d.author, preview: d.preview, react: d.reactUrl, edit: d.editUrl, del: d.delUrl };
+      this.menu = {
+        id: d.msg, author: d.author, preview: d.preview,
+        react: d.reactUrl, edit: d.editUrl, del: d.delUrl, readers: d.readersUrl,
+      };
       if (this.sheet) return; // шторке позиция не нужна — она прижата к низу экрана
       const { clientX, clientY } = event;
       this.$nextTick(() => {
@@ -759,7 +1012,14 @@ document.addEventListener("alpine:init", () => {
       this.menu = null;
       if (kind === "reply") this.reply({ id: m.id, author: m.author, text: m.preview });
       else if (kind === "edit") this.request("GET", m.edit, m.id);
+      else if (kind === "readers") this.showReaders(m.readers);
       else if (kind === "delete" && confirm("Удалить сообщение?")) this.request("POST", m.del, m.id);
+    },
+    // Список считается по нажатию и на этот момент: живые галочки «прочитано» пришлось бы
+    // рассылать всем на каждый чужой опрос, а в чате курса это лавина ради двух значков.
+    showReaders(url) {
+      this.readers = true;
+      htmx.ajax("GET", url, { source: this.$el, target: "#readers-body", swap: "innerHTML" });
     },
     react(emoji) {
       const m = this.menu;
@@ -771,11 +1031,14 @@ document.addEventListener("alpine:init", () => {
       const target = "#msg-" + id;
       htmx.ajax(verb, url, { source: document.querySelector(target), target, swap: "outerHTML", values });
     },
-    // Отправка и догрузка могут разойтись и принести одно сообщение дважды.
+    // Отправка и догрузка могут разойтись и принести одно сообщение дважды. Заодно
+    // разделители дня: у одного дня в ленте он ровно один, а порции считают его каждая
+    // сама и на стыке ставят второй.
     dedupe() {
       const seen = new Set();
-      this.$refs.box.querySelectorAll("[data-id]").forEach((el) => {
-        seen.has(el.dataset.id) ? el.remove() : seen.add(el.dataset.id);
+      this.$refs.box.querySelectorAll("[data-id], [data-day]").forEach((el) => {
+        const key = el.dataset.id ? `m${el.dataset.id}` : `d${el.dataset.day}`;
+        seen.has(key) ? el.remove() : seen.add(key);
       });
     },
     toBottom(force = false) {

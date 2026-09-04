@@ -1,0 +1,21 @@
+{# Кто прочитал сообщение. Список считается в момент открытия — это снимок, не живая метка #}
+{% if alone %}
+{# В ЛС собеседник один, и вопрос сводится к «да» или «нет» #}
+<p class="flex items-center gap-2 text-sm {% if readers %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+  <i class="fa-solid {% if readers %}fa-check-double{% else %}fa-check{% endif %}"></i>
+  {% if readers %}Прочитано{% else %}Ещё не прочитано{% endif %}
+</p>
+{% else %}
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-3">
+  {% if readers %}Прочитали {{ readers|length }} из {{ total }}{% else %}Пока никто не прочитал{% endif %}
+</p>
+{% for person in readers %}
+<a href="{% url 'profile' person.pk %}" class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+  {% include "core/_avatar.html" with person=person box="w-9 h-9 rounded-[22%]" text="text-[11px]" only %}
+  <span class="min-w-0">
+    <span class="block text-sm font-medium truncate">{{ person.full_name }}</span>
+    {% if person.team %}<span class="block text-xs text-slate-400">{{ person.team.get_grade_str }}</span>{% endif %}
+  </span>
+</a>
+{% endfor %}
+{% endif %}

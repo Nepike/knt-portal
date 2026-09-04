@@ -1,23 +1,35 @@
+from datetime import timedelta
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
+
+from PIL import Image as PilImage
 
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser, Permission
+from django.contrib.contenttypes.models import ContentType
+from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.db.models import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
+from attachments.models import File, Image
 from core.models import Team
-from users.models import User
+from users.models import User, UserSession
 
 from .consumers import ChatConsumer
-from .events import chat_group, user_group
-from .models import Chat, Membership, Message, unread_total
+from .events import chat_group, notify_chat, user_group
+from .forms import CuratorAddForm
+from .models import Chat, Membership, Message, Reaction, unread_total
+from .uploads import MAX_FILES
+from .views import ACT_LIMIT, CATCH_UP, MAX_TEXT, PAGE_SIZE, SEND_LIMIT, _chat_items
 
 
 def make_user(email, name="Иван", surname="Иванов", **extra):
@@ -78,14 +90,20 @@ class DirectChatTests(TestCase):
 
     def test_dm_start_redirects_to_chat(self):
         self.client.force_login(self.alice)
-        response = self.client.get(reverse("dm_start", args=[self.bob.pk]))
+        response = self.client.post(reverse("dm_start", args=[self.bob.pk]))
         chat = Chat.objects.get(kind="dm")
         self.assertRedirects(response, reverse("chat_detail", args=[chat.pk]))
 
     def test_dm_start_with_self_goes_back_to_list(self):
         self.client.force_login(self.alice)
-        response = self.client.get(reverse("dm_start", args=[self.alice.pk]))
+        response = self.client.post(reverse("dm_start", args=[self.alice.pk]))
         self.assertRedirects(response, reverse("chat_list"))
+        self.assertFalse(Chat.objects.exists())
+
+    def test_a_link_alone_does_not_create_a_dialogue(self):
+        """Открытие диалога пишет в базу, а по ссылке за человека ходят предзагрузчики."""
+        self.client.force_login(self.alice)
+        self.assertEqual(self.client.get(reverse("dm_start", args=[self.bob.pk])).status_code, 405)
         self.assertFalse(Chat.objects.exists())
 
     def test_empty_dm_hidden_from_list(self):
@@ -172,7 +190,11 @@ class UnreadTests(TestCase):
 
 
 class HistoryPaginationTests(TestCase):
-    """Открываем последнюю страницу, остальное подтягиваем маячком сверху."""
+    """Открываем последнюю страницу, остальное подтягиваем маячком сверху.
+
+    Всё прочитано намеренно: с непрочитанными чат открывается с них (см. UnreadOpenTests),
+    а здесь проверяется сама пагинация.
+    """
 
     @classmethod
     def setUpTestData(cls):
@@ -185,6 +207,7 @@ class HistoryPaginationTests(TestCase):
 
     def setUp(self):
         self.client.force_login(self.alice)
+        Membership.objects.filter(chat=self.chat, user=self.alice).update(last_read=self.messages[-1])
 
     def test_page_shows_last_30_with_sentinel(self):
         response = self.client.get(reverse("chat_detail", args=[self.chat.pk]))
@@ -207,6 +230,8 @@ class HistoryPaginationTests(TestCase):
 
     def test_older_page_does_not_mark_read(self):
         membership = Membership.objects.get(chat=self.chat, user=self.alice)
+        membership.last_read = None  # как будто не читали ничего: листание не должно это менять
+        membership.save(update_fields=["last_read"])
         self.client.get(reverse("messages_older", args=[self.chat.pk]), {"before": self.messages[45].pk})
         membership.refresh_from_db()
         self.assertIsNone(membership.last_read_id)
@@ -220,6 +245,7 @@ class SendTests(TestCase):
         cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
 
     def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
         self.client.force_login(self.alice)
         self.url = reverse("message_send", args=[self.chat.pk])
 
@@ -263,6 +289,13 @@ class SendTests(TestCase):
         self.assertNotContains(response, "древнее")
         self.assertContains(response, "моя реплика")
 
+    def test_a_cursor_from_the_future_still_answers(self):
+        """Курсора младше только что созданного сообщения честно не бывает: в ленте у
+        отправителя ничего новее нет. Раньше такой запрос отвечал пятисоткой — ответ
+        выходил пустым, а пустой ленте нечего искать соседа сверху."""
+        response = self.client.post(self.url, {"text": "моя реплика", "after": "999999"})
+        self.assertContains(response, "моя реплика")
+
     def test_send_marks_own_message_read(self):
         self.client.post(self.url, {"text": "привет"})
         membership = Membership.objects.get(chat=self.chat, user=self.alice)
@@ -291,9 +324,19 @@ class PollingTests(TestCase):
         self.message.text = "исправил"
         self.message.updated = timezone.now()
         self.message.save(update_fields=["text", "updated"])
-        response = self.client.get(self.url, {"after": self.message.pk})
+        response = self.client.get(self.url, {"after": self.message.pk, "since": self.message.pk})
         self.assertContains(response, "hx-swap-oob")
         self.assertContains(response, "исправил")
+
+    def test_edit_of_a_message_outside_the_screen_is_not_sent(self):
+        """Замену тому, чего у вкладки нет в ленте, htmx выбрасывает с ошибкой в консоль."""
+        newer = Message.objects.create(chat=self.chat, author=self.bob, text="второе")
+        self.message.text = "исправил"
+        self.message.updated = timezone.now()
+        self.message.save(update_fields=["text", "updated"])
+        # у вкладки в ленте только `newer` — значит и нижний край, и верхний равны ему
+        response = self.client.get(self.url, {"after": newer.pk, "since": newer.pk})
+        self.assertNotContains(response, "исправил")
 
     def test_garbage_cursor_does_not_break(self):
         self.assertEqual(self.client.get(self.url, {"after": "абв"}).status_code, 200)
@@ -396,7 +439,7 @@ class ReactionTests(TestCase):
     def test_answer_already_contains_the_reaction(self):
         """Пузырь рисуется после записи — иначе реакция «появляется не сразу»."""
         response = self.client.post(self.url, {"emoji": "🔥"})
-        self.assertContains(response, "🔥 1")
+        self.assertContains(response, "🔥</span>1")
 
     def test_unknown_emoji_is_ignored(self):
         self.client.post(self.url, {"emoji": "<script>"})
@@ -412,6 +455,27 @@ class ReactionTests(TestCase):
         self.message.save(update_fields=["deleted"])
         self.client.post(self.url, {"emoji": "🔥"})
         self.assertEqual(self.message.reactions.count(), 0)
+
+    def test_two_taps_at_once_do_not_break(self):
+        """Гонка двух вкладок: обе не нашли реакции и обе побежали её ставить.
+
+        Проверка «есть? — нет, создаём» проходила у обеих, и вторая вставка билась
+        об уникальный индекс пятисоткой. Соперника изображаем так: первый поиск
+        реакции промахивается, строка при этом уже есть.
+        """
+        Reaction.objects.create(message=self.message, user=self.alice, emoji="🔥")
+        real_get, missed = QuerySet.get, []
+
+        def blind_first_look(self, *args, **kwargs):
+            if self.model is Reaction and not missed:
+                missed.append(True)
+                raise Reaction.DoesNotExist
+            return real_get(self, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "get", blind_first_look):
+            response = self.client.post(self.url, {"emoji": "🔥"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(missed)  # подмена сработала, иначе тест ничего не проверил
 
 
 class GroupManagementTests(TestCase):
@@ -606,6 +670,17 @@ class CourseChatTests(TestCase):
         self.client.post(reverse("chat_add_members", args=[chat.pk]), {"members": [other.pk]})
         self.assertFalse(Membership.objects.filter(chat=chat, user=other).exists())
 
+    def test_a_namesake_right_of_another_app_is_not_the_curator_right(self):
+        """codename уникален только внутри своей модели, и куратора мы ищем по нему."""
+        make_user("s@t.local", team=self.a24)  # с ним заводится и сам чат курса
+        impostor = make_user("i@t.local")
+        impostor.user_permissions.add(Permission.objects.create(
+            codename="curate_course_chats", name="Однофамилец",
+            content_type=ContentType.objects.get_for_model(User),
+        ))
+        form = CuratorAddForm(chat=Chat.objects.get(kind="course"))
+        self.assertNotIn(impostor, form.fields["members"].queryset)
+
     def test_curator_keeps_membership_after_profile_save(self):
         make_user("s@t.local", team=self.a24)
         curator = self.curator()
@@ -679,6 +754,7 @@ class PublishTests(TestCase):
         cls.message = Message.objects.create(chat=cls.dm, author=cls.alice, text="привет")
 
     def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
         self.client.force_login(self.alice)
 
     def group(self):
@@ -687,21 +763,35 @@ class PublishTests(TestCase):
         Membership.objects.create(chat=chat, user=self.bob)
         return chat
 
-    def test_send_notifies_chat(self):
+    def test_send_notifies_chat_with_the_message(self):
+        """С сообщением: по нему получатель поправит счётчик, не спрашивая сервер."""
         with mock.patch("chats.views.notify_chat") as notify:
             self.client.post(reverse("message_send", args=[self.dm.pk]), {"text": "ещё"})
-        notify.assert_called_once_with(self.dm.pk)
+        notify.assert_called_once_with(self.dm.pk, Message.objects.get(text="ещё"))
 
     def test_reaction_and_delete_notify_chat(self):
+        """С видом изменения: по нему вкладка решает, что перечитывать. Реакция не
+        трогает ни счётчик, ни список чатов, а удаление — и то и другое."""
         with mock.patch("chats.views.notify_chat") as notify:
             self.client.post(reverse("message_react", args=[self.message.pk]), {"emoji": "🔥"})
             self.client.post(reverse("message_delete", args=[self.message.pk]))
-        self.assertEqual(notify.call_args_list, [mock.call(self.dm.pk), mock.call(self.dm.pk)])
+        self.assertEqual(
+            notify.call_args_list,
+            [mock.call(self.dm.pk, kind="react"), mock.call(self.dm.pk, kind="delete")],
+        )
+
+    def test_a_system_line_notifies_with_its_message(self):
+        """Она такое же новое сообщение. Без него получатели молча вернулись бы к запросу
+        за счётчиком — ровно к тому, от чего событие и обросло данными."""
+        chat = self.group()
+        with mock.patch("chats.views.notify_chat") as notify:
+            self.client.post(reverse("chat_rename", args=[chat.pk]), {"title": "Новое имя"})
+        notify.assert_called_once_with(chat.pk, Message.objects.get(chat=chat, author=None))
 
     def test_edit_notifies_chat(self):
         with mock.patch("chats.views.notify_chat") as notify:
             self.client.post(reverse("message_edit", args=[self.message.pk]), {"text": "правка"})
-        notify.assert_called_once_with(self.dm.pk)
+        notify.assert_called_once_with(self.dm.pk, kind="edit")
 
     def test_edit_without_changes_stays_quiet(self):
         with mock.patch("chats.views.notify_chat") as notify:
@@ -711,7 +801,7 @@ class PublishTests(TestCase):
     def test_new_dm_notifies_the_other_side(self):
         """Собеседник не подписан на группу чата, которого секунду назад не было."""
         with mock.patch("chats.views.notify_joined") as notify:
-            self.client.get(reverse("dm_start", args=[self.carol.pk]))
+            self.client.post(reverse("dm_start", args=[self.carol.pk]))
         chat = Chat.objects.get(kind="dm", dm_key=Chat.dm_key_for(self.alice, self.carol))
         notify.assert_called_once_with(self.carol.pk, chat.pk)
 
@@ -739,12 +829,59 @@ class PublishTests(TestCase):
             self.client.post(reverse("chat_leave", args=[chat.pk]))
         notify.assert_called_once_with(self.alice.pk, chat.pk)
 
-    def test_delete_notifies_before_the_chat_is_gone(self):
+    def test_delete_unsubscribes_every_member(self):
+        """Каждому лично, а не в группу чата: от общего события сокет остался бы в группе
+        несуществующего чата и слушал бы её до переподключения."""
         chat = self.group()
-        with mock.patch("chats.views.notify_chat") as notify:
+        with mock.patch("chats.views.notify_left") as notify:
             self.client.post(reverse("chat_delete", args=[chat.pk]))
-        notify.assert_called_once_with(chat.pk)
+        self.assertEqual(
+            sorted(call.args for call in notify.call_args_list),
+            sorted([(self.alice.pk, chat.pk), (self.bob.pk, chat.pk)]),
+        )
         self.assertFalse(Chat.objects.filter(pk=chat.pk).exists())
+
+
+class EventPayloadTests(TestCase):
+    """Что именно уходит в сокет. От этого зависит, пойдёт ли вкладка на сервер: раньше
+    она ходила за счётчиком непрочитанных на КАЖДОЕ сообщение в каждом своём чате, и в
+    чате курса одно сообщение стоило столько запросов, сколько там людей онлайн."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def published(self, *args):
+        with mock.patch("chats.events._publish") as publish:
+            notify_chat(*args)
+        return publish.call_args.args[1]
+
+    def test_a_new_message_says_whose_it_is_and_which(self):
+        message = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
+        self.assertEqual(
+            self.published(self.chat.pk, message),
+            {"type": "chat.event", "chat": self.chat.pk, "msg": message.pk, "author": self.bob.pk},
+        )
+
+    def test_a_system_line_has_no_author_but_still_counts(self):
+        """Пустой автор на клиенте сошёлся бы за «моё», и строка не попала бы в счётчик."""
+        message = Message.objects.create(chat=self.chat, text="Кто-то покинул группу")
+        self.assertEqual(self.published(self.chat.pk, message)["author"], 0)
+
+    def test_a_change_says_only_which_chat(self):
+        """Правку и удаление на клиенте не сосчитать — за числом пусть идёт к серверу."""
+        self.assertEqual(self.published(self.chat.pk), {"type": "chat.event", "chat": self.chat.pk})
+
+    def test_a_change_says_what_exactly_changed(self):
+        """По виду изменения вкладка решает, что перечитывать. Без него реакция в чате
+        курса стоила бы трёх запросов с каждой открытой вкладки — за счётчиком, за
+        списком чатов и за лентой, — хотя меняется в ней один пузырь."""
+        with mock.patch("chats.events._publish") as publish:
+            notify_chat(self.chat.pk, kind="react")
+        self.assertEqual(publish.call_args.args[1]["kind"], "react")
+
 
 
 class ChannelLayerConfigTests(TestCase):
@@ -785,6 +922,28 @@ class ConsumerTests(TransactionTestCase):
         self.assertEqual(await socket.receive_json_from(), {"chat": self.chat.pk})
         await socket.disconnect()
 
+    async def test_the_event_reaches_the_browser_whole(self):
+        """Счётчик на клиенте считается по author и msg. Срежь их консьюмер — вкладка
+        молча вернулась бы к запросу на сервер за каждым сообщением."""
+        socket, _ = await self.open_socket(self.alice)
+        await get_channel_layer().group_send(chat_group(self.chat.pk), {
+            "type": "chat.event", "chat": self.chat.pk, "msg": 7, "author": self.bob.pk,
+        })
+        self.assertEqual(
+            await socket.receive_json_from(), {"chat": self.chat.pk, "msg": 7, "author": self.bob.pk}
+        )
+        await socket.disconnect()
+
+    async def test_the_kind_of_change_reaches_the_browser(self):
+        """По нему вкладка решает, что перечитывать. Срежь его консьюмер — реакция
+        снова стоила бы трёх запросов с каждой открытой вкладки."""
+        socket, _ = await self.open_socket(self.alice)
+        await get_channel_layer().group_send(chat_group(self.chat.pk), {
+            "type": "chat.event", "chat": self.chat.pk, "kind": "react",
+        })
+        self.assertEqual(await socket.receive_json_from(), {"chat": self.chat.pk, "kind": "react"})
+        await socket.disconnect()
+
     async def test_stranger_gets_nothing(self):
         socket, _ = await self.open_socket(self.stranger)
         await get_channel_layer().group_send(chat_group(self.chat.pk), {"type": "chat.event", "chat": self.chat.pk})
@@ -807,6 +966,780 @@ class ConsumerTests(TransactionTestCase):
         chat = Chat.objects.create(kind="group", title="Проект")
         Membership.objects.create(chat=chat, user=self.alice)
         return chat
+
+
+class SendLimitTests(TestCase):
+    """Одно сообщение расходится по вкладкам всех участников, а в чате курса их под сотню."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+        self.url = reverse("message_send", args=[self.chat.pk])
+
+    def test_the_flood_stops_and_leaves_nothing_behind(self):
+        for i in range(SEND_LIMIT):
+            self.assertEqual(self.client.post(self.url, {"text": f"раз {i}"}).status_code, 200)
+        self.assertEqual(self.client.post(self.url, {"text": "лишнее"}).status_code, 429)
+        self.assertEqual(Message.objects.count(), SEND_LIMIT)
+
+    def test_the_limit_is_personal(self):
+        for i in range(SEND_LIMIT + 1):
+            self.client.post(self.url, {"text": f"раз {i}"})
+        self.client.force_login(self.bob)
+        self.assertEqual(self.client.post(self.url, {"text": "а мне можно"}).status_code, 200)
+
+    def test_reactions_are_limited_as_well(self):
+        """Реакция расходится по чату таким же событием, как и сообщение: без предела
+        одно нажатие в цикле поднимало бы на ноги все вкладки курса."""
+        message = Message.objects.create(chat=self.chat, author=self.alice, text="раз")
+        url = reverse("message_react", args=[message.pk])
+        for _ in range(ACT_LIMIT):
+            self.assertEqual(self.client.post(url, {"emoji": "👍"}).status_code, 200)
+        self.assertEqual(self.client.post(url, {"emoji": "🔥"}).status_code, 429)
+
+    def test_the_action_limit_is_shared_by_edits_and_deletes(self):
+        message = Message.objects.create(chat=self.chat, author=self.alice, text="раз")
+        react = reverse("message_react", args=[message.pk])
+        for _ in range(ACT_LIMIT):
+            self.client.post(react, {"emoji": "👍"})
+        self.assertEqual(
+            self.client.post(reverse("message_delete", args=[message.pk])).status_code, 429
+        )
+        self.assertFalse(Message.objects.get(pk=message.pk).deleted)
+
+
+class CatchUpTests(TestCase):
+    """Догон по курсору. Вкладку оставляют открытой на ночь, а чат курса за ночь живёт."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+        cls.seen = Message.objects.create(chat=cls.chat, author=cls.bob, text="это мы видели")
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+        self.url = reverse("messages_new", args=[self.chat.pk])
+
+    def flood(self, count):
+        Message.objects.bulk_create(
+            [Message(chat=self.chat, author=self.bob, text=f"№{i}") for i in range(count)]
+        )
+
+    def test_a_gap_we_can_stitch_arrives_as_messages(self):
+        self.flood(CATCH_UP)
+        response = self.client.get(self.url, {"after": self.seen.pk})
+        self.assertNotIn("HX-Refresh", response.headers)
+        self.assertContains(response, "№0")
+        self.assertContains(response, f"№{CATCH_UP - 1}")
+        self.assertEqual(response.content.decode().count('data-id="'), CATCH_UP)
+
+    def test_the_limit_is_part_of_the_query(self):
+        """Иначе ночная переписка сначала целиком приезжает в память и там же выбрасывается."""
+        self.flood(CATCH_UP + 50)
+        with CaptureQueriesContext(connection) as ctx:
+            self.client.get(self.url, {"after": self.seen.pk})
+        feed = [q["sql"] for q in ctx.captured_queries if "chats_message" in q["sql"]]
+        self.assertTrue(any(f"LIMIT {CATCH_UP + 1}" in sql for sql in feed), feed)
+
+    def test_a_gap_too_wide_asks_the_page_to_redraw(self):
+        """Порциями такой разрыв не сшить, а у страницы своя пагинация."""
+        self.flood(CATCH_UP + 1)
+        response = self.client.get(self.url, {"after": self.seen.pk})
+        self.assertEqual(response.headers.get("HX-Refresh"), "true")
+        self.assertEqual(response.content, b"")
+
+    def test_sending_across_a_wide_gap_redraws_too(self):
+        """Своё сообщение уже записано — страница перечитает ленту вместе с ним."""
+        self.flood(CATCH_UP + 1)
+        response = self.client.post(
+            reverse("message_send", args=[self.chat.pk]), {"text": "моё", "after": self.seen.pk}
+        )
+        self.assertEqual(response.headers.get("HX-Refresh"), "true")
+        self.assertTrue(Message.objects.filter(text="моё").exists())
+
+
+class DayDividerTests(TestCase):
+    """Дата в ленте. До неё у сообщения были одни часы, и позавчерашнее выглядело сегодняшним."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+
+    def say(self, text, days_ago=0, author=None):
+        message = Message.objects.create(chat=self.chat, author=author or self.bob, text=text)
+        if days_ago:
+            # не через create: `created` там заполняет default, и своё значение он затрёт
+            Message.objects.filter(pk=message.pk).update(created=timezone.now() - timedelta(days=days_ago))
+            message.refresh_from_db()
+        return message
+
+    def feed(self):
+        return self.client.get(reverse("chat_detail", args=[self.chat.pk])).content.decode()
+
+    def test_every_day_gets_its_own_line(self):
+        self.say("позавчера", days_ago=2)
+        self.say("вчера", days_ago=1)
+        self.say("сегодня")
+        page = self.feed()
+        self.assertEqual(page.count("data-day="), 3)
+        self.assertIn("Вчера", page)
+        self.assertIn("Сегодня", page)
+
+    def test_messages_of_one_day_share_one_line(self):
+        for i in range(3):
+            self.say(f"сегодня {i}")
+        self.assertEqual(self.feed().count("data-day="), 1)
+
+    def test_the_date_stands_once_even_when_history_comes_in_pieces(self):
+        """Порция начинается посреди дня — дата над ней означала бы, что день начался тут."""
+        for i in range(PAGE_SIZE + 5):
+            self.say(f"сегодня {i}")
+        # Всё прочитано: иначе чат открылся бы с первого непрочитанного, то есть с начала
+        Membership.objects.filter(chat=self.chat, user=self.alice).update(
+            last_read=Message.objects.latest("id")
+        )
+        self.assertNotIn("data-day=", self.feed())
+
+        oldest_shown = Message.objects.order_by("-id")[PAGE_SIZE - 1]
+        older = self.client.get(
+            reverse("messages_older", args=[self.chat.pk]), {"before": oldest_shown.pk}
+        ).content.decode()
+        self.assertEqual(older.count("data-day="), 1)
+
+    def test_a_new_message_of_the_same_day_brings_no_date(self):
+        first = self.say("сегодня")
+        self.say("тоже сегодня")
+        answer = self.client.get(reverse("messages_new", args=[self.chat.pk]), {"after": first.pk})
+        self.assertNotContains(answer, "data-day=")
+
+    def test_the_first_message_after_midnight_brings_the_date(self):
+        yesterday = self.say("вчера", days_ago=1)
+        self.say("сегодня")
+        answer = self.client.get(reverse("messages_new", args=[self.chat.pk]), {"after": yesterday.pk})
+        self.assertContains(answer, "Сегодня")
+
+    def test_a_redrawn_bubble_carries_no_date(self):
+        """Пузырь подменяется на месте, а дата стоит соседним узлом — иначе она задвоится."""
+        self.say("вчера", days_ago=1)
+        today = self.say("сегодня")
+        self.assertNotContains(self.client.get(reverse("message_card", args=[today.pk])), "data-day=")
+
+    def test_an_oob_replacement_carries_no_date(self):
+        self.say("вчера", days_ago=1)
+        today = self.say("сегодня")
+        Message.objects.filter(pk=today.pk).update(updated=timezone.now())
+        answer = self.client.get(
+            reverse("messages_new", args=[self.chat.pk]), {"after": today.pk, "since": today.pk}
+        )
+        self.assertContains(answer, "hx-swap-oob")
+        self.assertNotContains(answer, "data-day=")
+
+
+class PackTests(TestCase):
+    """Пачки: подряд идущие сообщения одного автора рисуют аватар и имя один раз.
+    Иначе каждое «ага» тащит за собой лицо и подпись, и лента выглядит рвано."""
+
+    SPACER = '<span class="w-8 shrink-0"></span>'  # пустое место вместо аватара
+    # Именно подпись, а не имя где угодно: оно есть и в data-author каждого пузыря —
+    # оттуда его берёт меню, когда на сообщение отвечают.
+    SIGNED = ">Бобров Борис</a>"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local", "Алиса", "Аброва")
+        cls.bob = make_user("b@t.local", "Борис", "Бобров")
+        cls.chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.bulk_create([
+            Membership(chat=cls.chat, user=cls.alice), Membership(chat=cls.chat, user=cls.bob),
+        ])
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+
+    def say(self, author, text):
+        return Message.objects.create(chat=self.chat, author=author, text=text)
+
+    def at(self, author, text, hour):
+        """Сообщение в заданный час СЕГОДНЯШНЕГО дня.
+
+        Не «столько-то назад»: два часа назад в половине первого ночи — это уже вчера,
+        и тест про молчание проверял бы разрыв дня вместо разрыва пачки. Один раз он так
+        и прошёл мимо сломанной проверки.
+        """
+        message = Message.objects.create(chat=self.chat, author=author, text=text)
+        when = timezone.localtime().replace(hour=hour, minute=0, second=0, microsecond=0)
+        Message.objects.filter(pk=message.pk).update(created=when)
+        message.refresh_from_db()
+        return message
+
+    def feed(self):
+        return self.client.get(reverse("chat_detail", args=[self.chat.pk])).content.decode()
+
+    def card(self, message):
+        return self.client.get(reverse("message_card", args=[message.pk])).content.decode()
+
+    def test_a_run_of_one_author_is_signed_once(self):
+        for i in range(3):
+            self.say(self.bob, f"раз {i}")
+        page = self.feed()
+        self.assertEqual(page.count(self.SIGNED), 1)
+        self.assertEqual(page.count(self.SPACER), 2)
+
+    def test_another_author_starts_a_new_pack(self):
+        self.say(self.bob, "первое")
+        self.say(self.alice, "второе")
+        self.assertNotIn(self.SPACER, self.feed())
+
+    def test_a_long_silence_starts_a_new_pack(self):
+        """Вернулся человек через час — это уже другой разговор, подпись нужна заново.
+        День при этом один и тот же: проверяем разрыв пачки, а не разрыв суток."""
+        self.at(self.bob, "утром", 10)
+        self.at(self.bob, "днём", 13)
+        self.assertNotIn(self.SPACER, self.feed())
+
+    def test_a_redrawn_bubble_remembers_its_pack(self):
+        """Пузырь подменяется целиком: забудь он про пачку — аватар пропадал бы от реакции."""
+        first = self.say(self.bob, "первое")
+        second = self.say(self.bob, "второе")
+        self.assertNotIn(self.SPACER, self.card(first))
+        self.assertIn(self.SPACER, self.card(second))
+
+    def test_the_seam_between_batches_does_not_repeat_the_avatar(self):
+        """Порция приезжает без соседей — без оглядки на них она начинала бы пачку заново."""
+        first = self.say(self.bob, "первое")
+        self.say(self.bob, "второе")
+        answer = self.client.get(reverse("messages_new", args=[self.chat.pk]), {"after": first.pk})
+        self.assertContains(answer, self.SPACER)
+
+    def test_an_oob_replacement_remembers_its_pack_too(self):
+        """Правят как раз первое сообщение пачки — без пометок оно теряло бы аватар и имя."""
+        first = self.say(self.bob, "первое")
+        second = self.say(self.bob, "второе")
+        Message.objects.filter(pk=first.pk).update(updated=timezone.now())
+        answer = self.client.get(
+            reverse("messages_new", args=[self.chat.pk]), {"after": second.pk, "since": first.pk}
+        )
+        self.assertContains(answer, "hx-swap-oob")
+        self.assertContains(answer, self.SIGNED)
+        self.assertNotContains(answer, self.SPACER)
+
+    def test_a_dialogue_needs_no_names(self):
+        """Собеседник один и он в шапке — подпись в каждом пузыре была бы шумом.
+        Аватар при этом остаётся: без него своё от чужого отличал бы только оттенок."""
+        dm = Chat.get_or_create_dm(self.alice, self.bob)
+        message = Message.objects.create(chat=dm, author=self.bob, text="привет")
+        card = self.client.get(reverse("message_card", args=[message.pk])).content.decode()
+        self.assertNotIn(self.SIGNED, card)
+        self.assertIn(f'href="{reverse("profile", args=[self.bob.pk])}" class="shrink-0"', card)
+
+    def test_a_group_signs_who_is_speaking(self):
+        self.assertIn(self.SIGNED, self.card(self.say(self.bob, "привет")))
+
+    def test_my_own_message_is_signed_as_mine(self):
+        """Своё отличается цветом пузыря и подписью, а не стороной экрана."""
+        self.assertIn(">Вы</a>", self.card(self.say(self.alice, "моё")))
+
+    def test_a_quote_is_signed_like_the_bubble_itself(self):
+        """Раньше в цитате стояло одно имя, а в подписи — Фамилия Имя. Разнобой на виду."""
+        mine = self.say(self.alice, "моё")
+        theirs = self.say(self.bob, "чужое")
+        answer = Message.objects.create(chat=self.chat, author=self.bob, text="ответ", reply_to=mine)
+        self.assertIn(">Вы</span>", self.card(answer))
+
+        answer.reply_to = theirs
+        answer.save(update_fields=["reply_to"])
+        self.assertIn(">Бобров Борис</span>", self.card(answer))
+
+
+class OnlineTests(TestCase):
+    """«В сети» в шапке. Отметка активности освежается раз в пять минут, поэтому это
+    «заходил только что», и окно взято вдвое шире — иначе половина сидящих в него не попадёт."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.bulk_create([
+            Membership(chat=cls.chat, user=cls.alice), Membership(chat=cls.chat, user=cls.bob),
+        ])
+
+    def test_the_header_counts_who_is_around(self):
+        self.client.force_login(self.alice)  # вход заводит запись сессии с отметкой «сейчас»
+        self.assertContains(self.client.get(reverse("chat_detail", args=[self.chat.pk])), "1 в сети")
+
+    def test_yesterdays_visit_does_not_count(self):
+        self.client.force_login(self.alice)
+        UserSession.objects.update(seen=timezone.now() - timedelta(days=1))
+        self.assertNotContains(self.client.get(reverse("chat_detail", args=[self.chat.pk])), "в сети")
+
+
+class UnreadOpenTests(TestCase):
+    """Чат открывается там, где человек остановился, а не в конце переписки."""
+
+    MARK = "data-unread"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+        self.url = reverse("chat_detail", args=[self.chat.pk])
+
+    def flood(self, count, author=None):
+        return Message.objects.bulk_create(
+            [Message(chat=self.chat, author=author or self.bob, text=f"№{i}") for i in range(count)]
+        )
+
+    def read_all(self):
+        Membership.objects.filter(chat=self.chat, user=self.alice).update(
+            last_read=Message.objects.latest("id")
+        )
+
+    def test_the_line_stands_before_the_first_unread(self):
+        self.flood(3)
+        seen = Message.objects.order_by("id").first()
+        Membership.objects.filter(chat=self.chat, user=self.alice).update(last_read=seen)
+        page = self.client.get(self.url).content.decode()
+        self.assertEqual(page.count(self.MARK), 1)
+        self.assertLess(page.index("№1"), page.index("№2"))  # черта между ними, порядок цел
+        self.assertLess(page.index(self.MARK), page.index("№1"))
+
+    def test_everything_read_means_no_line(self):
+        self.flood(3)
+        self.read_all()
+        self.assertNotContains(self.client.get(self.url), self.MARK)
+
+    def test_my_own_message_is_not_unread(self):
+        """Черта над собственной репликой выглядела бы так, будто себя не читали."""
+        self.flood(2)
+        self.read_all()
+        Message.objects.create(chat=self.chat, author=self.alice, text="моё")
+        self.assertNotContains(self.client.get(self.url), self.MARK)
+
+    def test_a_night_of_unread_opens_at_the_start_of_it(self):
+        """Иначе после ночи в чате курса человек попадает в конец и листает назад руками."""
+        self.flood(PAGE_SIZE + 20)
+        page = self.client.get(self.url).content.decode()  # один раз: он же помечает прочитанным
+        self.assertIn("№0", page)  # самое старое непрочитанное
+        self.assertEqual(page.count(self.MARK), 1)
+
+    def test_a_week_of_unread_opens_as_usual(self):
+        """Столько непрочитанных — значит человека не было неделю; простыня тут не поможет."""
+        self.flood(CATCH_UP + 5)
+        page = self.client.get(self.url).content.decode()
+        self.assertNotIn("№0", page)  # открылись концом
+        self.assertNotIn(self.MARK, page)
+
+    def test_the_limit_is_part_of_the_query(self):
+        """Иначе непрочитанное за неделю сначала целиком приезжает в память и там же
+        выбрасывается — а решение открыться концом уже принято."""
+        self.flood(CATCH_UP + 5)
+        with CaptureQueriesContext(connection) as ctx:
+            self.client.get(self.url)
+        feed = [q["sql"] for q in ctx.captured_queries if "chats_message" in q["sql"]]
+        self.assertTrue(any(f"LIMIT {CATCH_UP + 1}" in sql for sql in feed), feed)
+
+    def test_opening_marks_what_it_showed_as_read(self):
+        self.flood(3)
+        self.client.get(self.url)
+        membership = Membership.objects.get(chat=self.chat, user=self.alice)
+        self.assertEqual(membership.last_read_id, Message.objects.latest("id").pk)
+
+
+class ReadersTests(TestCase):
+    """«Кто прочитал» — по нажатию. Живых галочек нет намеренно: чтобы они не врали,
+    курсор чтения каждого пришлось бы рассылать всем на каждый опрос."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local", "Алиса", "Аброва")
+        cls.bob = make_user("b@t.local", "Борис", "Бобров")
+        cls.carol = make_user("c@t.local", "Вера", "Волкова")
+        cls.chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.bulk_create([
+            Membership(chat=cls.chat, user=cls.alice),
+            Membership(chat=cls.chat, user=cls.bob),
+            Membership(chat=cls.chat, user=cls.carol),
+        ])
+        cls.earlier = Message.objects.create(chat=cls.chat, author=cls.bob, text="раньше")
+        cls.message = Message.objects.create(chat=cls.chat, author=cls.alice, text="моё")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+        self.url = reverse("message_readers", args=[self.message.pk])
+
+    def read_by(self, user):
+        Membership.objects.filter(chat=self.chat, user=user).update(last_read=self.message)
+
+    def test_nobody_yet(self):
+        self.assertContains(self.client.get(self.url), "Пока никто не прочитал")
+
+    def test_counts_out_of_everyone_but_me(self):
+        self.read_by(self.bob)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Прочитали 1 из 2")
+        self.assertContains(response, "Бобров Борис")
+        self.assertNotContains(response, "Волкова Вера")
+
+    def test_an_older_cursor_does_not_count(self):
+        """Курсор стоит на прежнем сообщении — значит до этого человек не дочитал."""
+        Membership.objects.filter(chat=self.chat, user=self.bob).update(last_read=self.earlier)
+        self.assertContains(self.client.get(self.url), "Пока никто не прочитал")
+
+    def test_a_dialogue_answers_yes_or_no(self):
+        """В ЛС собеседник один: список из одного человека вместо ответа — канцелярия."""
+        dm = Chat.get_or_create_dm(self.alice, self.bob)
+        mine = Message.objects.create(chat=dm, author=self.alice, text="моё")
+        url = reverse("message_readers", args=[mine.pk])
+        self.assertContains(self.client.get(url), "Ещё не прочитано")
+
+        Membership.objects.filter(chat=dm, user=self.bob).update(last_read=mine)
+        response = self.client.get(url)
+        self.assertContains(response, "Прочитано")
+        self.assertNotContains(response, "Бобров Борис")  # списка из одного тут не нужно
+
+    def test_a_dialogue_shows_ticks_in_the_bubble(self):
+        """В ЛС прочтение — одно событие одному человеку, и оно окупает живую галочку.
+        Спрашивать про неё через меню значило бы два клика ради ответа «да» или «нет»."""
+        dm = Chat.get_or_create_dm(self.alice, self.bob)
+        mine = Message.objects.create(chat=dm, author=self.alice, text="моё")
+        # Именно у галочки, а не где угодно на странице: fa-check-double есть и в меню
+        one = f'<i data-tick="{mine.pk}" class="fa-solid ml-1 fa-check">'
+        both = f'<i data-tick="{mine.pk}" class="fa-solid ml-1 fa-check-double text-accent">'
+        self.assertContains(self.client.get(reverse("chat_detail", args=[dm.pk])), one)
+
+        Membership.objects.filter(chat=dm, user=self.bob).update(last_read=mine)
+        self.assertContains(self.client.get(reverse("chat_detail", args=[dm.pk])), both)
+
+    def test_a_group_has_no_ticks(self):
+        """Иначе курсор каждого пришлось бы рассылать всем на каждый опрос."""
+        message = Message.objects.create(chat=self.chat, author=self.alice, text="в группу")
+        self.assertNotContains(self.client.get(reverse("message_card", args=[message.pk])), "data-tick")
+
+    def test_a_group_poll_does_not_ask_about_cursors(self):
+        """Галочек в группе нет, значит и курсор собеседника спрашивать не за чем —
+        а опрос идёт у каждой вкладки каждого участника."""
+        with CaptureQueriesContext(connection) as ctx:
+            self.client.get(
+                reverse("messages_new", args=[self.chat.pk]),
+                {"after": self.message.pk}, headers={"HX-Request": "true"},
+            )
+        asked = [q["sql"] for q in ctx.captured_queries if 'SELECT "chats_membership"."last_read_id" AS' in q["sql"]]
+        self.assertEqual(asked, [])
+
+    def test_reading_a_dialogue_tells_the_other_side(self):
+        self.client.force_login(self.bob)
+        dm = Chat.get_or_create_dm(self.alice, self.bob)
+        mine = Message.objects.create(chat=dm, author=self.alice, text="моё")
+        with mock.patch("chats.views.notify_read") as notify:
+            self.client.get(reverse("chat_detail", args=[dm.pk]))
+        notify.assert_called_once_with(dm.pk, self.bob.pk, mine.pk)
+
+    def test_reading_a_group_stays_quiet(self):
+        Message.objects.create(chat=self.chat, author=self.alice, text="в группу")
+        self.client.force_login(self.bob)
+        with mock.patch("chats.views.notify_read") as notify:
+            self.client.get(reverse("chat_detail", args=[self.chat.pk]))
+        notify.assert_not_called()
+
+    def test_only_the_author_may_ask(self):
+        self.client.force_login(self.bob)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_a_stranger_gets_nothing(self):
+        self.client.force_login(make_user("s@t.local"))
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+
+
+class LinkTests(TestCase):
+    """Ссылками в чате перекидываются постоянно — до этого их выделяли и копировали руками."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def bubble(self, text):
+        message = Message.objects.create(chat=self.chat, author=self.bob, text=text)
+        self.client.force_login(self.alice)
+        return self.client.get(reverse("message_card", args=[message.pk])).content.decode()
+
+    def test_a_link_becomes_clickable_in_a_new_tab(self):
+        page = self.bubble("разбор тут https://knt-mipt.ru/materials/")
+        self.assertIn('href="https://knt-mipt.ru/materials/"', page)
+        self.assertIn('target="_blank"', page)
+
+    def test_markup_in_the_text_stays_text(self):
+        """urlize сначала экранирует — иначе сообщение стало бы способом писать разметку."""
+        page = self.bubble('<script>alert(1)</script> и <b>жирным</b>')
+        self.assertNotIn("<script>", page)
+        self.assertNotIn("<b>жирным</b>", page)
+        self.assertIn("&lt;script&gt;", page)
+
+
+class ComposerTests(TestCase):
+    """Поле ввода. Было однострочным: абзац набрать нельзя вовсе — при том что пузырь
+    переносы показывать умеет, а форма правки сообщения и так была textarea."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+        cls.mine = Message.objects.create(chat=cls.chat, author=cls.alice, text="моё")
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+
+    def send(self, text):
+        self.client.post(reverse("message_send", args=[self.chat.pk]), {"text": text})
+        return Message.objects.latest("id").text
+
+    def test_the_field_takes_more_than_one_line(self):
+        self.assertContains(self.client.get(reverse("chat_detail", args=[self.chat.pk])), '<textarea name="text"')
+
+    def test_the_field_limit_comes_from_the_server(self):
+        """4000 стояло строкой в двух шаблонах, и разъехаться с сервером ему ничто не мешало."""
+        for url in (reverse("chat_detail", args=[self.chat.pk]), reverse("message_edit", args=[self.mine.pk])):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), f'maxlength="{MAX_TEXT}"')
+
+    def test_line_breaks_survive(self):
+        self.assertEqual(self.send("первая строка\nвторая строка"), "первая строка\nвторая строка")
+
+    def test_a_wall_of_empty_lines_is_folded(self):
+        """Иначе сообщение из четырёх тысяч переносов растянуло бы ленту у всех, кто в чате."""
+        self.assertEqual(self.send("верх" + "\n" * 50 + "низ"), "верх\n\nниз")
+
+    def test_spaces_do_not_smuggle_that_wall_through(self):
+        self.assertEqual(self.send("верх" + "\n   " * 50 + "низ"), "верх\n\nниз")
+
+    def test_the_editor_folds_them_too(self):
+        self.client.post(reverse("message_edit", args=[self.mine.pk]), {"text": "верх" + "\n" * 9 + "низ"})
+        self.mine.refresh_from_db()
+        self.assertEqual(self.mine.text, "верх\n\nниз")
+
+
+def picture(name="photo.webp", side=8, colour="red"):
+    """Настоящая картинка файлом: ImageField проверяет содержимое, а не расширение."""
+    buffer = BytesIO()
+    PilImage.new("RGB", (side, side), colour).save(buffer, format="PNG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+
+class AttachmentTests(TestCase):
+    """Вложения сообщения. Идут обычным multipart вместе с самим сообщением: запись
+    заводится в том же запросе, и в хранилище не остаётся сирот."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+        self.url = reverse("message_send", args=[self.chat.pk])
+
+    def test_a_photo_arrives_with_its_preview(self):
+        response = self.client.post(self.url, {
+            "text": "смотри", "photo": picture("shot.webp"), "preview": picture("shot.thumb.webp"),
+        })
+        self.assertEqual(response.status_code, 200)
+        image = Image.objects.get()
+        self.assertEqual(image.message, Message.objects.get())
+        self.assertTrue(image.image and image.preview)
+        self.assertEqual(image.uploader, self.alice)
+
+    def test_a_document_arrives_as_a_file(self):
+        self.client.post(self.url, {"doc": SimpleUploadedFile("конспект.pdf", b"%PDF-1.4\n")})
+        file = File.objects.get()
+        self.assertEqual(file.name, "конспект.pdf")
+        self.assertEqual(file.message, Message.objects.get())
+
+    def test_an_attachment_needs_no_caption(self):
+        """Фотографию отправляют молча чаще, чем с подписью."""
+        self.client.post(self.url, {"photo": picture()})
+        self.assertEqual(Message.objects.get().text, "")
+
+    def test_nothing_at_all_is_still_nothing(self):
+        self.assertEqual(self.client.post(self.url, {"text": "  "}).status_code, 204)
+        self.assertFalse(Message.objects.exists())
+
+    def test_too_many_at_once_are_refused_whole(self):
+        response = self.client.post(self.url, {
+            "text": "куча", "doc": [SimpleUploadedFile(f"{i}.txt", b"x") for i in range(MAX_FILES + 1)],
+        })
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Message.objects.exists())  # сообщение без вложений тоже не заводим
+
+    def test_a_forbidden_type_is_refused(self):
+        """Медиа отдаётся с домена сайта, и html оттуда выполнился бы как его код."""
+        response = self.client.post(self.url, {"doc": SimpleUploadedFile("hack.html", b"<script>")})
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(File.objects.exists())
+
+    def test_a_photo_over_the_limit_is_refused(self):
+        """Предел подменяем, а не льём десять мегабайт: картинка должна остаться настоящей,
+        иначе отказ придёт не за размер, а за то, что это не картинка."""
+        with mock.patch("chats.uploads.MAX_PHOTO", 10):
+            response = self.client.post(self.url, {"photo": picture()})
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Image.objects.exists())
+
+    def test_a_document_over_the_limit_is_refused(self):
+        with mock.patch("chats.uploads.MAX_DOC", 10):
+            response = self.client.post(self.url, {"doc": SimpleUploadedFile("много.txt", b"x" * 50)})
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(File.objects.exists())
+
+    def test_something_that_is_not_a_picture_is_refused(self):
+        """Расширение ничего не доказывает: модельный ImageField содержимое не проверяет,
+        и без своей проверки «фотографией» стал бы любой файл с подходящим именем."""
+        response = self.client.post(self.url, {"photo": SimpleUploadedFile("fake.webp", b"not a picture")})
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Image.objects.exists())
+        self.assertFalse(Message.objects.exists())
+
+    def test_a_preview_that_is_not_a_picture_is_refused(self):
+        """Поле у миниатюры своё, а хранилище общее. Без проверки через него в бакет
+        уезжал бы файл любого содержимого — «картинкой» он был бы только по имени поля."""
+        response = self.client.post(self.url, {
+            "photo": picture(), "preview": SimpleUploadedFile("evil.html", b"<script>alert(1)</script>"),
+        })
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Image.objects.exists())
+        self.assertFalse(Message.objects.exists())
+
+    def test_a_preview_over_the_limit_is_refused(self):
+        with mock.patch("chats.uploads.MAX_PHOTO", 10):
+            response = self.client.post(self.url, {"photo": picture(side=1), "preview": picture(side=8)})
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Image.objects.exists())
+
+    def test_more_previews_than_photos_are_refused(self):
+        """Пары им ставит поле ввода, лишним взяться неоткуда: значит запрос не наш."""
+        response = self.client.post(self.url, {
+            "photo": picture(), "preview": [picture("a.webp"), picture("b.webp")],
+        })
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(Image.objects.exists())
+
+    def test_attachments_show_up_in_the_feed(self):
+        self.client.post(self.url, {"photo": picture(), "preview": picture("t.webp")})
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk])).content.decode()
+        self.assertIn("lightbox = ", page)  # картинка открывается на весь экран
+
+    def test_deleting_the_message_takes_the_attachments(self):
+        self.client.post(self.url, {"doc": SimpleUploadedFile("файл.txt", b"x")})
+        Message.objects.get().delete()
+        self.assertFalse(File.objects.exists())
+
+
+class ChatListLooksTests(TestCase):
+    """Мелочи списка и шапки, из-за которых чат выглядел неряшливо."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local")
+        cls.carol = make_user("c@t.local")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def test_yesterdays_message_is_not_dressed_as_todays(self):
+        message = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
+        Message.objects.filter(pk=message.pk).update(created=timezone.now() - timedelta(days=1))
+        Chat.objects.filter(pk=self.chat.pk).update(last_message=message)
+        page = self.client.get(reverse("chat_list")).content.decode()
+        self.assertIn("вчера", page)
+
+    def test_the_freshest_talk_is_on_top(self):
+        """По времени, а не по id: импорт старого сайта и демка заводят переписку задним
+        числом, и по id она выстраивалась в порядке заливки, а не разговора."""
+        old = Chat.objects.create(kind="group", title="Давняя группа")
+        Membership.objects.create(chat=old, user=self.alice)
+        fresh = Message.objects.create(chat=self.chat, author=self.bob, text="сегодня")
+        stale = Message.objects.create(chat=old, author=self.alice, text="год назад")
+        Message.objects.filter(pk=stale.pk).update(created=timezone.now() - timedelta(days=365))
+        Chat.objects.filter(pk=self.chat.pk).update(last_message=fresh)
+        Chat.objects.filter(pk=old.pk).update(last_message=stale)
+
+        page = self.client.get(reverse("chat_list")).content.decode()
+        self.assertLess(page.index("сегодня"), page.index("Давняя группа"))
+
+    def test_the_member_count_is_declined(self):
+        chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.bulk_create([
+            Membership(chat=chat, user=self.alice), Membership(chat=chat, user=self.bob),
+        ])
+        self.assertContains(self.client.get(reverse("chat_detail", args=[chat.pk])), "2 участника ")
+
+        Membership.objects.bulk_create(
+            [Membership(chat=chat, user=make_user(f"n{i}@t.local")) for i in range(3)]
+        )
+        self.assertContains(self.client.get(reverse("chat_detail", args=[chat.pk])), "5 участников ")
+
+    def test_a_wordless_photo_is_not_an_empty_line(self):
+        """Сообщение бывает из одних вложений, а строка в списке показывала его текст —
+        то есть пустоту, и чат выглядел как чат без сообщений."""
+        cache.clear()
+        self.client.post(reverse("message_send", args=[self.chat.pk]), {"photo": picture()})
+        self.assertContains(self.client.get(reverse("chat_list")), "Вы: Фото")
+
+    def test_a_wordless_document_is_named(self):
+        cache.clear()
+        self.client.post(
+            reverse("message_send", args=[self.chat.pk]),
+            {"doc": SimpleUploadedFile("конспект.pdf", b"%PDF-1.4\n")},
+        )
+        self.assertContains(self.client.get(reverse("chat_list")), "конспект.pdf")
+
+    def test_the_list_reads_members_of_direct_chats_only(self):
+        """Собеседник нужен только в ЛС, а участников читали у всех чатов подряд —
+        в чате курса это сотни людей за раз, и все они тут же выбрасывались."""
+        talk = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
+        Chat.objects.filter(pk=self.chat.pk).update(last_message=talk)
+        course = Chat.objects.create(kind="course", title="Курс", admission_year=2024, stage="bachelor")
+        Membership.objects.create(chat=course, user=self.alice)
+        crowd = [make_user(f"c{i}@t.local", surname=f"Ц{i}") for i in range(20)]
+        Membership.objects.bulk_create([Membership(chat=course, user=person) for person in crowd])
+        last = Message.objects.create(chat=course, author=crowd[0], text="привет курсу")
+        Chat.objects.filter(pk=course.pk).update(last_message=last)
+
+        loaded = sum(len(item.chat.memberships.all()) for item in _chat_items(self.alice))
+        self.assertEqual(loaded, 2, "участники группового чата читаются зря")
+
+    def test_a_vanished_chat_says_so_on_the_list(self):
+        """Вкладку с исчезнувшим чатом уводит сюда: 404 в ответ на догрузку — не объяснение."""
+        response = self.client.get(reverse("chat_list"), {"gone": "1"}, follow=True)
+        self.assertRedirects(response, reverse("chat_list"))
+        self.assertContains(response, "Чат больше недоступен")
 
 
 class TemplateHealthTests(TestCase):

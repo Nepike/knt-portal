@@ -28,7 +28,7 @@ GitHub Actions
 | `users` | Custom user model, sessions with a last-seen marker, forced password change on first login, the people directory |
 | `core` | Shared base: `Moderated` abstract model, subjects, terms, teams, name search, list filtering, sidebar sections, mail, throttling, HTMX middleware |
 | `wall` | A pixel canvas in the spirit of r/place — boards, pixels, placements, protected areas, live over WebSockets |
-| `chats` | Chats with membership, messages and reactions, live over WebSockets |
+| `chats` | Chats with membership, messages, reactions and attachments, live over WebSockets |
 | `materials` | Uploaded study materials, going through moderation |
 | `comments` | Discussion under a material or a lecture: threads, likes, images, anonymity |
 | `bookmarks` | "Come back to this": a mark on a material, book, lecture course or teacher, and the page listing them |
@@ -81,7 +81,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-922 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1008 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails

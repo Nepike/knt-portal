@@ -22,4 +22,5 @@ urlpatterns = [
     path("chats/messages/<int:pk>/edit/", views.message_edit, name="message_edit"),
     path("chats/messages/<int:pk>/delete/", views.message_delete, name="message_delete"),
     path("chats/messages/<int:pk>/react/", views.message_react, name="message_react"),
+    path("chats/messages/<int:pk>/readers/", views.message_readers, name="message_readers"),
 ]

@@ -67,7 +67,11 @@
         {% if own %}
         <a href="{% url 'profile_edit' %}" class="btn btn-secondary shrink-0"><i class="fa-solid fa-pen"></i>Редактировать</a>
         {% else %}
-        <a href="{% url 'dm_start' person.pk %}" class="btn btn-primary shrink-0"><i class="fa-solid fa-paper-plane"></i>Написать</a>
+        {# Форма, а не ссылка: диалог заводится в базе, и предзагрузчик ссылок делал бы это сам #}
+        <form method="post" action="{% url 'dm_start' person.pk %}" class="shrink-0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary"><i class="fa-solid fa-paper-plane"></i>Написать</button>
+        </form>
         {% endif %}
       </div>
 

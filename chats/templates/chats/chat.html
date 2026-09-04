@@ -1,11 +1,14 @@
 {% extends "core/base.html" %}
-{% load chat_extras %}
+{% load chat_extras text_extras %}
 
 {% block title %}{% if chat %}{% if other %}{{ other.full_name }}{% else %}{{ chat.title }}{% endif %}{% else %}Сообщения{% endif %}{% endblock %}
 
 {# Мессенджер ровно на экран: скроллится лента, не страница. На мобиле — без полей и подвала #}
 {% block wrapper_class %}h-dvh{% endblock %}
 {% block main_class %}min-h-0 sm:px-6 sm:py-6{% endblock %}
+{# Шире обычного: у остальных страниц колонка текста, а тут два столбца, и на большом #}
+{# мониторе мессенджер стоял бы посреди пустоты. Саму ленту держит в узде _message.html #}
+{% block main_width %}max-w-7xl{% endblock %}
 {% block footer %}{% endblock %}
 
 {% block content %}
@@ -18,26 +21,52 @@
       <button type="button" @click="newChat = true" class="btn btn-ghost !px-2.5" aria-label="Новый чат"><i class="fa-solid fa-pen-to-square"></i></button>
     </div>
     {# delay — склейка очереди: при пачке сообщений подряд перерисуемся один раз #}
-    <div class="flex-1 overflow-y-auto" hx-get="{% url 'chat_list_fragment' %}{% if chat %}?active={{ chat.pk }}{% endif %}"
+    <div class="scroll-slim flex-1 overflow-y-auto" hx-get="{% url 'chat_list_fragment' %}{% if chat %}?active={{ chat.pk }}{% endif %}"
          hx-trigger="chats:event from:body delay:300ms, chats:sync from:body" hx-swap="innerHTML">
       {% include "chats/_chat_list.html" %}
     </div>
   </aside>
 
   {% if chat %}
-  <section data-chat-id="{{ chat.pk }}" class="flex flex-col min-h-0 sm:rounded-2xl sm:border sm:border-slate-200 dark:sm:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden" x-data="chat()">
+  {# Адрес списка отдаём компоненту: ему есть куда уводить, когда чат исчез из-под ног #}
+  {# Вставка из буфера и перетаскивание — на всю секцию: картинку бросают куда попало #}
+  <section data-chat-id="{{ chat.pk }}" class="flex flex-col min-h-0 sm:rounded-2xl sm:border sm:border-slate-200 dark:sm:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
+           x-data="chat('{% url 'chat_list' %}', {{ upload_limits }})"
+           @paste="dropped($event)" @dragover.prevent @drop.prevent="dropped($event)">
 
     <header class="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800">
       <a href="{% url 'chat_list' %}" class="lg:hidden text-slate-400 hover:text-accent" aria-label="К списку"><i class="fa-solid fa-arrow-left"></i></a>
+      {% comment %}
+        Лицо собеседника (или значок вида чата) в шапке: раньше её занимала одна строка
+        текста, и открытый чат ничем не отличался от любой другой страницы сайта.
+
+        «В сети» считается по отметке последней активности, а она освежается раз в пять
+        минут (users/sessions.py) — то есть это «заходил только что», а не присутствие
+        секунда в секунду. Поэтому и написано без обещаний.
+      {% endcomment %}
       {% if chat.kind == "dm" and other %}
-      <a href="{% url 'profile' other.pk %}" class="min-w-0 hover:opacity-80 transition-opacity">
-        <p class="font-semibold text-sm truncate">{{ other.full_name }}</p>
-        <p class="text-xs text-slate-400">{{ other.team.get_grade_str|default:"личные сообщения" }}</p>
+      <a href="{% url 'profile' other.pk %}" class="flex items-center gap-3 min-w-0 hover:opacity-80 transition-opacity">
+        {% include "core/_avatar.html" with person=other box="w-10 h-10 rounded-[22%]" text="text-sm" only %}
+        <span class="min-w-0">
+          <span class="block font-semibold text-sm truncate">{{ other.full_name }}</span>
+          <span class="block text-xs {% if other_online %}text-emerald-500{% else %}text-slate-400{% endif %}">
+            {% if other_online %}в сети{% else %}{{ other.team.get_grade_str|default:"личные сообщения" }}{% endif %}
+          </span>
+        </span>
       </a>
       {% else %}
-      <button type="button" @click="members = true" class="min-w-0 text-left hover:opacity-80 transition-opacity">
-        <p class="font-semibold text-sm truncate">{{ chat.title }}</p>
-        <p class="text-xs text-slate-400">{{ chat.memberships.all|length }} участников · нажми для списка</p>
+      <button type="button" @click="members = true" class="flex items-center gap-3 min-w-0 text-left hover:opacity-80 transition-opacity">
+        <span class="w-10 h-10 rounded-[22%] shrink-0 inline-flex items-center justify-center bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400">
+          <i class="fa-solid {% if chat.kind == 'course' %}fa-graduation-cap{% else %}fa-users{% endif %}"></i>
+        </span>
+        <span class="min-w-0">
+          <span class="block font-semibold text-sm truncate">{{ chat.title }}</span>
+          {% with count=chat.memberships.all|length %}
+          <span class="block text-xs text-slate-400">
+            {{ count }} {{ count|plural:"участник,участника,участников" }}{% if online %} · <span class="text-emerald-500">{{ online }} в сети</span>{% endif %}
+          </span>
+          {% endwith %}
+        </span>
       </button>
       {% endif %}
       {% if chat.kind == "dm" %}
@@ -49,16 +78,30 @@
     </header>
 
     {# Делегированно: пузыри постоянно перерисовываются htmx, обработчик на каждом — лишний #}
-    <div id="messages" x-ref="box" class="flex-1 overflow-y-auto p-4 flex flex-col gap-1.5"
-         @click="openMenu($event)" @contextmenu="openMenu($event)">
-      {% include "chats/_history.html" %}
+    <div class="relative flex-1 min-h-0 flex flex-col">
+      {# gap — расстояние ВНУТРИ пачки, между пачками добавляет сам пузырь (mt) #}
+      <div id="messages" x-ref="box" class="scroll-slim flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-0.5"
+           @click="openMenu($event)" @contextmenu="openMenu($event)">
+        {% include "chats/_history.html" %}
+      </div>
+
+      {# Кнопка «вниз»: прокрутил вверх — и не знаешь, дописали ли что-то, пока читал #}
+      {# Без x-transition: показ и скрытие тут идут пачками (пришло сообщение, дёрнулась #}
+      {# прокрутка), и прерванный переход оставлял кнопку висеть на прочитанной ленте. #}
+      <button type="button" x-show="!pinned" x-cloak @click="toBottom(true); below = 0"
+              class="absolute right-4 bottom-4 w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg text-slate-500 dark:text-slate-300 hover:text-accent"
+              aria-label="К последним сообщениям">
+        <i class="fa-solid fa-arrow-down"></i>
+        <span x-show="below" x-cloak x-text="below"
+              class="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-accent text-white dark:text-slate-950 text-xs font-bold leading-5"></span>
+      </button>
     </div>
 
     {% comment %}chats:current — открытый чат и вкладка на экране (иначе пометили бы
     прочитанным невиденное); chats:sync — догон после обрыва связи.{% endcomment %}
     <div hx-get="{% url 'messages_new' chat.pk %}" hx-swap="beforeend" hx-target="#messages"
          hx-trigger="chats:current from:body, chats:sync from:body"
-         hx-vals='js:{after: window.lastMessageId()}'></div>
+         hx-vals='js:{after: window.lastMessageId(), since: window.firstMessageId()}'></div>
 
     <div class="border-t border-slate-200 dark:border-slate-800">
       <div x-show="replyTo" x-cloak class="flex items-center gap-2 px-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -66,15 +109,92 @@
         <span class="min-w-0 flex-1 truncate">Ответ: <b x-text="replyTo?.author"></b> — <span x-text="replyTo?.text"></span></span>
         <button type="button" @click="replyTo = null" class="text-slate-400 hover:text-rose-500" aria-label="Отменить ответ"><i class="fa-solid fa-xmark"></i></button>
       </div>
-      {# after — курсор ленты: ответ донесёт и чужое, пришедшее пока набирали #}
-      <form class="chat-send flex items-center gap-2 p-3"
+      {% comment %}
+        after — курсор ленты: ответ донесёт и чужое, пришедшее пока набирали.
+
+        Поле — textarea, а не input: абзац в сообщении набрать было нельзя вовсе, при том
+        что пузырь переносы показывать умеет, а форма правки — уже textarea. Растёт по
+        содержимому до восьми строк (max-h), дальше прокручивается сам: иначе длинное
+        сообщение съедало бы ленту, ради которой человек сюда и пришёл.
+
+        items-end у формы — чтобы кнопка оставалась у нижнего края растущего поля.
+      {% endcomment %}
+      {% comment %}
+        Выбранные вложения. Строка живёт НАД полем ввода и до отправки: пока она видна,
+        человек может убрать лишнее, а фото уже сжато и готово уехать.
+      {% endcomment %}
+      <div x-show="picked.length" x-cloak class="flex gap-2 px-3 pt-2 overflow-x-auto overscroll-contain">
+        <template x-for="item in picked" :key="item.id">
+          <div class="relative shrink-0">
+            <template x-if="item.url">
+              <img :src="item.url" alt="" class="w-16 h-16 rounded-lg object-cover border border-slate-200 dark:border-slate-700">
+            </template>
+            <template x-if="!item.url">
+              <span class="w-16 h-16 rounded-lg border border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center gap-1 px-1 text-center">
+                <i class="fa-solid fa-file text-slate-400"></i>
+                <span class="w-full text-[10px] leading-tight truncate text-slate-500" x-text="item.name"></span>
+              </span>
+            </template>
+            <button type="button" @click="drop(item.id)" aria-label="Убрать"
+                    class="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-slate-900/70 text-white inline-flex items-center justify-center hover:bg-slate-900">
+              <i class="fa-solid fa-xmark text-[10px]"></i>
+            </button>
+          </div>
+        </template>
+      </div>
+
+      {% comment %}
+        hx-encoding — иначе htmx отправит форму как urlencoded, и файлы до сервера
+        не доедут вовсе. Сами файлы лежат в скрытых полях-носителях: то, что человек
+        выбрал, сначала проходит через сжатие, и в запрос уезжает уже результат.
+      {% endcomment %}
+      <form class="chat-send flex items-end gap-2 p-3" hx-encoding="multipart/form-data"
             hx-post="{% url 'message_send' chat.pk %}" hx-target="#messages" hx-swap="beforeend"
             hx-vals='js:{after: window.lastMessageId()}'>
         <input type="hidden" name="reply_to" :value="replyTo?.id ?? ''">
-        <input name="text" x-ref="input" autocomplete="off" placeholder="Сообщение…" maxlength="4000"
-               class="flex-1 h-10 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm outline-none focus:border-2 focus:border-accent transition">
-        <button type="submit" class="btn btn-primary" aria-label="Отправить"><i class="fa-solid fa-paper-plane"></i></button>
+        <input type="file" name="photo" x-ref="photoBox" multiple hidden>
+        <input type="file" name="preview" x-ref="previewBox" multiple hidden>
+        <input type="file" name="doc" x-ref="docBox" multiple hidden>
+
+        {# Пикеры без name: их содержимое в запрос не идёт, оно только повод начать работу #}
+        <input type="file" x-ref="pickPhoto" accept="image/*" multiple hidden @change="addPhotos($event)">
+        <input type="file" x-ref="pickDoc" multiple hidden @change="addDocs($event)">
+
+        <div class="relative" @click.outside="attachOpen = false">
+          <button type="button" @click="attachOpen = !attachOpen" :disabled="busy"
+                  class="btn btn-ghost !px-2.5 text-slate-400 hover:!text-accent" aria-label="Прикрепить">
+            <i class="fa-solid" :class="busy ? 'fa-spinner fa-spin' : 'fa-paperclip'"></i>
+          </button>
+          <div x-show="attachOpen" x-cloak @click="attachOpen = false"
+               class="absolute bottom-full left-0 mb-2 z-10 w-44 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
+            <button type="button" @click="$refs.pickPhoto.click()" class="w-full flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-image w-4 text-slate-400"></i>Фото</button>
+            <button type="button" @click="$refs.pickDoc.click()" class="w-full flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-file w-4 text-slate-400"></i>Файл</button>
+          </div>
+        </div>
+
+        <div class="flex-1 min-w-0 relative">
+          <textarea name="text" x-ref="input" rows="1" autocomplete="off" placeholder="Сообщение…"
+                    maxlength="{{ max_text }}" @input="grow()" @keydown.enter="send($event)"
+                    class="scroll-slim block w-full max-h-[10.5rem] resize-none rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3 pr-2 py-2 text-sm leading-snug outline-none focus:border-accent transition"></textarea>
+          {# Остаток показываем только у самого края: раньше о потолке узнавали, когда текст молча переставал набираться #}
+          <span x-show="typed > {{ max_text }} - 200" x-cloak
+                class="absolute bottom-1.5 right-3 text-[10px] leading-none text-slate-400 pointer-events-none"
+                x-text="{{ max_text }} - typed"></span>
+        </div>
+        <button type="submit" class="btn btn-primary" :disabled="busy" aria-label="Отправить"><i class="fa-solid fa-paper-plane"></i></button>
       </form>
+    </div>
+
+    {% comment %}
+      Картинка во весь экран. Одна на весь чат и снаружи ленты — по той же причине,
+      что и меню сообщения: внутри пузыря её сносило бы перерисовкой.
+    {% endcomment %}
+    <div x-show="lightbox" x-cloak @click="lightbox = ''" @keydown.escape.window="lightbox = ''"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <img :src="lightbox" alt="" class="max-w-full max-h-full rounded-lg">
+      <button type="button" class="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 text-white inline-flex items-center justify-center hover:bg-white/20" aria-label="Закрыть">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
     </div>
 
     {% comment %}Меню ОДНО на весь чат и ВНЕ ленты: внутри пузыря его сносило бы
@@ -88,21 +208,44 @@
              :class="sheet ? 'inset-x-0 bottom-0 rounded-t-2xl' : 'w-56 rounded-2xl transition-opacity ' + (pos ? '' : 'opacity-0')"
              class="absolute border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl overflow-hidden">
 
-          <div class="flex items-center justify-between gap-1 px-2 py-1.5 border-b border-slate-100 dark:border-slate-800">
+          {# Палитра прокручивается вбок: набор эмодзи может вырасти, а меню шире не станет #}
+          <div class="flex items-center gap-1 px-2 py-1.5 border-b border-slate-100 dark:border-slate-800 overflow-x-auto overscroll-contain">
             {% reaction_palette as palette %}
             {% for emoji in palette %}
             <button type="button" @click="react('{{ emoji }}')" aria-label="Реакция {{ emoji }}"
-                    class="flex-1 rounded-xl py-1.5 leading-none hover:scale-125 transition-transform"
-                    :class="sheet ? 'text-3xl' : 'text-xl'">{{ emoji }}</button>
+                    class="emoji shrink-0 flex-1 rounded-xl py-1.5 hover:scale-125 transition-transform"
+                    :class="sheet ? 'text-4xl' : 'text-2xl'">{{ emoji }}</button>
             {% endfor %}
           </div>
 
           <button type="button" @click="menuAction('reply')" class="msg-action"><i class="fa-solid fa-reply w-4 text-slate-400"></i>Ответить</button>
           <button type="button" x-show="menu?.edit" @click="menuAction('edit')" class="msg-action"><i class="fa-solid fa-pen w-4 text-slate-400"></i>Изменить</button>
           <button type="button" x-show="menu?.del" @click="menuAction('delete')" class="msg-action !text-rose-500"><i class="fa-solid fa-trash w-4"></i>Удалить</button>
+          {# Прочтение — отдельно и в самом низу: это не действие над сообщением, а справка о нём #}
+          <button type="button" x-show="menu?.readers" @click="menuAction('readers')"
+                  class="msg-action border-t border-slate-100 dark:border-slate-800"><i class="fa-solid fa-check-double w-4 text-slate-400"></i>Кто прочитал</button>
         </div>
       </div>
     </template>
+
+    {% comment %}
+      Кто прочитал. ВНУТРИ секции: `readers` живёт в её x-data, а снаружи такой переменной
+      нет — окно молча оставалось бы скрытым, хотя запрос уходил и отвечал.
+
+      Тело всегда в DOM, хоть и скрыто: htmx подменяет его по id, а в шаблоне Alpine
+      (x-if) его создавали бы заново на каждое открытие, и htmx о нём не знал бы.
+    {% endcomment %}
+    <div x-show="readers" x-cloak @keydown.escape.window="readers = false"
+         class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-black/40" @click="readers = false"></div>
+      <div class="relative w-full max-w-sm max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-5">
+        <div class="flex items-center justify-between mb-1">
+          <h2 class="font-bold">Прочтение</h2>
+          <button type="button" @click="readers = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Закрыть"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div id="readers-body" class="flex-1 min-h-0 overflow-y-auto -mx-2 px-2"></div>
+      </div>
+    </div>
   </section>
 
   {% else %}

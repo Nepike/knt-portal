@@ -4,6 +4,10 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from .events import chat_group, user_group
 from .models import Membership
 
+# Что из события уходит в браузер. Не всё подряд: `type` — служебный ключ channels,
+# по нему он выбирает метод, и в окне браузера ему делать нечего.
+PAYLOAD = ("chat", "msg", "author", "read", "by", "kind")
+
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     """Один сокет на вкладку, а не на открытый чат.
@@ -39,7 +43,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     # --- сообщения из channel layer (ключ type определяет имя метода) ---
 
     async def chat_event(self, event):
-        await self.send_json({"chat": event["chat"]})
+        await self.send_json({key: event[key] for key in PAYLOAD if key in event})
 
     async def chat_joined(self, event):
         """Появился новый чат — досоединяемся к его группе и обновляем список."""

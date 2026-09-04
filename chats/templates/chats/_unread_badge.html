@@ -1,4 +1,6 @@
 {# Партиал сам себя перезапрашивает (hx-атрибуты внутри); при нуле скрыт, но остаётся в DOM #}
+{# На новое сообщение сервер не спрашиваем: счётчик прибавляет сама вкладка по событию #}
+{# сокета (chats/events.py). Сюда ходим за пересчётом — правка, удаление, догон связи. #}
 <span id="unread-badge" hx-get="{% url 'unread_badge' %}" hx-swap="outerHTML"
-      hx-trigger="chats:event from:body delay:300ms, chats:sync from:body"
+      hx-trigger="chats:recount from:body delay:300ms, chats:sync from:body"
       class="ml-auto inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-accent text-white dark:text-slate-950 text-xs font-bold {% if not unread_total %}hidden{% endif %}">{{ unread_total }}</span>
