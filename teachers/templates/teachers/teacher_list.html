@@ -15,7 +15,8 @@
   <a href="{% url 'teacher_detail' t.pk %}" class="relative flex items-center gap-4 sm:flex-col sm:gap-0 sm:text-center rounded-2xl border-2 bg-white dark:bg-slate-900 p-4 pr-10 sm:pr-4 sm:py-7 transition hover:-translate-y-0.5 hover:shadow-md
               {% if forloop.counter == 1 %}border-amber-400{% elif forloop.counter == 2 %}border-slate-300 dark:border-slate-600{% else %}border-amber-700/60{% endif %}">
     {% if forloop.counter == 1 %}
-    <i class="fa-solid fa-crown absolute -top-4 left-1/2 -translate-x-1/2 text-2xl text-amber-400 hidden sm:block"></i>
+    {# Восклицательный знак обязателен: стили FontAwesome вне слоёв и бьют утилиты Tailwind #}
+    <i class="fa-solid fa-crown absolute -top-4 left-1/2 -translate-x-1/2 text-2xl text-amber-400 !hidden sm:!block"></i>
     {% endif %}
     <span class="absolute top-2 right-3.5 font-black text-lg opacity-80
                  {% if forloop.counter == 1 %}text-amber-400{% elif forloop.counter == 2 %}text-slate-400{% else %}text-amber-700{% endif %}">#{{ forloop.counter }}</span>

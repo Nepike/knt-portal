@@ -1,0 +1,10 @@
+{% comment %}
+  Ответ на переключение закрепления и звука. Сам запрос ничего не подменяет
+  (hx-swap="none") — обе части приезжают oob-заменой по своим местам: строка в списке
+  слева меняет порядок, цвет метки и значок, а пункт меню — подпись.
+
+  innerHTML, а не элемент целиком: на самих контейнерах висят hx-атрибуты и Alpine,
+  и заменять их вместе с содержимым значило бы каждый раз собирать их заново.
+{% endcomment %}
+<div hx-swap-oob="innerHTML:#chat-list">{% include "chats/_chat_list.html" %}</div>
+<div hx-swap-oob="innerHTML:#chat-actions">{% include "chats/_chat_actions.html" %}</div>

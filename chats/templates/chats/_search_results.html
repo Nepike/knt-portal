@@ -1,0 +1,37 @@
+{% load chat_extras %}
+{% comment %}
+  Находки поиска по чату. Каждая ведёт на саму переписку в том месте, где сообщение
+  и лежит (?at=), а не показывает его отдельной карточкой: у реплики есть смысл только
+  рядом с соседями, ради которых человек и искал.
+{% endcomment %}
+{% if short %}
+<p class="p-6 text-center text-sm text-slate-400">Наберите ещё букву</p>
+{% elif not query %}
+<p class="p-6 text-center text-sm text-slate-400">Поиск по сообщениям этого чата</p>
+{% elif not found %}
+<p class="p-6 text-center text-sm text-slate-400">Ничего не нашлось</p>
+{% else %}
+{% for m in found %}
+<a href="{% url 'chat_detail' chat.pk %}?at={{ m.pk }}"
+   class="flex gap-3 px-3 py-2.5 mx-1.5 my-0.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+  {% if m.author %}
+  {% include "core/_avatar.html" with person=m.author box="w-9 h-9 rounded-[22%]" text="text-[11px]" only %}
+  {% else %}
+  <span class="w-9 h-9 rounded-[22%] shrink-0 inline-flex items-center justify-center bg-slate-200 dark:bg-slate-700 text-slate-500">
+    <i class="fa-solid fa-circle-info text-xs"></i>
+  </span>
+  {% endif %}
+  <span class="min-w-0 flex-1">
+    <span class="flex items-baseline gap-2">
+      <span class="text-sm font-medium truncate">{% if m.author %}{{ m.author.full_name }}{% else %}служебное{% endif %}</span>
+      <span class="ml-auto shrink-0 text-[11px] text-slate-400">{{ m.created|when }}</span>
+    </span>
+    {# Найденное подсвечиваем прямо в куске текста — иначе в длинной реплике его не видно #}
+    <span class="block text-xs text-slate-500 dark:text-slate-400 line-clamp-2">{{ m.text|spotlight:query }}</span>
+  </span>
+</a>
+{% endfor %}
+{% if limit_hit %}
+<p class="px-4 py-3 text-center text-xs text-slate-400">Показаны первые {{ found|length }} — уточните запрос</p>
+{% endif %}
+{% endif %}

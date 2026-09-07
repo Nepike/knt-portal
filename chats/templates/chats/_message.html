@@ -13,7 +13,7 @@
 </div>
 {% endif %}
 {% if not m.author %}
-<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="w-full max-w-3xl mx-auto text-center text-xs text-slate-400 py-1">{{ m.text }}</div>
+<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if at and m.pk == at %}data-at {% endif %}{% if oob %}hx-swap-oob="outerHTML" {% endif %}class="w-full max-w-3xl mx-auto text-center text-xs text-slate-400 py-1">{{ m.text }}</div>
 {% else %}
 {% with own=m|is_own:user %}
 {% comment %}
@@ -27,7 +27,7 @@
   У пачки — идущих подряд сообщений одного автора — аватар и имя только у первого
   (pack_start, chats/views.py). У остальных на месте аватара пустое место той же ширины.
 {% endcomment %}
-<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if oob %}hx-swap-oob="outerHTML" {% endif %}class="w-full max-w-3xl mx-auto flex gap-2{% if m.pack_start %} mt-2{% endif %}">
+<div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if at and m.pk == at %}data-at {% endif %}{% if oob %}hx-swap-oob="outerHTML" {% endif %}class="w-full max-w-3xl mx-auto flex gap-2{% if m.pack_start %} mt-2{% endif %}">
 
   {# Аватар у первого сообщения пачки, у остальных на его месте пустое место той же ширины #}
   {% if m.pack_start %}
@@ -73,7 +73,7 @@
       {% with summary=m|reaction_summary:user %}
       {% if summary %}
       {# С реакциями время живёт в их строке — отступ всегда одинаковый #}
-      {% if m.text %}<p class="text-sm leading-snug whitespace-pre-line break-words [&_a]:text-accent [&_a]:underline [&_a]:break-all">{{ m.text|links }}</p>{% endif %}
+      {% if m.text %}<p class="text-sm leading-snug whitespace-pre-line break-words [&_a]:text-accent [&_a]:underline [&_a]:break-all">{{ m|body }}</p>{% endif %}
       {% comment %}
         Реакции прокручиваются вбок: перенос растил бы пузырь, а их у сообщения бывает много.
 
@@ -81,7 +81,8 @@
         читался ярким пятном, а в тёмной теме проваливался. Своя реакция — сплошной
         акцент: на пузыре любого цвета видно, что нажимал именно ты.
       {% endcomment %}
-      <div class="flex items-center gap-1 mt-1 -mx-1 px-1 overflow-x-auto overscroll-contain">
+      {# data-sideways — тут свой жест вбок (прокрутка), и свайп для ответа сюда не лезет #}
+      <div data-sideways class="flex items-center gap-1 mt-1 -mx-1 px-1 overflow-x-auto overscroll-contain">
         {% for emoji, count, mine in summary %}
         <button type="button" hx-post="{% url 'message_react' m.pk %}" hx-vals='{"emoji": "{{ emoji }}"}'
                 hx-target="#msg-{{ m.id }}" hx-swap="outerHTML"
@@ -93,7 +94,7 @@
       </div>
       {% elif m.text %}
       {# Время «в телеграм-стиле»: float в конце последней строки; clearfix, чтобы пузырь его вмещал #}
-      <p class="text-sm leading-snug whitespace-pre-line break-words [&_a]:text-accent [&_a]:underline [&_a]:break-all after:content-[''] after:block after:clear-both">{{ m.text|links }}<span title="{{ m.created|date:'j E Y, H:i' }}" class="float-right ml-2 mt-[7px] text-[10px] leading-none whitespace-nowrap select-none text-slate-500 dark:text-slate-400">{% include "chats/_stamp.html" %}</span></p>
+      <p class="text-sm leading-snug whitespace-pre-line break-words [&_a]:text-accent [&_a]:underline [&_a]:break-all after:content-[''] after:block after:clear-both">{{ m|body }}<span title="{{ m.created|date:'j E Y, H:i' }}" class="float-right ml-2 mt-[7px] text-[10px] leading-none whitespace-nowrap select-none text-slate-500 dark:text-slate-400">{% include "chats/_stamp.html" %}</span></p>
       {% else %}
       {# Вложение без подписи: времени не к чему прижаться, ставим отдельной строкой #}
       <p title="{{ m.created|date:'j E Y, H:i' }}" class="text-right text-[10px] leading-none whitespace-nowrap select-none text-slate-500 dark:text-slate-400">{% include "chats/_stamp.html" %}</p>

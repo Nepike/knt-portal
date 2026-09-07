@@ -21,7 +21,7 @@
       <button type="button" @click="newChat = true" class="btn btn-ghost !px-2.5" aria-label="Новый чат"><i class="fa-solid fa-pen-to-square"></i></button>
     </div>
     {# delay — склейка очереди: при пачке сообщений подряд перерисуемся один раз #}
-    <div class="scroll-slim flex-1 overflow-y-auto" hx-get="{% url 'chat_list_fragment' %}{% if chat %}?active={{ chat.pk }}{% endif %}"
+    <div id="chat-list" class="scroll-slim flex-1 overflow-y-auto" hx-get="{% url 'chat_list_fragment' %}{% if chat %}?active={{ chat.pk }}{% endif %}"
          hx-trigger="chats:event from:body delay:300ms, chats:sync from:body" hx-swap="innerHTML">
       {% include "chats/_chat_list.html" %}
     </div>
@@ -31,7 +31,7 @@
   {# Адрес списка отдаём компоненту: ему есть куда уводить, когда чат исчез из-под ног #}
   {# Вставка из буфера и перетаскивание — на всю секцию: картинку бросают куда попало #}
   <section data-chat-id="{{ chat.pk }}" class="flex flex-col min-h-0 sm:rounded-2xl sm:border sm:border-slate-200 dark:sm:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
-           x-data="chat('{% url 'chat_list' %}', {{ upload_limits }})"
+           x-data="chat('{% url 'chat_list' %}', '{% url 'chat_people' chat.pk %}', {{ upload_limits }})"
            @paste="dropped($event)" @dragover.prevent @drop.prevent="dropped($event)">
 
     <header class="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800">
@@ -49,7 +49,9 @@
         {% include "core/_avatar.html" with person=other box="w-10 h-10 rounded-[22%]" text="text-sm" only %}
         <span class="min-w-0">
           <span class="block font-semibold text-sm truncate">{{ other.full_name }}</span>
-          <span class="block text-xs {% if other_online %}text-emerald-500{% else %}text-slate-400{% endif %}">
+          {# Пока собеседник печатает, состояние подменяем: «в сети» рядом с этим лишнее #}
+          <span x-show="typing" x-cloak x-text="typing" class="block text-xs text-accent truncate"></span>
+          <span x-show="!typing" class="block text-xs {% if other_online %}text-emerald-500{% else %}text-slate-400{% endif %}">
             {% if other_online %}в сети{% else %}{{ other.team.get_grade_str|default:"личные сообщения" }}{% endif %}
           </span>
         </span>
@@ -61,33 +63,85 @@
         </span>
         <span class="min-w-0">
           <span class="block font-semibold text-sm truncate">{{ chat.title }}</span>
+          <span x-show="typing" x-cloak x-text="typing" class="block text-xs text-accent truncate"></span>
           {% with count=chat.memberships.all|length %}
-          <span class="block text-xs text-slate-400">
+          <span x-show="!typing" class="block text-xs text-slate-400">
             {{ count }} {{ count|plural:"участник,участника,участников" }}{% if online %} · <span class="text-emerald-500">{{ online }} в сети</span>{% endif %}
           </span>
           {% endwith %}
         </span>
       </button>
       {% endif %}
-      {% if chat.kind == "dm" %}
-      <form method="post" action="{% url 'chat_delete' chat.pk %}" class="ml-auto" onsubmit="return confirm('Удалить диалог у обоих участников?')">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-ghost !px-2.5 text-slate-400 hover:!text-rose-500" aria-label="Удалить диалог"><i class="fa-solid fa-trash text-sm"></i></button>
-      </form>
-      {% endif %}
+      {% comment %}
+        Меню чата. Раньше в шапке висела одна корзина, и то только в ЛС, а всё остальное
+        пряталось в модалке участников — куда в диалоге и не попасть. Теперь действия
+        над самим чатом собраны в одном месте.
+      {% endcomment %}
+      <button type="button" @click="openSearch()" class="btn btn-ghost !px-2.5 ml-auto shrink-0 text-slate-400 hover:!text-accent" aria-label="Поиск по чату">
+        <i class="fa-solid fa-magnifying-glass"></i>
+      </button>
+      <div class="relative shrink-0" @click.outside="actions = false">
+        <button type="button" @click="actions = !actions" class="btn btn-ghost !px-2.5 text-slate-400 hover:!text-accent" aria-label="Действия с чатом">
+          <i class="fa-solid fa-ellipsis-vertical"></i>
+        </button>
+        <div x-show="actions" x-cloak @click="actions = false"
+             class="absolute top-full right-0 mt-2 z-20 w-56 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
+          <div id="chat-actions">{% include "chats/_chat_actions.html" %}</div>
+          {% if chat.kind == "dm" %}
+          <form method="post" action="{% url 'chat_delete' chat.pk %}" onsubmit="return confirm('Удалить диалог у обоих участников?')">
+            {% csrf_token %}
+            <button type="submit" class="msg-action !text-rose-500 border-t border-slate-100 dark:border-slate-800"><i class="fa-solid fa-trash w-4"></i>Удалить диалог</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
     </header>
 
+    {% comment %}
+      Поиск по чату. Строка выезжает под шапкой, находки занимают место ленты: они и
+      есть та же лента, только выбранная по слову, и показывать их сбоку значило бы
+      сжать переписку ради списка, который живёт полминуты.
+    {% endcomment %}
+    <div x-show="searching" x-cloak class="border-b border-slate-200 dark:border-slate-800">
+      <div class="flex items-center gap-2 px-3 py-2">
+        <i class="fa-solid fa-magnifying-glass text-slate-400 text-sm"></i>
+        <input x-ref="find" name="q" placeholder="Найти в переписке…" autocomplete="off"
+               hx-get="{% url 'message_search' chat.pk %}" hx-trigger="input changed delay:300ms"
+               hx-target="#search-results" @keydown.escape="closeSearch()"
+               class="flex-1 min-w-0 bg-transparent text-sm outline-none">
+        <button type="button" @click="closeSearch()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Закрыть поиск">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+    </div>
+
     {# Делегированно: пузыри постоянно перерисовываются htmx, обработчик на каждом — лишний #}
-    <div class="relative flex-1 min-h-0 flex flex-col">
+    <div x-show="!searching" class="relative flex-1 min-h-0 flex flex-col">
       {# gap — расстояние ВНУТРИ пачки, между пачками добавляет сам пузырь (mt) #}
       <div id="messages" x-ref="box" class="scroll-slim flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-0.5"
-           @click="openMenu($event)" @contextmenu="openMenu($event)">
+           @click="openMenu($event)" @contextmenu="openMenu($event)"
+           @touchstart="swipeStart($event)" @touchmove="swipeMove($event)"
+           @touchend="swipeEnd()" @touchcancel="swipeEnd()">
         {% include "chats/_history.html" %}
       </div>
+      {% comment %}
+        Стрелка ответа: одна на ленту, выезжает из-под сообщения, пока его тянут вбок.
+
+        Прятать значок обычным `hidden` нельзя: утилиты Tailwind лежат в @layer, а стили
+        FontAwesome — нет, и незаслоённое правило `display` побеждает любой слой. Отсюда
+        восклицательный знак — он же стоит у значков в переключателе темы.
+      {% endcomment %}
+      <i x-ref="swipe" class="fa-solid fa-reply !hidden absolute left-3 z-10 text-accent pointer-events-none"></i>
 
       {# Кнопка «вниз»: прокрутил вверх — и не знаешь, дописали ли что-то, пока читал #}
       {# Без x-transition: показ и скрытие тут идут пачками (пришло сообщение, дёрнулась #}
       {# прокрутка), и прерванный переход оставлял кнопку висеть на прочитанной ленте. #}
+      {% if in_history %}
+      {# Лента стоит посреди истории: «вниз» тут значит вернуться в конец переписки #}
+      <a href="{% url 'chat_detail' chat.pk %}"
+         class="absolute right-4 bottom-4 w-10 h-10 inline-flex items-center justify-center rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg text-slate-500 dark:text-slate-300 hover:text-accent"
+         aria-label="К последним сообщениям"><i class="fa-solid fa-arrow-down"></i></a>
+      {% else %}
       <button type="button" x-show="!pinned" x-cloak @click="toBottom(true); below = 0"
               class="absolute right-4 bottom-4 w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg text-slate-500 dark:text-slate-300 hover:text-accent"
               aria-label="К последним сообщениям">
@@ -95,15 +149,29 @@
         <span x-show="below" x-cloak x-text="below"
               class="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-accent text-white dark:text-slate-950 text-xs font-bold leading-5"></span>
       </button>
+      {% endif %}
     </div>
 
-    {% comment %}chats:current — открытый чат и вкладка на экране (иначе пометили бы
-    прочитанным невиденное); chats:sync — догон после обрыва связи.{% endcomment %}
+    <div id="search-results" x-show="searching" x-cloak class="scroll-slim flex-1 min-h-0 overflow-y-auto">
+      {% include "chats/_search_results.html" with found=None query="" %}
+    </div>
+
+    {% comment %}
+      chats:current — открытый чат и вкладка на экране (иначе пометили бы прочитанным
+      невиденное); chats:sync — догон после обрыва связи.
+
+      Открылись на найденном (?at=) — за новыми не ходим вовсе: курсор ленты стоит
+      посреди истории, и первый же догон принёс бы всю переписку с того места. Вернуться
+      к последним можно кнопкой — она ведёт на обычный адрес чата.
+    {% endcomment %}
+    {% if not in_history %}
     <div hx-get="{% url 'messages_new' chat.pk %}" hx-swap="beforeend" hx-target="#messages"
          hx-trigger="chats:current from:body, chats:sync from:body"
          hx-vals='js:{after: window.lastMessageId(), since: window.firstMessageId()}'></div>
+    {% endif %}
 
-    <div class="border-t border-slate-200 dark:border-slate-800">
+    {# Пока ищем, поле ввода прячем: писать в этот момент некуда, а место оно занимает #}
+    <div x-show="!searching" class="border-t border-slate-200 dark:border-slate-800">
       <div x-show="replyTo" x-cloak class="flex items-center gap-2 px-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
         <i class="fa-solid fa-reply text-accent"></i>
         <span class="min-w-0 flex-1 truncate">Ответ: <b x-text="replyTo?.author"></b> — <span x-text="replyTo?.text"></span></span>
@@ -172,9 +240,24 @@
           </div>
         </div>
 
-        <div class="flex-1 min-w-0 relative">
+        <div class="flex-1 min-w-0 relative" @click.outside="hints = []">
+          {% comment %}
+            Подсказка по упоминаниям. mousedown.prevent — иначе поле теряет фокус раньше,
+            чем доходит нажатие, и вставлять имя уже некуда.
+          {% endcomment %}
+          <div x-show="hints.length" x-cloak
+               class="absolute bottom-full left-0 mb-2 z-10 w-64 max-h-56 overflow-y-auto scroll-slim rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
+            <template x-for="(person, i) in hints" :key="person.id">
+              <button type="button" @mousedown.prevent @click="pickMention(person)"
+                      :class="i === active ? 'bg-slate-100 dark:bg-slate-800' : ''"
+                      class="w-full text-left px-3 py-2 rounded truncate hover:bg-slate-100 dark:hover:bg-slate-800"
+                      x-text="person.name"></button>
+            </template>
+          </div>
           <textarea name="text" x-ref="input" rows="1" autocomplete="off" placeholder="Сообщение…"
-                    maxlength="{{ max_text }}" @input="grow()" @keydown.enter="send($event)"
+                    maxlength="{{ max_text }}" @input="grow(); hint()" @keydown.enter="send($event)"
+                    @keydown.arrow-down="hintMove(1, $event)" @keydown.arrow-up="hintMove(-1, $event)"
+                    @keydown.escape="hints = []" @keydown.tab="hints.length && (pickMention(hints[active]), $event.preventDefault())"
                     class="scroll-slim block w-full max-h-[10.5rem] resize-none rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3 pr-2 py-2 text-sm leading-snug outline-none focus:border-accent transition"></textarea>
           {# Остаток показываем только у самого края: раньше о потолке узнавали, когда текст молча переставал набираться #}
           <span x-show="typed > {{ max_text }} - 200" x-cloak
@@ -336,31 +419,12 @@
         {% endfor %}
       </div>
 
-      {% if chat.kind == "group" %}
-      <div class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 flex gap-2">
-        <form method="post" action="{% url 'chat_leave' chat.pk %}" class="flex-1" onsubmit="return confirm('Покинуть группу?')">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-ghost w-full text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Покинуть</button>
-        </form>
-        {% if membership.is_admin %}
-        <form method="post" action="{% url 'chat_delete' chat.pk %}" class="flex-1" onsubmit="return confirm('Удалить группу со всей перепиской?')">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-danger w-full"><i class="fa-solid fa-trash"></i>Удалить</button>
-        </form>
-        {% endif %}
-      </div>
-      {% endif %}
-
+      {% comment %}Выход и удаление живут в меню чата (⋮): здесь они стояли под списком
+      людей, к которому отношения не имеют.{% endcomment %}
       {% if chat.kind == "course" %}
-      <div class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 space-y-2">
-        <p class="text-xs text-slate-400">Общий чат курса: состав собирается автоматически из всех учебных групп потока — покинуть его или изменить нельзя. Кураторы добавляются формой выше.</p>
-        {% if not own_course %}
-        <form method="post" action="{% url 'chat_leave' chat.pk %}" onsubmit="return confirm('Покинуть чат группы?')">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-ghost w-full text-rose-500"><i class="fa-solid fa-right-from-bracket"></i>Покинуть (куратор)</button>
-        </form>
-        {% endif %}
-      </div>
+      <p class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 text-xs text-slate-400">
+        Общий чат курса: состав собирается автоматически из всех учебных групп потока — покинуть его или изменить нельзя. Кураторы добавляются формой выше.
+      </p>
       {% endif %}
 
     </div>

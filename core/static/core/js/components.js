@@ -62,9 +62,14 @@ window.chatSocket = (() => {
   // участника шла на сервер за одним числом, и в чате курса это сотня запросов на
   // одно сообщение — при том, что по сокету уже пришло всё, чтобы прибавить единицу.
   // Точка правды прежняя: chats:sync и любая перезагрузка берут число у сервера.
+  // Беззвучный чат в общий счётчик не идёт. Спрашиваем об этом сам список слева: он
+  // на странице всегда и перерисовывается сервером, то есть знает состояние точно —
+  // держать вторую копию этого знания в JS значило бы её рассинхронить.
+  const muted = (chat) => !!document.querySelector(`[data-row="${chat}"]`)?.hasAttribute("data-muted");
+
   function count(chat, author, reading) {
     const badge = document.getElementById("unread-badge");
-    if (!badge || String(author) === me || reading) return; // своё и прочитанное не считаем
+    if (!badge || String(author) === me || reading || muted(chat)) return; // своё и прочитанное не считаем
     badge.textContent = Number(badge.textContent || 0) + 1;
     badge.classList.remove("hidden");
     paintTitle();
@@ -94,8 +99,22 @@ window.chatSocket = (() => {
     });
   }
 
-  function deliver({ chat, msg, author, read, by, kind }) {
+  // «Печатает…» — единственное, что вкладка говорит в сокет. Придерживаем: событие
+  // нужно раз в несколько секунд, а input случается на каждую букву.
+  let typedAt = 0;
+  function typing(chat) {
+    if (!socket || socket.readyState !== WebSocket.OPEN || Date.now() - typedAt < 4000) return;
+    typedAt = Date.now();
+    socket.send(JSON.stringify({ typing: Number(chat) }));
+  }
+
+  function deliver({ chat, msg, author, read, by, kind, typing: typist, who }) {
     const open = String(chat) === openChat();
+    // Метка «печатает» живёт секунды: ничего не перерисовывает и на сервер не ходит
+    if (typist) {
+      if (String(typist) !== me) fire("chats:typing", { chat, who });
+      return;
+    }
     // Прочтение не трогает ни ленту, ни счётчик: только галочки открытого чата
     if (read) {
       if (open) ticks(read, by);
@@ -147,8 +166,37 @@ window.chatSocket = (() => {
 
   document.addEventListener("visibilitychange", () => !document.hidden && missed && sync());
   connect();
-  return { sync, alive: () => !!socket && socket.readyState === WebSocket.OPEN };
+  return { sync, typing, alive: () => !!socket && socket.readyState === WebSocket.OPEN };
 })();
+
+// Кто где печатает: id чата → имя. Метка гаснет сама по времени — отдельного события
+// «перестал печатать» нет: человек просто закрывает вкладку, и такое событие не пришло бы.
+const typists = new Map();
+
+// Строка чата в списке: вместо превью последнего сообщения — «печатает…». Держим
+// отдельно от разметки, потому что список перерисовывает htmx, и метка пережить
+// перерисовку сама не может — восстанавливаем её после каждой.
+function paintTyping() {
+  document.querySelectorAll("[data-row]").forEach((row) => {
+    const busy = typists.has(row.dataset.row);
+    row.querySelector("[data-typing]")?.classList.toggle("hidden", !busy);
+    row.querySelector("[data-quiet]")?.classList.toggle("hidden", busy);
+  });
+}
+
+document.body.addEventListener("chats:typing", ({ detail }) => {
+  const chat = String(detail.chat);
+  clearTimeout(typists.get(chat)?.timer);
+  typists.set(chat, {
+    who: detail.who,
+    timer: setTimeout(() => {
+      typists.delete(chat);
+      paintTyping();
+    }, 6000),
+  });
+  paintTyping();
+});
+document.body.addEventListener("htmx:afterSettle", paintTyping);
 
 document.addEventListener("alpine:init", () => {
   // Тосты. Источники: Django messages (initial при рендере) и событие window
@@ -311,6 +359,12 @@ document.addEventListener("alpine:init", () => {
       if (this.percent !== null) return; // идёт загрузка: новые файлы прошли бы мимо прогресса
       this.errors = [];
       for (const file of files) {
+        // Предел на пачку — не про сервер, а про хранилище: сырьё лежит в бакете, пока
+        // до него не дойдёт пекарня, и за всё это время оно стоит денег.
+        if (config.maxFiles && this.items.length >= config.maxFiles) {
+          this.errors.push(`За раз можно сдать не больше ${config.maxFiles} файлов`);
+          break;
+        }
         const problem = this.problem(file);
         if (problem) {
           this.errors.push(problem);
@@ -319,10 +373,16 @@ document.addEventListener("alpine:init", () => {
         if (this.items.some((item) => item.file.name === file.name && item.file.size === file.size)) continue;
         this.items.push({
           id: ++pickedFiles, file, name: file.name, size: humanSize(file.size),
-          percent: null, done: false, token: null,
+          // Название по имени файла: пачку сдают, чтобы уйти, а не чтобы вписать
+          // десять названий руками. Поправить его можно прямо в строке.
+          title: file.name.replace(/\.[^.]+$/, "").slice(0, 150),
+          percent: null, done: false, posted: false, failed: "", token: null,
         });
       }
       this.syncInput();
+    },
+    get weight() {
+      return humanSize(this.items.reduce((sum, item) => sum + item.file.size, 0));
     },
     // Тот же отказ, что и на сервере, но до отправки: незачем гнать гигабайт впустую.
     problem(file) {
@@ -374,6 +434,7 @@ document.addEventListener("alpine:init", () => {
       this.begin();
       this.sent = 0;
       const total = pending.reduce((sum, item) => sum + item.file.size, 0);
+      if (config.each) return this.sendEach(pending, total);
       try {
         for (const item of pending) {
           // Отмену ловим и между файлами, и во время подписи: там abort() нечего прерывать,
@@ -417,6 +478,51 @@ document.addEventListener("alpine:init", () => {
 
       this.percent = 100;
       event.detail.issueRequest(true);
+    },
+
+    // Каждая запись уезжает СВОИМ запросом, сразу за своим файлом, и упавшая не уносит
+    // с собой остальные: пачку ставят, чтобы уйти по делам, и вернуться к семи готовым
+    // лекциям из десяти лучше, чем к нулю из-за того, что восьмой файл не долетел.
+    async sendEach(pending, total) {
+      for (const item of pending) {
+        if (this.cancelled) break;
+        item.failed = "";
+        item.percent = 0;
+        try {
+          item.token = item.token || (await this.send(item, total));
+          this.sent += item.file.size;
+          const body = new FormData();
+          body.append("title", item.title);
+          body.append("uploaded", item.token);
+          await this.hand(config.each, body);
+          item.percent = 100;
+          item.done = true;
+          item.posted = true; // повтор после ошибки на соседнем файле не заведёт вторую копию
+        } catch (error) {
+          item.percent = null;
+          item.failed = this.cancelled ? "" : error.message;
+        }
+      }
+      this.end();
+      this.syncInput();
+      // Готовые записи уже стоят в очереди — страница о них ещё не знает. Если что-то
+      // не вышло, остаёмся: причина написана у своей строки, и её видно.
+      if (!this.items.some((item) => item.failed) && !this.cancelled) location.reload();
+    },
+
+    // Тот же запрос, что и подпись, но телом формы: вьюха ждёт обычные поля.
+    async hand(url, body) {
+      const answer = await fetch(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "X-CSRFToken": this.$el.querySelector("[name=csrfmiddlewaretoken]").value,
+        },
+        body,
+      });
+      const data = await answer.json().catch(() => ({}));
+      if (!answer.ok) throw new Error(data.error || `Сервер ответил ${answer.status}`);
+      return data;
     },
 
     // Маленький файл — одним PUT, большой — частями. Возвращает токен для формы.
@@ -776,8 +882,22 @@ document.addEventListener("alpine:init", () => {
     input.files = box.files;
   };
 
-  Alpine.data("chat", (listUrl, limits) => ({
+  // Свайп по сообщению вправо — ответ на него. Тянуть начинаем не сразу: первые
+  // пиксели жеста ещё могут оказаться прокруткой ленты.
+  const SWIPE_FROM = 12;  // с этого сдвига считаем, что тянут вбок
+  const SWIPE_AT = 56;    // и с этого — что ответ
+  const SWIPE_MAX = 72;
+
+  Alpine.data("chat", (listUrl, peopleUrl, limits) => ({
     replyTo: null,
+    typing: "", // «Валерий печатает…» в шапке вместо строки состояния
+    swipe: null,
+    actions: false, // открыто меню чата (⋮ в шапке)
+    searching: false, // открыт поиск по чату: находки занимают место ленты
+    people: null, // участники для подсказки упоминаний; тянем один раз, по первой собачке
+    hints: [], // что показывает подсказка сейчас
+    hintAt: 0, // где в тексте стоит собачка, с которой всё началось
+    active: 0, // выбранная строка подсказки
     picked: [], // выбранные вложения: { id, name, file, preview?, url? }
     attachOpen: false,
     busy: false, // идёт сжатие — отправлять пока нечего
@@ -799,10 +919,22 @@ document.addEventListener("alpine:init", () => {
       // Открываемся не на конце, а на черте «непрочитанные», если она есть: иначе после
       // ночи в чате курса человек попадает в конец и листает назад, гадая, где остановился.
       const start = () => {
+        // Пришли из поиска — встаём на найденном, иначе непонятно, ради чего
+        // открылась середина переписки.
+        const found = box.querySelector("[data-at]");
         const mark = box.querySelector("[data-unread]");
-        if (mark) box.scrollTop = mark.offsetTop - 12;
+        if (found) found.scrollIntoView({ block: "center" });
+        else if (mark) box.scrollTop = mark.offsetTop - 12;
         else this.toBottom();
       };
+      const found = box.querySelector("[data-at]");
+      if (found) {
+        // Подсвечиваем сам пузырь, а не строку: строка во всю ширину ленты, и рамка
+        // вокруг неё показывала бы пустое место справа. У служебной строки пузыря нет.
+        const spot = found.querySelector("[data-msg]") || found;
+        spot.classList.add("flash");
+        setTimeout(() => spot.classList.remove("flash"), 2500);
+      }
       // Высота ленты растёт уже ПОСЛЕ init: догружаются аватары и шрифты,
       // поэтому одного скролла мало — длинный диалог остался бы вверху.
       start();
@@ -862,6 +994,68 @@ document.addEventListener("alpine:init", () => {
         else if (status === 429) this.$dispatch("toast", { type: "warning", text: "Слишком часто. Подождите немного" });
         else if (status === 422) this.$dispatch("toast", { type: "warning", text: e.detail.xhr.responseText });
       });
+
+      // «Печатает» этого чата — в шапку. Гаснет само: события «перестал» нет.
+      document.body.addEventListener("chats:typing", ({ detail }) => {
+        if (String(detail.chat) !== this.$el.dataset.chatId) return;
+        this.typing = `${detail.who} печатает…`;
+        clearTimeout(this.typingOff);
+        this.typingOff = setTimeout(() => (this.typing = ""), 6000);
+      });
+    },
+    // --- поиск по чату ---------------------------------------------------------
+    openSearch() {
+      this.searching = true;
+      this.$nextTick(() => this.$refs.find.focus());
+    },
+    // Строку чистим: вернулись к переписке — прошлый запрос в поле только мешает
+    closeSearch() {
+      this.searching = false;
+      this.$refs.find.value = "";
+      this.toBottom();
+    },
+
+    // Печатаем. Пустое поле не в счёт: стёр набранное — это уже не набор.
+    hint() {
+      if (this.$refs.input.value.trim()) chatSocket.typing(this.$el.dataset.chatId);
+      this.suggest();
+    },
+
+    // --- упоминания ------------------------------------------------------------
+    // Подсказка вылезает на собачку в начале слова. Список участников тянем один раз
+    // и фильтруем у себя: в чате курса их сотни, и спрашивать сервер на каждую букву
+    // значило бы слать запросы чаще, чем человек успевает печатать.
+    async suggest() {
+      const box = this.$refs.input;
+      const upto = box.value.slice(0, box.selectionStart);
+      // Собачка в начале слова и после неё — то, что уже набрали. Пробел в имени
+      // допускаем: люди пишут «@Иванов Ив», а не только фамилию.
+      const start = upto.search(/(?:^|\s)@[^\n@]{0,40}$/);
+      if (start === -1) return (this.hints = []);
+      this.hintAt = upto.lastIndexOf("@");
+      if (this.people === null) {
+        this.people = await fetch(peopleUrl).then((answer) => answer.json()).catch(() => []);
+      }
+      const parts = words(upto.slice(this.hintAt + 1));
+      // Без запроса показываем начало списка — иначе одна собачка не даёт ничего
+      this.hints = (parts.length ? this.people.filter((one) => hits(one.name, parts)) : this.people).slice(0, 6);
+      this.active = 0;
+    },
+    // Имя целиком: по нему сервер и узнаёт, кого позвали (chats/mentions.py)
+    pickMention(person) {
+      const box = this.$refs.input;
+      const tail = box.value.slice(box.selectionStart);
+      box.value = `${box.value.slice(0, this.hintAt)}@${person.name} ${tail}`;
+      const caret = this.hintAt + person.name.length + 2;
+      this.hints = [];
+      box.focus();
+      box.setSelectionRange(caret, caret);
+      this.grow();
+    },
+    hintMove(step, event) {
+      if (!this.hints.length) return;
+      event.preventDefault(); // стрелки ходят по подсказке, а не по тексту
+      this.active = (this.active + step + this.hints.length) % this.hints.length;
     },
     reply(data) {
       this.replyTo = data;
@@ -975,10 +1169,63 @@ document.addEventListener("alpine:init", () => {
       this.remember();
     },
     send(event) {
-      if (event.isComposing || event.shiftKey || this.coarse) return; // перенос строки
+      if (event.isComposing) return;
+      // Открыта подсказка — Enter выбирает из неё. И на телефоне тоже: там это
+      // единственный способ добраться до неё с клавиатуры.
+      if (this.hints.length) {
+        event.preventDefault();
+        return this.pickMention(this.hints[this.active]);
+      }
+      if (event.shiftKey || this.coarse) return; // перенос строки
       event.preventDefault();
       if (this.busy) return; // фото ещё сжимается: уехал бы один текст, без него
       if (this.$refs.input.value.trim() || this.picked.length) this.$refs.input.form.requestSubmit();
+    },
+    // --- свайп для ответа ------------------------------------------------------
+    // Ответить с телефона можно было только через меню: долгое нажатие, потом пункт.
+    // Жест короче и привычнее — им отвечают во всех мессенджерах.
+    swipeStart(event) {
+      const bubble = event.target.closest("[data-msg]");
+      // Внутри строки реакций свой жест вбок — там прокрутка, а не ответ
+      if (!bubble || event.target.closest("[data-sideways]")) return (this.swipe = null);
+      const touch = event.touches[0];
+      this.swipe = { bubble, row: bubble.closest("[data-id]"), x: touch.clientX, y: touch.clientY, dx: 0, on: false };
+    },
+    swipeMove(event) {
+      if (!this.swipe) return;
+      const { clientX, clientY } = event.touches[0];
+      const dx = clientX - this.swipe.x;
+      const dy = clientY - this.swipe.y;
+      if (!this.swipe.on) {
+        // Пока не ясно, тянут вбок или листают ленту, прокрутке не мешаем
+        if (Math.abs(dy) > Math.abs(dx)) return (this.swipe = null);
+        if (dx < SWIPE_FROM) return;
+        this.swipe.on = true;
+        const arrow = this.$refs.swipe;
+        const box = this.$refs.box.getBoundingClientRect();
+        const row = this.swipe.row.getBoundingClientRect();
+        arrow.style.top = `${row.top - box.top + row.height / 2 - 8}px`;
+        arrow.classList.remove("!hidden");
+      }
+      event.preventDefault(); // тянем сообщение, а не ленту
+      this.swipe.dx = Math.min(dx - SWIPE_FROM, SWIPE_MAX);
+      this.swipe.row.style.transform = `translateX(${this.swipe.dx}px)`;
+      this.$refs.swipe.style.opacity = Math.min(1, this.swipe.dx / SWIPE_AT);
+      if (this.swipe.dx >= SWIPE_AT && !this.swipe.buzzed) {
+        this.swipe.buzzed = true;
+        navigator.vibrate?.(10); // порог взят — руке об этом лучше сказать
+      }
+    },
+    swipeEnd() {
+      const swipe = this.swipe;
+      this.swipe = null;
+      if (!swipe?.on) return;
+      swipe.row.style.transition = "transform .15s";
+      swipe.row.style.transform = "";
+      setTimeout(() => (swipe.row.style.transition = ""), 200);
+      this.$refs.swipe.classList.add("!hidden");
+      const d = swipe.bubble.dataset;
+      if (swipe.dx >= SWIPE_AT) this.reply({ id: d.msg, author: d.author, text: d.preview });
     },
     openMenu(event) {
       const bubble = event.target.closest("[data-msg]");

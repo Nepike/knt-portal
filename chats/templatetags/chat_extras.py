@@ -1,9 +1,10 @@
 from datetime import timedelta
 
 from django import template
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.formats import date_format
-from django.utils.html import urlize
+from django.utils.html import escape, urlize
 from django.utils.safestring import mark_safe
 
 from ..models import REACTIONS
@@ -26,6 +27,44 @@ def links(text):
     return mark_safe(  # noqa: S308 — на входе экранированный текст, теги только от urlize
         urlize(text, nofollow=True, autoescape=True).replace("<a href=", '<a target="_blank" href=')
     )
+
+
+@register.filter
+def body(message):
+    """Текст сообщения целиком: ссылки кликабельны, упоминания ведут в профиль.
+
+    Упоминания подставляем ПОСЛЕ urlize и по готовому списку (Message.mentions), а не
+    ищем в тексте собачку глазами шаблона: кого позвали, решено один раз при сохранении
+    (chats/mentions.py), и подделать подсветку набором чужого имени нельзя.
+
+    Ищем уже экранированную форму — html к этому месту прошёл через urlize, и имя с
+    кавычкой или амперсандом в нём выглядит иначе, чем в базе.
+    """
+    html = links(message.text)
+    for person in message.mentions.all():
+        tag = escape(f"@{person.full_name}")
+        link = f'<a href="{reverse("profile", args=[person.pk])}" class="font-medium !no-underline">{tag}</a>'
+        html = html.replace(tag, link)
+    return mark_safe(html)  # noqa: S308 — links() уже экранировал текст, имя экранируем сами
+
+
+@register.filter
+def spotlight(text, query):
+    """Кусок текста вокруг найденного, с подсветкой самого совпадения.
+
+    Кусок, а не весь текст: реплика бывает на десять строк, и совпадение в её конце
+    в списке находок просто не видно. Регистр не важен — ищем так же, как база.
+    """
+    at = text.lower().find(query.lower())
+    if at == -1:
+        return text
+    start = max(0, at - 30)
+    piece = text[start : at + len(query) + 120]
+    hit = piece[at - start : at - start + len(query)]
+    html = escape(piece).replace(
+        escape(hit), f'<mark class="bg-accent/25 text-inherit rounded px-0.5">{escape(hit)}</mark>', 1
+    )
+    return mark_safe(f"{'…' if start else ''}{html}")  # noqa: S308 — и кусок, и совпадение экранированы
 
 
 @register.filter

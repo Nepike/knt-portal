@@ -4,7 +4,7 @@ from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -16,6 +16,7 @@ from attachments.uploads import max_upload_size, upload_key, upload_limits
 from bookmarks.views import button as bookmark_button
 from comments.views import context as comments_context
 from core import filters
+from core.throttle import throttled
 from economy import rewards
 from intake.models import MediaJob
 from intake.spec import POSTER
@@ -29,6 +30,13 @@ LECTURE_RECIPE = "lecture"
 # Курсов в порции. Делится и на 2, и на 3 — на любой ширине сетка добирается до конца
 # ряда, а не обрывается посередине.
 PAGE_SIZE = 24
+# Записей за раз. Предел не про сервер, а про хранилище: сырьё лежит в бакете, пока
+# пекарня до него не дойдёт, и пачка из двадцати двухчасовых лекций — это десятки
+# гигабайт, за которые платят всё время ожидания.
+BATCH = 10
+# Записей в час с одного человека. Пачку в десяток не стесняет, но зациклившийся
+# скрипт очередь не завалит.
+ADD_LIMIT = 60
 
 
 def visible_playlists(user):
@@ -187,20 +195,37 @@ def _source_problem(user, key):
 
 @require_POST
 def lecture_add(request, pk):
-    """Сдать запись: файл уже в хранилище, здесь заводится лекция и задание на выпечку."""
+    """Сдать ОДНУ запись: файл уже в хранилище, здесь заводится лекция и задание.
+
+    Пачку браузер шлёт сюда же, по запросу на файл, сразу после его заливки: так после
+    «поставил и ушёл» возвращаешься к семи готовым лекциям из десяти, а не к нулю
+    из-за того, что восьмой файл не долетел.
+
+    Отсюда и два вида ответа. Пачке отказ нужен строкой, чтобы показать его у своей
+    строки списка; обычной отправке — прежним сообщением на странице курса.
+    """
     playlist = get_object_or_404(visible_playlists(request.user), pk=pk)
     if not _may_edit(request.user, playlist):
         return HttpResponseForbidden("Добавлять записи может только автор курса или модерация.")
 
+    as_json = request.headers.get("Accept") == "application/json"
+
+    def refuse(reason):
+        if as_json:
+            return JsonResponse({"error": reason}, status=400)
+        messages.error(request, reason)
+        return redirect("playlist_detail", pk=playlist.pk)
+
+    if throttled(f"lecture:add:{request.user.pk}", ADD_LIMIT, 3600):
+        return refuse("Слишком много записей за раз — попробуй позже.")
+
     form = LectureForm(request.POST)
     source = upload_key(request.POST.get("uploaded", ""))
     if not form.is_valid() or not source:
-        messages.error(request, "Нужны название и файл записи.")
-        return redirect("playlist_detail", pk=playlist.pk)
+        return refuse("Нужны название и файл записи.")
 
     if problem := _source_problem(request.user, source):
-        messages.error(request, problem)
-        return redirect("playlist_detail", pk=playlist.pk)
+        return refuse(problem)
 
     with transaction.atomic():
         lecture = form.save(commit=False)
@@ -210,6 +235,8 @@ def lecture_add(request, pk):
         lecture.save()
         MediaJob.objects.create(recipe=LECTURE_RECIPE, source=source, lecture=lecture)
 
+    if as_json:
+        return JsonResponse({"title": lecture.title})
     messages.success(request, "Запись принята — она встала в очередь на обработку.")
     return redirect("playlist_detail", pk=playlist.pk)
 
@@ -297,9 +324,9 @@ def playlist_detail(request, pk):
         "filters": filters.query(request.GET),
         "may_moderate": _may_moderate(request.user),
         "may_edit": _may_edit(request.user, playlist),
-        "lecture_form": LectureForm(),
         "upload_limits": upload_limits(request.user),
-        "max_size_hint": max_upload_size(request.user),
+        "max_size_hint": human_size(max_upload_size(request.user)),
+        "batch": BATCH,
     })
 
 

@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from django.contrib import messages as django_messages
 from django.db.models import F, Prefetch
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -15,13 +15,14 @@ from users.models import User, UserSession
 
 from .events import notify_chat, notify_joined, notify_left, notify_read
 from .forms import AddMembersForm, CuratorAddForm, GroupChatForm
+from .mentions import remember
 from .models import REACTIONS, Chat, Membership, Message, unread_total
 from .uploads import attach, limits, problems
 
 MESSAGE_RELATIONS = ("author", "reply_to", "reply_to__author")
 # Вложения цитаты — ради подписи в ней: у сообщения из одних фотографий текста нет,
 # и цитата без них выглядела бы пустой (фильтр preview, chats/templatetags).
-MESSAGE_SETS = ("reactions", "images", "files", "reply_to__images", "reply_to__files")
+MESSAGE_SETS = ("reactions", "images", "files", "reply_to__images", "reply_to__files", "mentions")
 PAGE_SIZE = 30  # сообщений в порции истории
 CATCH_UP = 100  # столько догоняем порцией, дальше проще перерисовать страницу
 MAX_TEXT = 4000  # он же maxlength поля ввода, шаблонам уезжает как max_text
@@ -29,6 +30,10 @@ SEND_LIMIT = 30  # сообщений в минуту с одного челов
 # Правки, реакции и удаления тоже расходятся событием по всем участникам, поэтому предел
 # нужен и им. Он выше: реакция — это одно нажатие, и человек успевает наставить их подряд.
 ACT_LIMIT = 60
+# Поиск по сообщениям: короче двух букв искать нечего, а находок хватает полусотни —
+# дальше уточняют запрос, а не листают.
+SEARCH_MIN = 2
+SEARCH_LIMIT = 50
 # Через столько молчания сообщение того же автора начинает новую пачку: вернулся человек
 # в чат через час — это уже другой разговор, и подпись со временем нужна заново.
 PACK_GAP = timedelta(minutes=10)
@@ -71,10 +76,11 @@ def _chat_items(user):
             "chat__last_message__images",
             "chat__last_message__files",
         )
-        # По времени последнего сообщения, а не по его id: внутри чата это одно и то же
-        # (id и есть порядок ленты), но между чатами — нет. Импорт старого сайта и демка
-        # заводят переписку задним числом, и по id она выстраивалась в порядке заливки.
-        .order_by(F("chat__last_message__created").desc(nulls_last=True))
+        # Закреплённые сверху, дальше по времени последнего сообщения, а не по его id:
+        # внутри чата это одно и то же (id и есть порядок ленты), но между чатами — нет.
+        # Импорт старого сайта и демка заводят переписку задним числом, и по id она
+        # выстраивалась в порядке заливки.
+        .order_by("-pinned", F("chat__last_message__created").desc(nulls_last=True))
     )
     for item in items:
         item.other = item.chat.other_member(user)  # None для групп
@@ -173,6 +179,22 @@ def _opening_page(membership):
     messages, has_more = _history_page(membership.chat)
     # Отметку ставим, только если сообщение и правда попало на экран
     return messages, has_more, unread_from if any(m.pk == unread_from for m in messages) else 0
+
+
+def _around(chat, at):
+    """Окно ленты вокруг сообщения: по PAGE_SIZE в обе стороны. Пусто — такого нет.
+
+    Так открывается найденное поиском. Просто прокрутить к нему нельзя: в ленте лежит
+    последняя страница, а речь может идти о сообщении полугодовой давности.
+    """
+    older = list(_feed(chat).filter(id__lt=at).order_by("-id")[:PAGE_SIZE])
+    rest = list(_feed(chat).filter(id__gte=at)[: PAGE_SIZE + 1])
+    if not rest or rest[0].pk != at:
+        return [], False, False
+    # +1 сверх окна — признак, что ниже есть ещё; сам он в ленту не идёт
+    newer, more_below = rest[:PAGE_SIZE], len(rest) > PAGE_SIZE
+    page = list(reversed(older)) + newer
+    return _mark_breaks(page, _neighbour(chat, page[0].pk)), len(older) == PAGE_SIZE, more_below
 
 
 def _catch_up(chat, after):
@@ -296,8 +318,17 @@ def chat_list(request):
 
 def chat_detail(request, pk):
     membership = _membership_page(request, pk)
-    messages, has_more, unread_from = _opening_page(membership)
-    _mark_read(membership, messages)
+    # ?at= — открыться на конкретном сообщении (пришли из поиска). Тогда лента стоит
+    # посреди истории, и две вещи ведут себя иначе: прочитанным ничего не помечаем
+    # (человек не видел всего, что ниже) и за новыми сообщениями не ходим — курсор
+    # там на полгода позади, и любое событие вылилось бы в догон всей переписки.
+    at = _int(request.GET.get("at"))
+    messages, has_more, in_history = _around(membership.chat, at) if at else ([], False, False)
+    unread_from = 0
+    if not messages:
+        at, in_history = 0, False
+        messages, has_more, unread_from = _opening_page(membership)
+        _mark_read(membership, messages)
     other = membership.chat.other_member(request.user)
     online = _online_ids(membership.chat)
     context = _page_context(
@@ -314,6 +345,8 @@ def chat_detail(request, pk):
         chat_messages=messages,
         has_more=has_more,
         unread_from=unread_from,  # перед ним лента рисует черту «непрочитанные»
+        at=at,  # к нему лента прокрутится и подсветит
+        in_history=in_history,  # лента стоит посреди истории: за новыми не ходим
     )
     if membership.chat.kind == "group" and membership.is_admin:
         context["add_form"] = AddMembersForm(chat=membership.chat)
@@ -384,6 +417,7 @@ def message_send(request, pk):
     # reply_to принимаем только из этого же чата
     reply_to = membership.chat.messages.filter(pk=_int(request.POST.get("reply_to"))).first()
     message = Message.objects.create(chat=membership.chat, author=request.user, text=text, reply_to=reply_to)
+    remember(message)
     attach(message, photos, previews, docs, request.user)
     Chat.objects.filter(pk=membership.chat_id).update(last_message=message)
 
@@ -436,6 +470,85 @@ def chat_list_fragment(request):
         "items": _chat_items(request.user),
         "active_id": _int(request.GET.get("active")),
     })
+
+
+def message_search(request, pk):
+    """Поиск по сообщениям чата.
+
+    Подстрокой и без всякой хитрости: чат — это разговор, а не библиотека, и ищут в нём
+    обычно слово, которое точно писали («ссылка», «зачёт», фамилию). Стемминга и опечаток
+    тут не нужно, зато нужен предсказуемый ответ — человек знает, что искал.
+
+    Удалённые не показываем: их текст в ленте уже никому не виден, и находиться он не
+    должен тоже.
+    """
+    membership = _membership(request, pk)
+    query = request.GET.get("q", "").strip()
+    found = []
+    if len(query) >= SEARCH_MIN:
+        found = list(
+            membership.chat.messages.filter(text__icontains=query, deleted=False)
+            .select_related("author")
+            .order_by("-id")[:SEARCH_LIMIT]
+        )
+    return render(request, "chats/_search_results.html", {
+        "found": found, "query": query, "chat": membership.chat,
+        "short": 0 < len(query) < SEARCH_MIN,
+        "limit_hit": len(found) == SEARCH_LIMIT,
+    })
+
+
+def chat_people(request, pk):
+    """Участники чата для подсказки упоминаний.
+
+    JSON, а не разметка, и одним списком, а не поиском по букве: вкладка ищет у себя,
+    и в чате курса это разница между одним запросом и запросом на каждое нажатие.
+    Себя не отдаём — позвать по имени самого себя незачем.
+    """
+    membership = _membership(request, pk)
+    people = (
+        User.objects.filter(chat_memberships__chat=membership.chat)
+        .exclude(pk=request.user.pk)
+        .order_by("surname", "name")
+    )
+    return JsonResponse([{"id": p.pk, "name": p.full_name} for p in people], safe=False)
+
+
+def _chat_state(request, membership):
+    """Ответ на переключение закрепления и звука.
+
+    Меняются сразу два места: строка в списке слева (порядок, цвет метки, значок) и
+    подпись самого пункта в меню чата. Оба уезжают oob-заменой — иначе пришлось бы
+    перерисовывать страницу целиком ради одного булева поля.
+    """
+    return render(request, "chats/_chat_state.html", {
+        "items": _chat_items(request.user),
+        "active_id": membership.chat_id,
+        "membership": membership,
+        "chat": membership.chat,
+        # Нужен пункту «покинуть»: из чата СВОЕГО курса выхода нет
+        "own_course": membership.chat.is_own_course(request.user),
+    })
+
+
+@require_POST
+def chat_pin(request, pk):
+    membership = _membership(request, pk)
+    membership.pinned = not membership.pinned
+    membership.save(update_fields=["pinned"])
+    return _chat_state(request, membership)
+
+
+@require_POST
+def chat_mute(request, pk):
+    membership = _membership(request, pk)
+    membership.muted = not membership.muted
+    membership.save(update_fields=["muted"])
+    answer = _chat_state(request, membership)
+    # Беззвучные не входят в общий счётчик, значит он только что изменился. Считать его
+    # тут нечем — это отдельный запрос по всем чатам, и у него уже есть своя вьюха.
+    answer["HX-Trigger"] = "chats:recount"
+    return answer
 
 
 def _system_message(chat, text):
@@ -587,6 +700,7 @@ def message_edit(request, pk):
             message.edited = timezone.now()
             message.updated = timezone.now()
             message.save(update_fields=["text", "edited", "updated"])
+            remember(message)  # позвали кого-то правкой — или, наоборот, убрали
             notify_chat(message.chat_id, kind="edit")
         return _bubble(request, message)
     return render(request, "chats/_message_edit.html", {"m": message, "max_text": MAX_TEXT})

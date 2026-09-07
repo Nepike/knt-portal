@@ -26,7 +26,7 @@
             <i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i><i class="fa-solid fa-star"></i>
           </span>
         </span>
-        <span class="font-bold">{{ t.overall_rating|floatformat:1 }} <i class="fa-solid fa-star text-amber-400 text-xs sm:hidden"></i></span>
+        <span class="font-bold">{{ t.overall_rating|floatformat:1 }} <i class="fa-solid fa-star text-amber-400 text-xs sm:!hidden"></i></span>
       </div>
       <p class="text-xs text-slate-400 mt-0.5">{{ t.reviews_count }} {{ t.reviews_count|plural:"оценка,оценки,оценок" }}</p>
     {% else %}

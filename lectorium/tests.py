@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from django.contrib.auth.models import Permission
 from django.contrib.messages import get_messages
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.template.loader import render_to_string
 from django.test import TestCase
@@ -19,7 +20,7 @@ from users.models import User
 
 from .forms import PlaylistForm
 from .models import Lecture, Playlist
-from .views import PAGE_SIZE
+from .views import ADD_LIMIT, BATCH, PAGE_SIZE
 
 
 def make_user(email="u@t.local", surname="Иванов", **extra):
@@ -561,6 +562,82 @@ class SubmitTests(LectoriumTests):
         answer = self.client.post(reverse("lecture_add", args=[hidden.pk]), {"title": "Ой"})
 
         self.assertEqual(answer.status_code, 404)
+
+
+class BatchSubmitTests(LectoriumTests):
+    """Пачка записей. Каждая уезжает своим запросом сразу за своим файлом: пачку ставят,
+    чтобы уйти по делам, и вернуться к семи готовым лекциям из десяти лучше, чем к нулю
+    из-за того, что восьмой файл не долетел."""
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.keeper = make_user("k@t.local", surname="Хранов")
+        self.keeper.user_permissions.add(Permission.objects.get(codename="add_playlist"))
+        self.keeper = User.objects.get(pk=self.keeper.pk)  # права кешируются на объекте
+        self.playlist = Playlist.objects.create(
+            title="Механика", subject=self.subject, uploader=self.keeper,
+            status=Playlist.Status.APPROVED,
+        )
+        self.client.force_login(self.keeper)
+
+    def source(self):
+        key = f"uploads/{uuid4().hex}/zapis.mkv"
+        file_storage().save(key, ContentFile(b"raw-video"))
+        return adopt_token(key, "zapis.mkv")
+
+    def hand(self, title="Первая", token=None):
+        """Так запись сдаёт браузер в пачке: обычные поля, но ответ ждёт разбираемый."""
+        return self.client.post(
+            reverse("lecture_add", args=[self.playlist.pk]),
+            {"title": title, "uploaded": self.source() if token is None else token},
+            headers={"Accept": "application/json"},
+        )
+
+    def test_each_record_answers_on_its_own(self):
+        for number in ("Первая", "Вторая", "Третья"):
+            answer = self.hand(title=number)
+            self.assertEqual(answer.status_code, 200)
+            self.assertEqual(answer.json()["title"], number)
+        self.assertEqual(self.playlist.lectures.count(), 3)
+        self.assertEqual([one.order for one in self.playlist.lectures.all()], [0, 1, 2])
+
+    def test_a_refusal_comes_back_readable(self):
+        """Причину показывают у СВОЕЙ строки списка, поэтому она нужна текстом,
+        а не сообщением на странице, которую в этот момент никто не перезагружает."""
+        answer = self.hand(token=adopt_token("uploads/пусто/zapis.mkv", "zapis.mkv"))
+        self.assertEqual(answer.status_code, 400)
+        self.assertIn("не доехала", answer.json()["error"])
+        self.assertEqual(self.playlist.lectures.count(), 0)
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        """Ровно ради этого запись и заводится своим запросом."""
+        self.hand(title="Первая")
+        self.hand(title="Вторая", token="подделка")
+        self.hand(title="Третья")
+        self.assertEqual(
+            [one.title for one in self.playlist.lectures.all()], ["Первая", "Третья"]
+        )
+
+    def test_the_usual_form_still_answers_the_usual_way(self):
+        """Без Accept — прежний ответ: переход на курс и сообщение на странице."""
+        answer = self.client.post(
+            reverse("lecture_add", args=[self.playlist.pk]),
+            {"title": "Первая", "uploaded": self.source()},
+        )
+        self.assertEqual(answer.status_code, 302)
+        self.assertTrue(any("очередь" in str(one) for one in get_messages(answer.wsgi_request)))
+
+    def test_a_runaway_script_is_stopped(self):
+        """Пачку в десяток предел не стесняет, но зациклившийся скрипт очередь не завалит."""
+        for number in range(ADD_LIMIT):
+            self.assertEqual(self.hand(title=f"№{number}").status_code, 200)
+        self.assertEqual(self.hand(title="лишняя").status_code, 400)
+        self.assertEqual(self.playlist.lectures.count(), ADD_LIMIT)
+
+    def test_the_page_hands_the_uploader_its_limits(self):
+        page = self.client.get(reverse("playlist_detail", args=[self.playlist.pk])).content.decode()
+        self.assertIn(f"maxFiles: {BATCH}", page)
+        self.assertIn(f"each: '{reverse('lecture_add', args=[self.playlist.pk])}'", page)
 
 
 class PlaylistFormTests(LectoriumTests):

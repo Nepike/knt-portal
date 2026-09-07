@@ -1,0 +1,41 @@
+{% comment %}
+  Содержимое меню чата (кнопка ⋮ в шапке). Отдельным файлом, потому что после
+  переключения приезжает обратно oob-заменой: подпись пункта зависит от состояния,
+  а перерисовывать ради неё страницу целиком незачем.
+
+  Здесь же — выход и удаление. Раньше они жили в модалке участников: чтобы покинуть
+  группу, надо было сперва открыть список людей, что к делу отношения не имеет вовсе.
+
+  Пункты — формы htmx: ответ подменяет и это меню, и список слева.
+{% endcomment %}
+<button type="button" hx-post="{% url 'chat_pin' chat.pk %}" hx-swap="none" class="msg-action">
+  <i class="fa-solid fa-thumbtack w-4 text-slate-400"></i>{% if membership.pinned %}Открепить{% else %}Закрепить{% endif %}
+</button>
+<button type="button" hx-post="{% url 'chat_mute' chat.pk %}" hx-swap="none" class="msg-action">
+  <i class="fa-solid {% if membership.muted %}fa-bell{% else %}fa-bell-slash{% endif %} w-4 text-slate-400"></i>{% if membership.muted %}Включить уведомления{% else %}Без уведомлений{% endif %}
+</button>
+{% if chat.kind != "dm" %}
+<button type="button" @click="members = true; actions = false" class="msg-action">
+  <i class="fa-solid fa-users w-4 text-slate-400"></i>Участники
+</button>
+{% endif %}
+
+{% comment %}Уход и удаление — отдельно и внизу: это уже не настройка, а конец истории{% endcomment %}
+{% if chat.kind == "group" %}
+<form method="post" action="{% url 'chat_leave' chat.pk %}" onsubmit="return confirm('Покинуть группу?')">
+  {% csrf_token %}
+  <button type="submit" class="msg-action !text-rose-500 border-t border-slate-100 dark:border-slate-800"><i class="fa-solid fa-right-from-bracket w-4"></i>Покинуть группу</button>
+</form>
+{% if membership.is_admin %}
+<form method="post" action="{% url 'chat_delete' chat.pk %}" onsubmit="return confirm('Удалить группу со всей перепиской?')">
+  {% csrf_token %}
+  <button type="submit" class="msg-action !text-rose-500"><i class="fa-solid fa-trash w-4"></i>Удалить группу</button>
+</form>
+{% endif %}
+{% elif chat.kind == "course" and not own_course %}
+{# Из чата своего курса выйти нельзя, из чужого — можно: там человек куратор #}
+<form method="post" action="{% url 'chat_leave' chat.pk %}" onsubmit="return confirm('Покинуть чат курса?')">
+  {% csrf_token %}
+  <button type="submit" class="msg-action !text-rose-500 border-t border-slate-100 dark:border-slate-800"><i class="fa-solid fa-right-from-bracket w-4"></i>Покинуть (куратор)</button>
+</form>
+{% endif %}

@@ -114,6 +114,13 @@ html { color-scheme: light; }
   }
   .dark .scroll-slim::-webkit-scrollbar-thumb { background: var(--color-slate-600); }
 
+  /* Найденное поиском сообщение: подсветка на пару секунд. Классом, а не набором утилит
+     из JS — Tailwind собирает только то, что видит в шаблонах, и ring-* из скрипта
+     в готовый css просто не попал бы. */
+  .flash {
+    @apply ring-2 ring-accent rounded-2xl transition-shadow;
+  }
+
   /* Пункт меню сообщения в чате. На узком экране крупнее — это шторка под палец. */
   .msg-action {
     @apply w-full flex items-center gap-3 px-4 py-3 text-base text-left transition-colors;

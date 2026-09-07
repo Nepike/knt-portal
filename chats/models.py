@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import models
-from django.db.models import Count, F, Q, Value
+from django.db.models import Count, Exists, F, OuterRef, Q, Value
 from django.db.models.functions import Coalesce
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -13,10 +13,15 @@ REACTIONS = ["👍", "❤️", "🔥", "😂", "😮", "😢",]
 
 
 def unread_total(user):
-    """Непрочитанные во всех чатах — для бейджа в меню."""
+    """Непрочитанные во всех чатах — для бейджа в меню.
+
+    Беззвучные не в счёт: смысл «без уведомлений» ровно в том, чтобы чат не дёргал.
+    Своё число у такого чата остаётся — оно видно в его строке списка, только серым.
+    """
     return (
         Message.objects.filter(
             chat__memberships__user=user,
+            chat__memberships__muted=False,
             deleted=False,
             id__gt=Coalesce(F("chat__memberships__last_read_id"), Value(0)),
         )
@@ -110,13 +115,24 @@ class MembershipQuerySet(models.QuerySet):
     def with_unread(self, user):
         # last_read пуст у новичка — Coalesce превращает NULL в 0, иначе сравнение
         # с NULL отсечёт все сообщения и непрочитанных «не будет».
+        unseen = (
+            Q(chat__messages__id__gt=Coalesce(F("last_read_id"), Value(0)))
+            & Q(chat__messages__deleted=False)
+            & ~Q(chat__messages__author=user)
+        )
         return self.annotate(
-            unread=Count(
-                "chat__messages",
-                filter=Q(chat__messages__id__gt=Coalesce(F("last_read_id"), Value(0)))
-                & Q(chat__messages__deleted=False)
-                & ~Q(chat__messages__author=user),
-            )
+            unread=Count("chat__messages", filter=unseen),
+            # Позвали ли меня в непрочитанном. Отдельным EXISTS, а не ещё одним Count:
+            # число упоминаний никому не нужно, а факт — да, и он показывается даже
+            # у беззвучного чата: «без уведомлений» не значит «не зовите по имени».
+            called=Exists(
+                Message.objects.filter(
+                    chat_id=OuterRef("chat_id"),
+                    id__gt=Coalesce(OuterRef("last_read_id"), Value(0)),
+                    deleted=False,
+                    mentions=user,
+                )
+            ),
         )
 
 
@@ -129,7 +145,11 @@ class Membership(models.Model):
         null=True, blank=True, related_name="+",
     )
     is_admin = models.BooleanField("администратор", default=False)
-    muted = models.BooleanField("без уведомлений", default=False)  # TODO: задействовать в push/email-уведомлениях
+    # Беззвучный чат не попадает в общий счётчик и в заголовок вкладки (unread_total),
+    # но своё число в списке сохраняет — серым. TODO: учесть и в push/email-уведомлениях.
+    muted = models.BooleanField("без уведомлений", default=False)
+    # Закреплённые идут первыми, дальше — по времени последнего сообщения.
+    pinned = models.BooleanField("закреплён", default=False)
     joined = models.DateTimeField("вступил", default=timezone.now)
 
     objects = MembershipQuerySet.as_manager()
@@ -159,6 +179,13 @@ class Message(models.Model):
         null=True, blank=True, related_name="replies",
     )
     # Вложения — со стороны attachments: File.message и Image.message.
+
+    # Кого позвали в сообщении. Считается по тексту при сохранении (chats/mentions.py):
+    # связь нужна, чтобы подсветку не приходилось угадывать по именам при каждой отрисовке,
+    # и чтобы «меня упомянули» можно было спросить у базы одним условием.
+    mentions = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, verbose_name="упомянуты", related_name="mentioned_in", blank=True,
+    )
 
     created = models.DateTimeField("создано", default=timezone.now)
     edited = models.DateTimeField("изменено", null=True, blank=True)

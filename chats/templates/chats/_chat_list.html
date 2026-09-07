@@ -2,7 +2,8 @@
 {% for item in items %}
 {# Строки-карточки, а не разлинованный список: линейка между каждой парой чатов делит #}
 {# панель на клетки, а выделять нужно один — открытый. #}
-<a href="{% url 'chat_detail' item.chat_id %}"
+{# data-muted читает JS: беззвучный чат не прибавляет к счётчику в меню (components.js) #}
+<a href="{% url 'chat_detail' item.chat_id %}" data-row="{{ item.chat_id }}"{% if item.muted %} data-muted{% endif %}
    class="flex items-center gap-3 px-3 py-2.5 mx-1.5 my-0.5 rounded-xl transition-colors
           {% if active_id == item.chat_id %}bg-accent/10{% else %}hover:bg-slate-100 dark:hover:bg-slate-800/60{% endif %}">
 
@@ -18,11 +19,17 @@
   <div class="min-w-0 flex-1">
     <p class="font-medium text-sm truncate">
       {% if item.other %}{{ item.other.full_name }}{% else %}{{ item.chat.title }}{% endif %}
+      {% if item.muted %}<i class="fa-solid fa-bell-slash text-[10px] text-slate-400 ml-0.5" title="Без уведомлений"></i>{% endif %}
     </p>
-    <p class="text-xs text-slate-400 truncate">
+    {# Пока в чате печатают, превью последнего сообщения подменяется меткой. Обе строки #}
+    {# в разметке всегда: список перерисовывает htmx, и метку восстанавливает JS. #}
+    <p class="text-xs truncate">
+      <span data-typing class="hidden text-accent">печатает…</span>
+      <span data-quiet class="text-slate-400">
       {% with last=item.chat.last_message %}
       {% if last %}{% if last.author_id == user.pk %}Вы: {% elif last.author and item.chat.kind != "dm" %}{{ last.author.name }}: {% endif %}{{ last|preview }}{% else %}пока пусто{% endif %}
       {% endwith %}
+      </span>
     </p>
   </div>
 
@@ -30,8 +37,16 @@
     {% if item.chat.last_message %}
     <span class="block text-[11px] text-slate-400">{{ item.chat.last_message.created|when }}</span>
     {% endif %}
+    {# Собачка остаётся акцентной даже у беззвучного: «без уведомлений» не значит «не зовите» #}
+    {% if item.called %}
+    <span class="inline-flex items-center justify-center w-5 h-5 mt-0.5 mr-0.5 rounded-full bg-accent text-white dark:text-slate-950 text-xs font-bold" title="Вас упомянули">@</span>
+    {% endif %}
+    {# У беззвучного метка серая: число там своё, но звать оно никого не должно #}
     {% if item.unread %}
-    <span class="inline-flex items-center justify-center min-w-5 h-5 px-1.5 mt-0.5 rounded-full bg-accent text-white dark:text-slate-950 text-xs font-bold">{{ item.unread }}</span>
+    <span class="inline-flex items-center justify-center min-w-5 h-5 px-1.5 mt-0.5 rounded-full text-xs font-bold {% if item.muted %}bg-slate-300 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% else %}bg-accent text-white dark:text-slate-950{% endif %}">{{ item.unread }}</span>
+    {% elif item.pinned %}
+    {# Место занято меткой, а когда её нет — видно, что чат закреплён #}
+    <i class="fa-solid fa-thumbtack text-[11px] text-slate-400 mt-1 inline-block"></i>
     {% endif %}
   </div>
 </a>

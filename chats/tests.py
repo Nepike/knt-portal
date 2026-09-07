@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +28,7 @@ from users.models import User, UserSession
 from .consumers import ChatConsumer
 from .events import chat_group, notify_chat, user_group
 from .forms import CuratorAddForm
+from .mentions import mentioned
 from .models import Chat, Membership, Message, Reaction, unread_total
 from .uploads import MAX_FILES
 from .views import ACT_LIMIT, CATCH_UP, MAX_TEXT, PAGE_SIZE, SEND_LIMIT, _chat_items
@@ -962,10 +964,61 @@ class ConsumerTests(TransactionTestCase):
         self.assertEqual(await socket.receive_json_from(), {"chat": group.pk})
         await socket.disconnect()
 
+    async def test_typing_reaches_the_chat(self):
+        """Метка идёт по сокету в обе стороны: она живёт секунды, ничего не сохраняет
+        и не должна стоить ни запроса к базе, ни разбора HTTP."""
+        socket, _ = await self.open_socket(self.alice)
+        await socket.send_json_to({"typing": self.chat.pk})
+        self.assertEqual(
+            await socket.receive_json_from(),
+            {"chat": self.chat.pk, "typing": self.alice.pk, "who": self.alice.name},
+        )
+        await socket.disconnect()
+
+    async def test_typing_in_a_foreign_chat_goes_nowhere(self):
+        """Чат сверяем со своими группами: чужой в них не попадёт, и лишний запрос
+        к базе для этого не нужен.
+
+        Смотрим со стороны ПОЛУЧАТЕЛЯ: у отправителя чужого чата в подписках нет, и
+        своё же событие он не увидел бы даже без проверки — «тихо» у него ничего не
+        доказывает. А вот участник чужой переписки увидел бы там постороннего.
+        """
+        foreign = await database_sync_to_async(self.foreign_chat)()
+        stranger_socket, _ = await self.open_socket(self.stranger)  # он в том чате состоит
+        socket, _ = await self.open_socket(self.alice)
+        await socket.send_json_to({"typing": foreign.pk})
+        self.assertTrue(await stranger_socket.receive_nothing())
+        await socket.disconnect()
+        await stranger_socket.disconnect()
+
+    async def test_typing_is_not_repeated_too_often(self):
+        """Вкладка придерживает и сама, но верить ей в этом незачем: одно поле ввода
+        иначе рассылает событие на каждую букву всему чату курса."""
+        socket, _ = await self.open_socket(self.alice)
+        await socket.send_json_to({"typing": self.chat.pk})
+        await socket.receive_json_from()
+        await socket.send_json_to({"typing": self.chat.pk})
+        self.assertTrue(await socket.receive_nothing())
+        await socket.disconnect()
+
+    async def test_nonsense_over_the_socket_is_survived(self):
+        """Что придёт в сокет, решает не наш код. Разбор мусора не должен ронять
+        соединение: вкладка после обрыва пойдёт догонять всю ленту заново."""
+        socket, _ = await self.open_socket(self.alice)
+        for junk in ([], "typing", 7, {"typing": "первый"}, {"typing": None}, {}):
+            await socket.send_json_to(junk)
+        self.assertTrue(await socket.receive_nothing())
+        await socket.send_json_to({"typing": self.chat.pk})  # и работает дальше
+        self.assertEqual((await socket.receive_json_from())["typing"], self.alice.pk)
+        await socket.disconnect()
+
     def make_group(self):
         chat = Chat.objects.create(kind="group", title="Проект")
         Membership.objects.create(chat=chat, user=self.alice)
         return chat
+
+    def foreign_chat(self):
+        return Chat.get_or_create_dm(self.bob, self.stranger)
 
 
 class SendLimitTests(TestCase):
@@ -1735,11 +1788,307 @@ class ChatListLooksTests(TestCase):
         loaded = sum(len(item.chat.memberships.all()) for item in _chat_items(self.alice))
         self.assertEqual(loaded, 2, "участники группового чата читаются зря")
 
+    def test_the_row_keeps_a_place_for_the_typing_mark(self):
+        """Метку ставит JS по событию сокета, а список перерисовывает htmx: обе строки
+        обязаны быть в разметке всегда, иначе восстанавливать метку будет негде."""
+        last = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
+        Chat.objects.filter(pk=self.chat.pk).update(last_message=last)
+        page = self.client.get(reverse("chat_list")).content.decode()
+        self.assertIn(f'data-row="{self.chat.pk}"', page)
+        self.assertIn("data-typing", page)
+        self.assertIn("data-quiet", page)
+
+    def test_the_feed_listens_to_swipes(self):
+        """Свайп вправо — ответ; строка реакций из жеста исключена, там своя прокрутка."""
+        message = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
+        Reaction.objects.create(message=message, user=self.bob, emoji="🔥")
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk])).content.decode()
+        self.assertIn("swipeStart($event)", page)
+        self.assertIn("data-sideways", page)
+
     def test_a_vanished_chat_says_so_on_the_list(self):
         """Вкладку с исчезнувшим чатом уводит сюда: 404 в ответ на догрузку — не объяснение."""
         response = self.client.get(reverse("chat_list"), {"gone": "1"}, follow=True)
         self.assertRedirects(response, reverse("chat_list"))
         self.assertContains(response, "Чат больше недоступен")
+
+
+class SearchTests(TestCase):
+    """Поиск по переписке и открытие ленты на найденном.
+
+    Просто прокрутить к находке нельзя: в ленте лежит последняя страница, а речь может
+    идти о сообщении полугодовой давности.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local", surname="Петров")
+        cls.stranger = make_user("s@t.local", surname="Чужой")
+        cls.chat = Chat.get_or_create_dm(cls.alice, cls.bob)
+        cls.old = Message.objects.create(chat=cls.chat, author=cls.bob, text="вот ссылка на конспект")
+        Message.objects.bulk_create(
+            [Message(chat=cls.chat, author=cls.bob, text=f"болтовня {i}") for i in range(80)]
+        )
+        cls.last = Message.objects.filter(chat=cls.chat).last()
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+        self.url = reverse("message_search", args=[self.chat.pk])
+
+    def found(self, q):
+        return self.client.get(self.url, {"q": q}).content.decode()
+
+    def test_a_word_finds_its_message(self):
+        page = self.found("конспект")
+        self.assertIn(f"?at={self.old.pk}", page)
+
+    def test_the_case_does_not_matter(self):
+        self.assertIn(f"?at={self.old.pk}", self.found("КОНСПЕКТ"))
+
+    def test_a_deleted_message_is_not_found(self):
+        """Его текста в ленте уже никому не видно — находиться он тоже не должен."""
+        Message.objects.filter(pk=self.old.pk).update(deleted=True)
+        self.assertNotIn(f"?at={self.old.pk}", self.found("конспект"))
+
+    def test_one_letter_is_not_a_query(self):
+        """Одна буква есть почти в каждой реплике — это не поиск, а выгрузка переписки.
+        Смотрим на сам ответ, а не на надпись: надпись рисуется по длине запроса и
+        осталась бы на месте, даже если бы вьюха всё равно сходила в базу."""
+        answer = self.client.get(self.url, {"q": "к"})
+        self.assertEqual(answer.context["found"], [])
+        self.assertContains(answer, "ещё букву")
+
+    def test_nothing_found_says_so(self):
+        self.assertIn("Ничего не нашлось", self.found("динозавр"))
+
+    def test_the_match_is_highlighted(self):
+        self.assertIn("<mark", self.found("конспект"))
+
+    def test_an_outsider_searches_nothing(self):
+        self.client.force_login(self.stranger)
+        self.assertEqual(self.client.get(self.url, {"q": "конспект"}).status_code, 404)
+
+    def test_opening_at_a_message_brings_its_neighbours(self):
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk]), {"at": self.old.pk})
+        shown = [m.pk for m in page.context["chat_messages"]]
+        self.assertIn(self.old.pk, shown)
+        self.assertNotIn(self.last.pk, shown)  # конец переписки далеко внизу
+        self.assertContains(page, "data-at")
+
+    def test_opening_at_a_message_reads_nothing(self):
+        """Ниже найденного лежит всё, чего человек не видел: пометить это прочитанным
+        значило бы стереть непрочитанное, до которого он не дошёл."""
+        self.client.get(reverse("chat_detail", args=[self.chat.pk]), {"at": self.old.pk})
+        self.assertIsNone(Membership.objects.get(chat=self.chat, user=self.alice).last_read_id)
+
+    def test_history_does_not_chase_new_messages(self):
+        """Курсор ленты стоит посреди истории: первый же догон принёс бы всю переписку."""
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk]), {"at": self.old.pk})
+        self.assertNotContains(page, "chats:current from:body")
+
+    def test_a_normal_opening_still_chases(self):
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk]))
+        self.assertContains(page, "chats:current from:body")
+
+    def test_a_made_up_message_opens_the_usual_way(self):
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk]), {"at": 999999})
+        self.assertIn(self.last.pk, [m.pk for m in page.context["chat_messages"]])
+
+    def test_a_message_from_another_chat_opens_the_usual_way(self):
+        """Номер чужого сообщения — не место в ЭТОЙ переписке. Проверяем не только то,
+        что чужого текста нет (его и так неоткуда взять — лента всегда своего чата),
+        а что открылись обычным концом: иначе человека роняет в середину наугад,
+        да ещё и без пометки о прочтении.
+        """
+        foreign = Chat.get_or_create_dm(self.alice, self.stranger)
+        alien = Message.objects.create(chat=foreign, author=self.stranger, text="чужое")
+        ours = Message.objects.create(chat=self.chat, author=self.bob, text="наше свежее")
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk]), {"at": alien.pk})
+        self.assertNotContains(page, "чужое")
+        self.assertNotContains(page, "data-at")
+        self.assertEqual(
+            Membership.objects.get(chat=self.chat, user=self.alice).last_read_id, ours.pk
+        )
+
+
+class MentionTests(TestCase):
+    """Упоминания. Кого позвали, считается ПО ТЕКСТУ при сохранении: так упоминание
+    переживает правку, работает при наборе руками мимо подсказки и не подделывается —
+    позвать можно только того, кто в этом чате состоит."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local", name="Алиса", surname="Иванова")
+        cls.bob = make_user("b@t.local", name="Борис", surname="Петров")
+        cls.stranger = make_user("s@t.local", name="Чужой", surname="Человек")
+        cls.chat = Chat.objects.create(kind="group", title="Проект")
+        Membership.objects.bulk_create([
+            Membership(chat=cls.chat, user=cls.alice, is_admin=True),
+            Membership(chat=cls.chat, user=cls.bob),
+        ])
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+        self.client.force_login(self.alice)
+        self.url = reverse("message_send", args=[self.chat.pk])
+
+    def send(self, text):
+        self.client.post(self.url, {"text": text})
+        return Message.objects.filter(chat=self.chat).last()
+
+    def test_a_member_called_by_name_is_remembered(self):
+        message = self.send("@Петров Борис глянь пожалуйста")
+        self.assertEqual(list(message.mentions.all()), [self.bob])
+
+    def test_an_outsider_cannot_be_called(self):
+        """Иначе позвать можно было бы кого угодно на сайте — и узнать, что он существует."""
+        message = self.send("@Человек Чужой привет")
+        self.assertFalse(message.mentions.exists())
+
+    def test_a_name_without_the_mark_is_just_text(self):
+        message = self.send("Петров Борис обещал прийти")
+        self.assertFalse(message.mentions.exists())
+
+    def test_an_edit_recounts_them(self):
+        message = self.send("@Петров Борис глянь")
+        self.client.post(reverse("message_edit", args=[message.pk]), {"text": "уже неважно"})
+        self.assertFalse(message.mentions.exists())
+
+    def test_an_edit_can_add_one(self):
+        message = self.send("глянь пожалуйста")
+        self.client.post(reverse("message_edit", args=[message.pk]), {"text": "@Петров Борис глянь"})
+        self.assertEqual(list(message.mentions.all()), [self.bob])
+
+    def test_the_name_becomes_a_link_to_the_profile(self):
+        self.send("@Петров Борис глянь")
+        page = self.client.get(reverse("chat_detail", args=[self.chat.pk])).content.decode()
+        self.assertIn(f'href="{reverse("profile", args=[self.bob.pk])}"', page)
+        self.assertIn("@Петров Борис", page)
+
+    def test_a_message_without_the_mark_asks_the_database_nothing(self):
+        """Сообщений с упоминанием меньшинство, а участников курсового чата сотни."""
+        with CaptureQueriesContext(connection) as queries:
+            mentioned(self.chat, "просто сообщение")
+        self.assertFalse(queries.captured_queries)
+
+    def test_the_row_shows_that_i_was_called(self):
+        self.client.force_login(self.bob)
+        self.assertFalse(self.called(self.bob))
+        self.client.force_login(self.alice)
+        self.send("@Петров Борис глянь")
+        self.assertTrue(self.called(self.bob))
+
+    def test_my_own_call_does_not_light_up_my_row(self):
+        self.send("@Петров Борис глянь")
+        self.assertFalse(self.called(self.alice))
+
+    def test_a_read_call_stops_lighting_up(self):
+        """Метка про НЕпрочитанное: открыл чат — и она гаснет."""
+        message = self.send("@Петров Борис глянь")
+        Membership.objects.filter(chat=self.chat, user=self.bob).update(last_read=message)
+        self.assertFalse(self.called(self.bob))
+
+    def called(self, user):
+        return next(item for item in _chat_items(user) if item.chat_id == self.chat.pk).called
+
+    def test_the_member_list_is_json_without_me(self):
+        answer = self.client.get(reverse("chat_people", args=[self.chat.pk]))
+        self.assertEqual(json.loads(answer.content), [{"id": self.bob.pk, "name": self.bob.full_name}])
+
+    def test_an_outsider_gets_no_member_list(self):
+        self.client.force_login(self.stranger)
+        self.assertEqual(self.client.get(reverse("chat_people", args=[self.chat.pk])).status_code, 404)
+
+
+class PinAndMuteTests(TestCase):
+    """Закрепление и звук — свойства УЧАСТИЯ, а не чата: у каждого свои.
+
+    Беззвучный чат уходит из общего счётчика и из заголовка вкладки, но своё число в
+    списке сохраняет — серым. Смысл «без уведомлений» в том, чтобы чат не звал, а не
+    в том, чтобы спрятать от человека его собственную переписку.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = make_user("a@t.local")
+        cls.bob = make_user("b@t.local", surname="Петров")
+        cls.carol = make_user("c@t.local", surname="Сидорова")
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+        self.old = self.talk(self.bob, "давнее", days=3)
+        self.fresh = self.talk(self.carol, "свежее")
+
+    def talk(self, other, text, days=0):
+        """Диалог с сообщением: пустые ЛС в список не попадают вовсе."""
+        chat = Chat.get_or_create_dm(self.alice, other)
+        message = Message.objects.create(chat=chat, author=other, text=text)
+        if days:
+            Message.objects.filter(pk=message.pk).update(created=timezone.now() - timedelta(days=days))
+        Chat.objects.filter(pk=chat.pk).update(last_message=message)
+        return chat
+
+    def order(self, user=None):
+        return [item.chat_id for item in _chat_items(user or self.alice)]
+
+    def test_a_pinned_chat_climbs_over_a_fresher_one(self):
+        self.assertEqual(self.order(), [self.fresh.pk, self.old.pk])
+        self.client.post(reverse("chat_pin", args=[self.old.pk]))
+        self.assertEqual(self.order(), [self.old.pk, self.fresh.pk])
+
+    def test_pinning_is_personal(self):
+        """У собеседника порядок свой: он этот чат не закреплял."""
+        self.client.post(reverse("chat_pin", args=[self.old.pk]))
+        self.assertFalse(Membership.objects.get(chat=self.old, user=self.bob).pinned)
+
+    def test_pinning_toggles_back(self):
+        for expected in (True, False):
+            self.client.post(reverse("chat_pin", args=[self.old.pk]))
+            self.assertIs(Membership.objects.get(chat=self.old, user=self.alice).pinned, expected)
+
+    def test_a_muted_chat_leaves_the_common_counter(self):
+        self.assertEqual(unread_total(self.alice), 2)
+        self.client.post(reverse("chat_mute", args=[self.old.pk]))
+        self.assertEqual(unread_total(self.alice), 1)
+
+    def test_a_muted_chat_keeps_its_own_number(self):
+        """Число у чата остаётся — просто серым. Иначе человек не увидел бы, что ему писали."""
+        self.client.post(reverse("chat_mute", args=[self.old.pk]))
+        muted = next(item for item in _chat_items(self.alice) if item.chat_id == self.old.pk)
+        self.assertEqual(muted.unread, 1)
+        self.assertTrue(muted.muted)
+
+    def test_muting_does_not_touch_the_other_side(self):
+        self.client.post(reverse("chat_mute", args=[self.old.pk]))
+        self.assertEqual(unread_total(self.bob), 0)  # ему никто не писал
+        self.assertFalse(Membership.objects.get(chat=self.old, user=self.bob).muted)
+
+    def test_the_row_tells_the_browser_it_is_muted(self):
+        """По этой метке вкладка не прибавляет к счётчику на приходящее сообщение."""
+        self.client.post(reverse("chat_mute", args=[self.old.pk]))
+        page = self.client.get(reverse("chat_list")).content.decode()
+        self.assertIn(f'data-row="{self.old.pk}" data-muted', page)
+
+    def test_the_answer_repaints_both_places(self):
+        """Строку в списке (порядок, цвет метки) и подпись пункта в меню."""
+        body = self.client.post(reverse("chat_pin", args=[self.old.pk])).content.decode()
+        self.assertIn('hx-swap-oob="innerHTML:#chat-list"', body)
+        self.assertIn('hx-swap-oob="innerHTML:#chat-actions"', body)
+        self.assertIn("Открепить", body)  # подпись уже новая
+
+    def test_muting_asks_the_badge_to_recount(self):
+        """Общий счётчик изменился, а посчитать его тут нечем — это запрос по всем чатам."""
+        answer = self.client.post(reverse("chat_mute", args=[self.old.pk]))
+        self.assertEqual(answer.headers["HX-Trigger"], "chats:recount")
+
+    def test_an_outsider_cannot_pin_someone_elses_chat(self):
+        self.client.force_login(self.carol)
+        self.assertEqual(self.client.post(reverse("chat_pin", args=[self.old.pk])).status_code, 404)
+
+    def test_a_link_cannot_flip_the_switch(self):
+        """Только POST: по ссылке это делал бы любой предзагрузчик."""
+        self.assertEqual(self.client.get(reverse("chat_mute", args=[self.old.pk])).status_code, 405)
 
 
 class TemplateHealthTests(TestCase):
