@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -75,6 +76,20 @@ UPLOAD_THREADS = 12
 # двадцати минут выпечки и всего залитого: задание закрылось бы «не вышло».
 PUT_TRIES = 4
 
+# Чем ещё пекарню останавливают, кроме Ctrl+C: SIGTERM посылает systemd, SIGHUP —
+# `tmux kill-session` и закрытая консоль. Означать они обязаны то же самое, иначе
+# выключение стоит часа: задание молчит, и запись висит человеку «обрабатывается»,
+# пока сайт не сочтёт машину упавшей (`intake.models.CLAIM_TIMEOUT`).
+STOP_SIGNALS = [name for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
+
+# Как часто отчитываться о ходе долгой фазы. В консоли строка переписывает себя на месте,
+# и можно часто; в лог и в journalctl она уходит отдельными строками, и там частота —
+# это простыня, в которой не видно ничего другого.
+PULSE = 5
+QUIET = 30
+# Каким куском тянем сырьё. Гигабайты, поэтому потоком, а не в память.
+CHUNK = 4 * 1024 * 1024
+
 
 def say(text=""):
     print(text, flush=True)
@@ -88,18 +103,74 @@ def human(size):
     return f"{size / 1024 ** 3:.2f} ГБ"
 
 
-def took(started):
-    """Сколько прошло с отметки `time.monotonic()`."""
-    seconds = time.monotonic() - started
+def spell(seconds):
+    """Промежуток словами. Отдельно от `took`, потому что тем же надо называть и то,
+    сколько осталось, — а там нет никакой отметки времени, только число."""
     if seconds < 60:
         return f"{seconds:.1f} с"
     return f"{int(seconds) // 60} мин {int(seconds) % 60:02d} с"
+
+
+def took(started):
+    """Сколько прошло с отметки `time.monotonic()`."""
+    return spell(time.monotonic() - started)
 
 
 def rate(size, started):
     """Скорость фазы. Обе сетевые фазы упираются в канал, и без этого числа непонятно,
     чинить пекарню или звонить провайдеру."""
     return f"{size / max(time.monotonic() - started, 0.001) / 1024 ** 2:.1f} МБ/с"
+
+
+def times(seconds, started):
+    """«×5.9» — во столько раз выпечка обгоняет реальное время записи. Та же мерка, что
+    у ffmpeg в `speed=`: по ней сразу видно, печёт карта или всё-таки процессор."""
+    return f"×{seconds / max(time.monotonic() - started, 0.001):.1f}"
+
+
+class Pulse:
+    """Отчёт о ходе долгой фазы: сколько сделано и сколько осталось.
+
+    Трёхгигабайтное сырьё на плохом канале качается тринадцать минут, двухчасовая
+    запись печётся двадцать. Без этих строк обе фазы неотличимы от зависшей пекарни,
+    и первое, что делает человек, — снимает работу с полпути (проверено на себе).
+
+    В живой консоли строка переписывает себя на месте, в файле и в journalctl —
+    отдельными строками и много реже: `\\r` в логе даёт мусор, а строка каждые пять
+    секунд превращает лог в простыню. `isatty` как раз и различает эти два случая.
+
+    `unit` — как называть количество (байты человеку, секунды записи — минутами),
+    `pace` — как называть скорость; обе фазы считают её по-своему.
+    """
+
+    def __init__(self, total, unit=human, pace=None):
+        self.total, self.unit, self.pace = total, unit, pace
+        self.started = self.last = time.monotonic()
+        self.live = sys.stdout.isatty()
+        self.every = PULSE if self.live else QUIET
+        self.shown = False
+
+    def show(self, done):
+        now = time.monotonic()
+        if done <= 0 or now - self.last < self.every:
+            return
+        self.last, passed = now, now - self.started
+        parts = [f"{self.unit(done)} из {self.unit(self.total)}" if self.total else self.unit(done)]
+        if self.total:
+            parts.append(f"{done / self.total * 100:.0f}%")
+        if self.pace:
+            parts.append(self.pace(done, self.started))
+        if self.total > done:
+            parts.append(f"осталось ~{spell((self.total - done) * passed / done)}")
+        self.shown = True
+        line = "    " + " · ".join(parts)
+        print(f"{line}\r" if self.live else line, end="" if self.live else "\n", flush=True)
+
+    def clear(self):
+        """Убрать за собой строку, которую переписывали на месте: сразу за ней печатается
+        итог фазы, и он не должен въехать в её хвост."""
+        if self.shown and self.live:
+            print("\r" + " " * 79 + "\r", end="", flush=True)
 
 
 def dotenv():
@@ -167,6 +238,60 @@ def run(args):
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
+def clock(text):
+    """«00:01:23.456789» → 83.5 — так ffmpeg сообщает, до какой секунды записи дошёл.
+    Первые доли секунды там стоит «N/A»; тогда None, показывать ещё нечего."""
+    try:
+        hours, minutes, seconds = text.split(":")
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except ValueError:
+        return None
+
+
+def follow(lines, pulse):
+    """Скормить пульсу ход выпечки: ffmpeg сыплет пары «ключ=значение», нужна одна.
+
+    Отдельно от запуска процесса — чтобы проверялось без ffmpeg, как и всё остальное
+    в этом файле, что можно проверить без него.
+    """
+    for line in lines:
+        key, _, value = line.strip().partition("=")
+        if key == "out_time" and (at := clock(value)) is not None:
+            pulse.show(at)
+
+
+def watch(args, seconds):
+    """Запустить ffmpeg и показывать, до какой секунды записи он дошёл. Ответ той же
+    формы, что у `run`: вызывающий смотрит на код и разбирает stderr.
+
+    stderr уводим в файл, а не во второй конвейер: читать один, пока ffmpeg заполняет
+    другой, — верный способ встать насмерть на многословной жалобе.
+
+    И убить его надо своими руками. `subprocess.run` делал это сам на любой ошибке,
+    а с `Popen` это наша забота: SIGTERM приходит только питону, и брошенный ffmpeg
+    остался бы греть карту до утра — вместе с рабочим каталогом на десятки гигабайт,
+    который пекарня считает убранным.
+    """
+    pulse = Pulse(seconds, unit=spell, pace=times)
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as log:
+        # -progress пишет ход в stdout, -nostats убирает его же вывод в stderr, где он
+        # мешался бы разбору ошибки. Оба — общие настройки, им место до всего прочего.
+        process = subprocess.Popen([args[0], "-progress", "pipe:1", "-nostats", *args[1:]],
+                                   stdout=subprocess.PIPE, stderr=log,
+                                   text=True, encoding="utf-8", errors="replace")
+        try:
+            follow(process.stdout, pulse)
+            code = process.wait()
+        except BaseException:  # noqa: BLE001 — прерывание в том числе, за ним и заведено
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            pulse.clear()
+        log.seek(0)
+        return subprocess.CompletedProcess(args, code, "", log.read())
+
+
 def find_ffmpeg():
     if found := shutil.which("ffmpeg"):
         return found
@@ -190,6 +315,14 @@ def has_nvenc(ffmpeg):
         ffmpeg, "-hide_banner", "-v", "error", "-f", "lavfi",
         "-i", "color=black:s=256x256:d=0.2", "-c:v", NVENC, "-f", "null", "-",
     ]).returncode == 0
+
+
+def encoder_name(encoder):
+    """Как назвать выбранный кодировщик человеку. Одинаково у разовой выпечки и у демона:
+    молчаливый откат на процессор — самая дорогая неожиданность из возможных (двухчасовая
+    лекция печётся часы вместо двадцати минут), и видеть его надо первой же строкой,
+    а не узнавать по времени первого задания."""
+    return f"{encoder}{' — на видеокарте' if encoder == NVENC else ''}"
 
 
 def _fps(text):
@@ -383,7 +516,9 @@ def encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality,
         "-hls_segment_filename", (out / "%v" / "seg%05d.m4s").as_posix(),
         (out / "%v" / "index.m3u8").as_posix(),
     ]
-    return run(args)
+    # Единственный длинный запуск ffmpeg — и единственный, за которым надо следить:
+    # двухчасовая запись печётся двадцать минут на карте и часы на процессоре.
+    return watch(args, about["duration"])
 
 
 def _attributes(line):
@@ -568,9 +703,17 @@ def tell(site, token, where, body):
 
 def fetch_source(url, target):
     """Скачать сырьё прямо из хранилища. Потоком: лекция весит гигабайты, в память
-    такое не берут."""
+    такое не берут.
+
+    Своим циклом, а не `shutil.copyfileobj`, ровно затем, чтобы отчитываться по дороге:
+    на четырёх мегабитах эта фаза длится дольше самой выпечки.
+    """
     with urllib.request.urlopen(url, timeout=120) as answer, target.open("wb") as file:
-        shutil.copyfileobj(answer, file, length=4 * 1024 * 1024)
+        pulse = Pulse(int(answer.headers.get("Content-Length") or 0), pace=rate)
+        while chunk := answer.read(CHUNK):
+            file.write(chunk)
+            pulse.show(file.tell())
+        pulse.clear()
     return target.stat().st_size
 
 
@@ -686,11 +829,27 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
     return True
 
 
+def catch_stop():
+    """Остановка сигналом — то же событие, что Ctrl+C.
+
+    Обработка прерывания у пекарни уже правильная (`serve_once` возвращает задание
+    в очередь и снимает с диска десятки гигабайт), и весь смысл — чтобы в неё попадали
+    все способы выключения, а не один клавиатурный. Заодно это снимает нужду
+    в `KillSignal=SIGINT` у юнита systemd: обычного `stop` теперь достаточно.
+    """
+    def stop(number, _frame):
+        raise KeyboardInterrupt(signal.Signals(number).name)
+
+    for name in STOP_SIGNALS:
+        signal.signal(getattr(signal, name), stop)
+
+
 def serve(args, ffmpeg, encoder, denoise, known, site, token):
     """Ждать заданий и печь их по одному."""
     if not site or not token:
         raise SystemExit("для очереди нужны INTAKE_URL и INTAKE_TOKEN")
     say(f"пекарня ждёт работы: {site}, опрос раз в {args.every} с")
+    say(f"кодировщик: {encoder_name(encoder)}")
     try:
         while True:
             try:
@@ -743,6 +902,7 @@ def main(argv=None):
     denoise = "" if args.denoise.lower() in ("none", "нет", "") else args.denoise
 
     if args.serve or args.once:
+        catch_stop()  # ставим здесь, а не в `serve`: подмена обработчиков — дело запуска
         return serve(args, ffmpeg, encoder, denoise, known, site, token)
     if not args.kind or not args.source:
         parser.error("нужны вид и исходник — или --serve, чтобы брать задания из очереди")
@@ -752,7 +912,7 @@ def main(argv=None):
 
     say(f"пекарня · {recipe.title} ({name})")
     say(f"  требования: {whence}")
-    say(f"  кодировщик: {encoder}{' — на видеокарте' if encoder == NVENC else ''}")
+    say(f"  кодировщик: {encoder_name(encoder)}")
     if about := source_info(ffmpeg, args.source):
         say(f"  исходник:   {about['width']}×{about['height']}, {about['fps']:.0f} к/с, {about['duration']:.1f} с")
 

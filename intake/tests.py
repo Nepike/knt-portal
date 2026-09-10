@@ -1,10 +1,14 @@
 import argparse
+import contextlib
 import io
 import json
 import os
 import re
+import shutil
+import signal
 import struct
 import subprocess
+import tempfile
 import sys
 import urllib.error
 from datetime import timedelta
@@ -364,6 +368,35 @@ class TokenAgreementTests(SimpleTestCase):
                 self.assertTrue(resolve(door))
 
 
+class LiveOut(io.StringIO):
+    """Вывод, который считает себя живой консолью: по этому пекарня и различает
+    переписывание строки на месте и запись в лог."""
+
+    def isatty(self):
+        return True
+
+
+class FakeFFmpeg:
+    """Поддельный ffmpeg: отдаёт заготовленные строки хода, жалуется в отведённый ему
+    stderr и помнит, убили ли его."""
+
+    def __init__(self, lines, code=0, noise=""):
+        self.lines, self.code, self.noise = lines, code, noise
+        self.killed, self.args = False, None
+
+    def __call__(self, args, **kwargs):
+        self.args, self.stdout = args, iter(self.lines)
+        if self.noise:
+            kwargs["stderr"].write(self.noise)
+        return self
+
+    def wait(self):
+        return self.code
+
+    def kill(self):
+        self.killed = True
+
+
 class BakeryTests(SimpleTestCase):
     """Пекарня без ffmpeg: то, что можно проверить, не запуская кодировщик."""
 
@@ -470,6 +503,187 @@ class BakeryTests(SimpleTestCase):
 
         self.assertIn("/intake/release/", knocked)
         self.assertNotIn("/intake/fail/", knocked)
+
+    def test_a_signal_stops_the_bakery_the_same_way_ctrl_c_does(self):
+        """Ctrl+C — не единственный способ выключить пекарню: systemd посылает SIGTERM,
+        `tmux kill-session` и закрытая консоль — SIGHUP. Умри пекарня от них молча,
+        и выключение стоило бы часа: задание никому не вернули, и запись висит человеку
+        «обрабатывается», пока сайт не сочтёт машину упавшей.
+
+        Запускаем через `main`, а не зовём `catch_stop` напрямую: сама подмена
+        обработчиков стоит одной строки, а вот забыть её на пути запуска — ровно то,
+        что тут может сломаться и чего снаружи не видно.
+
+        Проверяем обработчик, а не доставку сигнала: послать себе SIGHUP посреди прогона
+        нечем — на windows его нет вовсе, а на linux он оборвал бы тесты.
+        """
+        before = {name: signal.getsignal(getattr(signal, name)) for name in bake.STOP_SIGNALS}
+        try:
+            with mock.patch.object(bake, "find_ffmpeg", return_value="ffmpeg"), \
+                    mock.patch.object(bake, "has_nvenc", return_value=False), \
+                    mock.patch.object(bake, "serve", return_value=0), \
+                    mock.patch.object(bake, "say"):
+                bake.main(["--once", "--offline"])
+            for name in bake.STOP_SIGNALS:
+                number = getattr(signal, name)
+                with self.subTest(name), self.assertRaises(KeyboardInterrupt):
+                    signal.getsignal(number)(number, None)
+        finally:
+            for name, handler in before.items():
+                signal.signal(getattr(signal, name), handler)
+
+        self.assertIn("SIGTERM", bake.STOP_SIGNALS)  # список сам мог остаться пустым
+
+    def test_the_daemon_says_which_encoder_it_will_use(self):
+        """Молчаливый откат на процессор — самая дорогая неожиданность из возможных:
+        двухчасовая лекция печётся часы вместо двадцати минут. Разовая выпечка кодировщик
+        печатала, а демон молчал, и узнавали об этом по времени первого задания.
+        """
+        args = argparse.Namespace(once=True, every=1)
+        lines = []
+
+        with mock.patch.object(bake, "serve_once", return_value=False), \
+                mock.patch.object(bake, "say", lines.append):
+            bake.serve(args, "ffmpeg", "libx264", "", spec.RECIPES, "https://knt-mipt.ru", "tok")
+
+        said = "\n".join(lines)
+        self.assertIn("libx264", said)
+        self.assertNotIn("видеокарте", said)  # на процессоре — и не притворяемся картой
+        self.assertIn("видеокарте", bake.encoder_name(bake.NVENC))  # а на карте — говорим
+
+    def test_the_clock_ffmpeg_prints_becomes_seconds(self):
+        """Ход выпечки ffmpeg сообщает временем записи, а не долей. В первые доли секунды
+        там стоит «N/A» — на нём разбор в лоб и падал бы, ровно на первой строке."""
+        self.assertAlmostEqual(bake.clock("00:01:23.500000"), 83.5)
+        self.assertAlmostEqual(bake.clock("01:00:00.000000"), 3600.0)
+        self.assertIsNone(bake.clock("N/A"))
+        self.assertIsNone(bake.clock(""))
+
+    def test_a_long_phase_says_how_far_it_got_and_how_much_is_left(self):
+        """Тринадцать минут молчания на скачивании сырья неотличимы от зависшей пекарни,
+        и человек снимает работу с полпути — так и вышло 10.09.2026. Отчёт нужен обеим
+        долгим фазам, поэтому проверяем общий пульс: сколько сделано, сколько осталось.
+        """
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            pulse = bake.Pulse(600.0, unit=bake.spell, pace=bake.times)
+            pulse.last = 0  # обычно первая строка ждёт своей секунды, а тесту ждать нечем
+            bake.follow(["frame=12", "out_time=N/A", "out_time=00:00:00.000000",
+                         "out_time=00:01:00.000000"], pulse)
+
+        line = said.getvalue()
+        self.assertIn("1 мин 00 с из 10 мин 00 с", line)
+        self.assertIn("10%", line)
+        self.assertIn("×", line)  # обгон реального времени — по нему и видно, чем печём
+        self.assertIn("осталось ~", line)
+        # Ни «N/A», ни чужие ключи, ни нулевой ход строк не дают. Нуль тут не придирка:
+        # ffmpeg печатает его первой же строкой, а «сколько осталось» на нуле сделанного
+        # считается делением на него.
+        self.assertEqual(line.count("\n"), 1)
+
+    def test_the_download_reports_its_progress_and_still_writes_every_byte(self):
+        """Фаза, из-за которой всё и затевалось: 3 ГБ на 4 МБ/с — тринадцать минут
+        молчания. Своим циклом вместо `copyfileobj` она стала отчитываться — и заодно
+        появилось место, где легко потерять кусок, поэтому проверяем и вес файла.
+        """
+        class Answer:
+            headers = {"Content-Length": str(3 * 1024 ** 2)}
+
+            def __init__(self):
+                self.left = 3
+
+            def read(self, size):
+                self.left -= 1
+                return b"x" * 1024 ** 2 if self.left >= 0 else b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        target = Path(tempfile.mkdtemp(prefix="bake-test-")) / "source.mkv"
+        said = io.StringIO()
+        try:
+            with mock.patch.object(bake.urllib.request, "urlopen", return_value=Answer()), \
+                    mock.patch.object(bake, "QUIET", 0), contextlib.redirect_stdout(said):
+                weight = bake.fetch_source("https://r2/get", target)
+
+            self.assertEqual(weight, 3 * 1024 ** 2)
+            self.assertEqual(target.stat().st_size, 3 * 1024 ** 2)
+        finally:
+            shutil.rmtree(target.parent, ignore_errors=True)
+
+        self.assertIn("из 3.0 МБ", said.getvalue())
+        self.assertIn("МБ/с", said.getvalue())
+
+    def test_in_a_live_console_the_line_rewrites_itself(self):
+        """Под tmux на пекарню смотрят живьём, и там строка обязана переписывать себя
+        на месте: тринадцать минут скачивания оставили бы полторы сотни строк. А в логе
+        `\\r` — это мусор, и туда пишется построчно и много реже."""
+        said = LiveOut()
+        with contextlib.redirect_stdout(said):
+            pulse = bake.Pulse(1024 ** 3, pace=bake.rate)
+            pulse.last = 0
+            pulse.show(1024 ** 3 // 2)
+            pulse.clear()
+
+        self.assertIn("512.0 МБ из 1.00 ГБ", said.getvalue())
+        self.assertIn("\r", said.getvalue())
+        self.assertNotIn("\n", said.getvalue())  # иначе итог фазы въедет в хвост строки
+        self.assertRegex(said.getvalue(), "\r {40,}\r$")  # и хвост за собой убрали
+        self.assertEqual(pulse.every, bake.PULSE)
+
+    def test_the_long_bake_is_watched_and_its_errors_still_come_back(self):
+        """Ход спрашиваем у самого ffmpeg (`-progress`), и настройки эти общие — им место
+        до всего прочего в командной строке. Ответ обязан остаться той же формы, что
+        у `run`: вызывающий смотрит на код возврата и печатает человеку stderr."""
+        fake = FakeFFmpeg(["out_time=00:00:05.000000", "progress=end"],
+                          code=1, noise="Invalid pixel format\n")
+        args = ["ffmpeg", "-i", "z.mkv", "out.m3u8"]
+
+        with mock.patch.object(bake.subprocess, "Popen", fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            done = bake.watch(args, 600.0)
+
+        self.assertEqual(fake.args[:4], ["ffmpeg", "-progress", "pipe:1", "-nostats"])
+        self.assertEqual(fake.args[4:], ["-i", "z.mkv", "out.m3u8"])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Invalid pixel format", done.stderr)
+
+    def test_the_long_bake_goes_through_the_watcher(self):
+        """Дорогая фаза ровно одна, и ход спрашивают у неё. Вернись она к безмолвному
+        `run`, двадцать минут выпечки снова стали бы неотличимы от зависшей пекарни."""
+        about = {"height": 1080, "fps": 60.0, "duration": 7200.0, "audio": True}
+        out = Path(tempfile.mkdtemp(prefix="bake-test-"))
+        try:
+            with mock.patch.object(bake, "watch") as watched:
+                bake.encode_ladder("ffmpeg", Path("z.mkv"), out, spec.RECIPES["lecture"],
+                                   [1080, 720], about, "libx264", 26, "")
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+        asked, seconds = watched.call_args[0]
+        self.assertEqual(seconds, 7200.0)  # длительность записи, иначе процент не тот
+        self.assertEqual(asked[0], "ffmpeg")
+
+    def test_an_interrupted_bake_takes_the_encoder_down_with_it(self):
+        """`subprocess.run` убивал ребёнка на любой ошибке сам, а с `Popen` это наша
+        забота, и сигнал приходит только питону. Брошенный ffmpeg грел бы карту до утра —
+        и писал бы в каталог, который пекарня уже считает убранным.
+        """
+        def lines():
+            yield "out_time=00:00:05.000000"
+            raise KeyboardInterrupt
+
+        fake = FakeFFmpeg(lines())
+
+        with mock.patch.object(bake.subprocess, "Popen", fake), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(KeyboardInterrupt):
+            bake.watch(["ffmpeg", "-i", "z.mkv"], 600.0)
+
+        self.assertTrue(fake.killed)
 
 
 def made_manifest(duration=600.0, segments=None):
