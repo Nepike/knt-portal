@@ -89,6 +89,9 @@ PULSE = 5
 QUIET = 30
 # Каким куском тянем сырьё. Гигабайты, поэтому потоком, а не в память.
 CHUNK = 4 * 1024 * 1024
+# Как часто говорить сайту «жива». Срок задания (`intake.models.CLAIM_TIMEOUT`) идёт
+# от последней вести, и минута из этого часа на весточки — недорого.
+BEAT = 300
 
 
 def say(text=""):
@@ -238,7 +241,7 @@ def run(args):
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
-def clock(text):
+def timecode(text):
     """«00:01:23.456789» → 83.5 — так ffmpeg сообщает, до какой секунды записи дошёл.
     Первые доли секунды там стоит «N/A»; тогда None, показывать ещё нечего."""
     try:
@@ -248,19 +251,22 @@ def clock(text):
         return None
 
 
-def follow(lines, pulse):
+def follow(lines, pulse, beat=None):
     """Скормить пульсу ход выпечки: ffmpeg сыплет пары «ключ=значение», нужна одна.
+    Заодно отсюда же уходит весточка сайту — работа идёт.
 
     Отдельно от запуска процесса — чтобы проверялось без ffmpeg, как и всё остальное
     в этом файле, что можно проверить без него.
     """
     for line in lines:
         key, _, value = line.strip().partition("=")
-        if key == "out_time" and (at := clock(value)) is not None:
+        if key == "out_time" and (at := timecode(value)) is not None:
             pulse.show(at)
+            if beat:
+                beat()
 
 
-def watch(args, seconds):
+def watch(args, seconds, beat=None):
     """Запустить ffmpeg и показывать, до какой секунды записи он дошёл. Ответ той же
     формы, что у `run`: вызывающий смотрит на код и разбирает stderr.
 
@@ -280,7 +286,7 @@ def watch(args, seconds):
                                    stdout=subprocess.PIPE, stderr=log,
                                    text=True, encoding="utf-8", errors="replace")
         try:
-            follow(process.stdout, pulse)
+            follow(process.stdout, pulse, beat)
             code = process.wait()
         except BaseException:  # noqa: BLE001 — прерывание в том числе, за ним и заведено
             process.kill()
@@ -303,18 +309,50 @@ def find_ffmpeg():
         return None
 
 
-def has_nvenc(ffmpeg):
-    """Проверяем делом, а не списком `-encoders`: там перечислено вкомпилированное,
-    а работает оно только при живой карте и драйвере. Кодируем несколько чёрных кадров.
+def nvenc_problem(ffmpeg):
+    """Почему видеокарту взять нельзя, или None, если можно.
+
+    Проверяем делом, а не списком `-encoders`: там перечислено вкомпилированное,
+    а работает оно только при живой карте и драйвере. На факультетском сервере ffmpeg
+    был как раз с nvenc, а драйвера не было вовсе. Кодируем несколько чёрных кадров.
 
     256×256 не «на всякий случай»: у NVENC есть нижняя граница кадра, и на 64×64 он
     отвечает «Frame Dimension less than the minimum supported value» — проба на видимо
     живой карте выдавала бы, что видеокарты нет.
+
+    Жалобу отдаём как есть: «Cannot load libcuda.so.1» (нет драйвера), «Unknown encoder»
+    (ffmpeg без nvenc) и «No capable devices found» (карты не видно) — это три разные
+    починки, и выяснять руками, которая из них, человек не должен.
     """
-    return run([
+    done = run([
         ffmpeg, "-hide_banner", "-v", "error", "-f", "lavfi",
         "-i", "color=black:s=256x256:d=0.2", "-c:v", NVENC, "-f", "null", "-",
-    ]).returncode == 0
+    ])
+    if done.returncode == 0:
+        return None
+    for line in done.stderr.splitlines():
+        # «[h264_nvenc @ 0x55f…] Cannot load libcuda.so.1» — метка адреса человеку не нужна.
+        if text := line.split("] ", 1)[-1].strip():
+            return text
+    return "ffmpeg не смог завести NVENC и не сказал почему"
+
+
+def no_card(trouble):
+    """Почему лекцию на этой машине печь нельзя, или None. Пустая беда — печём.
+
+    Откат на процессор — не запасной путь, а поломка задумки: вся она про машины
+    с видеокартой. Двухчасовая запись печётся на процессоре часами, и задание за это
+    время уедет другой машине — 10.09.2026 так и вышло с #210. Лучше не начать вовсе
+    и сказать почему.
+
+    Ролики косметики это не касается: там восемь секунд, и процессор их берёт мгновенно.
+    А по прямому указанию (`--cpu`) можно и лекцию — это решение человека, а не случайность,
+    и беда в этом случае не выясняется вовсе (`main`), так что сюда приезжает пустая.
+    """
+    if not trouble:
+        return None
+    return (f"видеокарта недоступна: {trouble}\n"
+            "  Лекции без неё не печём. Настоять — ключ --cpu.")
 
 
 def encoder_name(encoder):
@@ -476,7 +514,7 @@ def lecture_filter(heights, out_fps, source_fps, denoise):
     return ";".join(parts)
 
 
-def encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise):
+def encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat=None):
     out_fps = min(ladder.fps, about["fps"]) or ladder.fps
     audio = about["audio"]
     for index in range(len(heights)):
@@ -517,8 +555,8 @@ def encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality,
         (out / "%v" / "index.m3u8").as_posix(),
     ]
     # Единственный длинный запуск ffmpeg — и единственный, за которым надо следить:
-    # двухчасовая запись печётся двадцать минут на карте и часы на процессоре.
-    return watch(args, about["duration"])
+    # двадцать минут на карте, и всё это время сайт не слышит о задании ничего.
+    return watch(args, about["duration"], beat)
 
 
 def _attributes(line):
@@ -590,7 +628,7 @@ def _read_rendition(out, relative, attributes):
     }
 
 
-def bake_lecture(ffmpeg, encoder, source, name, ladder, out, denoise):
+def bake_lecture(ffmpeg, encoder, source, name, ladder, out, denoise, beat=None):
     """Печёт набор HLS и возвращает описание готового."""
     about = source_info(ffmpeg, source)
     if about is None:
@@ -603,7 +641,7 @@ def bake_lecture(ffmpeg, encoder, source, name, ladder, out, denoise):
     say(f"  дорожки:    {', '.join(f'{h}p' for h in heights)}"
         f"{'' if about['audio'] else ' (звука в исходнике нет)'}")
 
-    done = encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise)
+    done = encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat)
     if done.returncode:
         raise SystemExit(f"ffmpeg не справился:\n{done.stderr.strip()}")
 
@@ -701,18 +739,47 @@ def tell(site, token, where, body):
         say(f"  ! сайту не сказалось ({error}) — задание вернётся в очередь само, через час")
 
 
-def fetch_source(url, target):
+class Beat:
+    """Весточка сайту: работа идёт, задание не брошено.
+
+    Скачивание и выпечка не обращаются к сайту вовсе, а вместе это часы: 16 ГБ сырья
+    на плохом канале — час сам по себе. Пока срок отмерялся от захвата, сайт отбирал
+    задание у работающей машины и отдавал другой (так и случилось с #210 10.09.2026),
+    и обе пекли одно и то же — а отчитаться первая уже не могла, номер попытки сменился.
+
+    Стучит не таймер, а сама работа: `Beat` зовут из цикла скачивания и из разбора хода
+    ffmpeg. Фоновый поток по расписанию держал бы задание и за повисшей машиной — то есть
+    ровно в том случае, ради которого срок и заведён.
+
+    Не дошло — не беда, `tell` не роняет пекарню: следующая весточка через `BEAT` секунд,
+    а не дойдут все — задание вернётся в очередь само.
+    """
+
+    def __init__(self, site, token, job_token):
+        self.site, self.token, self.job = site, token, job_token
+        self.last = time.monotonic()
+
+    def __call__(self):
+        if time.monotonic() - self.last < BEAT:
+            return
+        self.last = time.monotonic()
+        tell(self.site, self.token, "/intake/alive/", {"token": self.job})
+
+
+def fetch_source(url, target, beat=None):
     """Скачать сырьё прямо из хранилища. Потоком: лекция весит гигабайты, в память
     такое не берут.
 
-    Своим циклом, а не `shutil.copyfileobj`, ровно затем, чтобы отчитываться по дороге:
-    на четырёх мегабитах эта фаза длится дольше самой выпечки.
+    Своим циклом, а не `shutil.copyfileobj`, ровно затем, чтобы отчитываться по дороге —
+    и человеку, и сайту: на четырёх мегабитах эта фаза длится дольше самой выпечки.
     """
     with urllib.request.urlopen(url, timeout=120) as answer, target.open("wb") as file:
         pulse = Pulse(int(answer.headers.get("Content-Length") or 0), pace=rate)
         while chunk := answer.read(CHUNK):
             file.write(chunk)
             pulse.show(file.tell())
+            if beat:
+                beat()
         pulse.clear()
     return target.stat().st_size
 
@@ -776,16 +843,18 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
         return True
 
     workshop = Path(tempfile.mkdtemp(prefix="bake-"))
+    beat = Beat(site, token, job["token"])
     whole = time.monotonic()
     try:
         source = workshop / (job["name"] or "source")
         say("  качаю сырьё…")
         clock = time.monotonic()
-        weight = fetch_source(job["source"], source)
+        weight = fetch_source(job["source"], source, beat)
         say(f"  сырьё: {human(weight)} за {took(clock)} · {rate(weight, clock)}")
 
         clock = time.monotonic()
-        out, made = bake_lecture(ffmpeg, encoder, source, job["recipe"], recipe, workshop / "out", denoise)
+        out, made = bake_lecture(ffmpeg, encoder, source, job["recipe"], recipe,
+                                 workshop / "out", denoise, beat)
         if problem := spec.check_ladder(recipe, made):
             raise SystemExit(problem)
         baking = time.monotonic() - clock
@@ -898,10 +967,15 @@ def main(argv=None):
 
     site, token = setting("INTAKE_URL", args.site), setting("INTAKE_TOKEN", args.token)
     known, whence = recipes(site, token, args.offline)
-    encoder = "libx264" if args.cpu or not has_nvenc(ffmpeg) else NVENC
+    trouble = "" if args.cpu else nvenc_problem(ffmpeg)
+    encoder = "libx264" if args.cpu or trouble else NVENC
     denoise = "" if args.denoise.lower() in ("none", "нет", "") else args.denoise
 
     if args.serve or args.once:
+        # Очередь возит лекции и ничего кроме, поэтому спрашиваем на входе, а не у задания:
+        # взять его и тут же вернуть значило бы отбирать работу у машины с картой.
+        if refusal := no_card(trouble):
+            raise SystemExit(refusal)
         catch_stop()  # ставим здесь, а не в `serve`: подмена обработчиков — дело запуска
         return serve(args, ffmpeg, encoder, denoise, known, site, token)
     if not args.kind or not args.source:
@@ -909,6 +983,8 @@ def main(argv=None):
     if not args.source.exists():
         raise SystemExit(f"нет такого файла: {args.source}")
     name, recipe = pick(known, args.kind)
+    if isinstance(recipe, spec.Ladder) and (refusal := no_card(trouble)):
+        raise SystemExit(refusal)
 
     say(f"пекарня · {recipe.title} ({name})")
     say(f"  требования: {whence}")

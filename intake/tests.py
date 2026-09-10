@@ -520,7 +520,7 @@ class BakeryTests(SimpleTestCase):
         before = {name: signal.getsignal(getattr(signal, name)) for name in bake.STOP_SIGNALS}
         try:
             with mock.patch.object(bake, "find_ffmpeg", return_value="ffmpeg"), \
-                    mock.patch.object(bake, "has_nvenc", return_value=False), \
+                    mock.patch.object(bake, "nvenc_problem", return_value=None), \
                     mock.patch.object(bake, "serve", return_value=0), \
                     mock.patch.object(bake, "say"):
                 bake.main(["--once", "--offline"])
@@ -551,25 +551,113 @@ class BakeryTests(SimpleTestCase):
         self.assertNotIn("видеокарте", said)  # на процессоре — и не притворяемся картой
         self.assertIn("видеокарте", bake.encoder_name(bake.NVENC))  # а на карте — говорим
 
+    def start(self, argv, trouble):
+        """Запустить пекарню с заданной бедой вместо видеокарты. Возвращает мок `serve`.
+
+        `--offline` тут обязателен: иначе требования пошли бы спрашивать у живого сайта,
+        адрес и токен которого лежат в `.env` разработчика.
+        """
+        with mock.patch.object(bake, "find_ffmpeg", return_value="ffmpeg"), \
+                mock.patch.object(bake, "nvenc_problem", return_value=trouble), \
+                mock.patch.object(bake, "serve", return_value=0) as served, \
+                mock.patch.object(bake, "say"):
+            bake.main([*argv, "--offline"])
+        return served
+
+    def test_without_a_card_the_bakery_refuses_to_take_lectures(self):
+        """Вся затея — про машины с видеокартой: на процессоре двухчасовая запись печётся
+        часами, и сайт за это время отдаст задание другой машине (так и вышло с #210).
+        Спрашиваем на входе, а не у задания: взять его и тут же вернуть значило бы
+        отбирать работу у той, что с картой.
+
+        И причину называем ту, что сказал ffmpeg: «нет драйвера», «ffmpeg без nvenc»
+        и «карты не видно» — три разные починки, выяснять их руками человек не должен.
+        """
+        with self.assertRaises(SystemExit) as caught:
+            self.start(["--serve"], "Cannot load libcuda.so.1")
+
+        self.assertIn("Cannot load libcuda.so.1", str(caught.exception))
+        self.assertIn("--cpu", str(caught.exception))  # и как настоять, если всё же надо
+
+    def test_a_lecture_baked_by_hand_needs_the_card_too(self):
+        """Разовая выпечка лекции — та же работа и то же железо. А ролику косметики
+        карта не нужна: там восемь секунд, процессор берёт их мгновенно."""
+        with self.assertRaises(SystemExit) as caught:
+            self.start(["lecture", str(Path(bake.__file__))], "No capable devices found")
+
+        self.assertIn("No capable devices found", str(caught.exception))
+
+    def test_the_cpu_switch_is_still_obeyed(self):
+        """`--cpu` — решение человека, а не случайный откат, и запрет его не касается."""
+        served = self.start(["--serve", "--cpu"], "Cannot load libcuda.so.1")
+
+        self.assertEqual(served.call_args[0][2], "libx264")  # третьим идёт кодировщик
+
+    def test_the_first_line_of_the_complaint_is_what_reaches_the_human(self):
+        """ffmpeg жалуется с меткой адреса — человеку она не нужна, а причина нужна."""
+        noisy = subprocess.CompletedProcess([], 1, "", "[h264_nvenc @ 0x55f] Cannot load libcuda.so.1\n"
+                                                       "Error initializing output stream 0:0\n")
+
+        with mock.patch.object(bake, "run", return_value=noisy):
+            self.assertEqual(bake.nvenc_problem("ffmpeg"), "Cannot load libcuda.so.1")
+
+        with mock.patch.object(bake, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            self.assertIsNone(bake.nvenc_problem("ffmpeg"))
+
+    def test_the_long_phases_tell_the_site_the_machine_is_alive(self):
+        """Скачивание и выпечка не обращаются к сайту вовсе, а вместе это часы. Пока срок
+        шёл от захвата, сайт отбирал задание у работающей машины — стучим из самой работы.
+        """
+        knocked = []
+
+        with mock.patch.object(bake, "talk", lambda site, token, where, body: knocked.append(where)):
+            beat = bake.Beat("https://knt-mipt.ru", "OqRZ7yTn3xK1", "подпись")
+            beat()  # только что заведён — рано
+            beat.last -= bake.BEAT + 1
+            beat()
+            beat()  # а этот снова рано: удары считаются от предыдущего, а не от вызова
+
+        self.assertEqual(knocked, ["/intake/alive/"])
+
+    def test_a_taken_job_gets_a_heartbeat_of_its_own(self):
+        """Одна весточка на обе долгие фазы, и обязательно СВОЕГО задания: чужой токен
+        продлевал бы срок работе, которую делает другая машина."""
+        job = {"id": 3, "recipe": "lecture", "token": "подпись",
+               "source": "https://r2/get", "name": "z.mkv"}
+
+        with mock.patch.object(bake, "talk", lambda *a: {"job": job} if a[2] == "/intake/claim/" else {}), \
+                mock.patch.object(bake, "say"), \
+                mock.patch.object(bake, "fetch_source", return_value=1024) as fetched, \
+                mock.patch.object(bake, "bake_lecture", side_effect=SystemExit("хватит")) as baked:
+            bake.serve_once("https://knt-mipt.ru", "OqRZ7yTn3xK1", "ffmpeg",
+                            bake.NVENC, "", spec.RECIPES)
+
+        beat = fetched.call_args[0][2]
+        self.assertIsInstance(beat, bake.Beat)
+        self.assertEqual(beat.job, "подпись")
+        self.assertIs(baked.call_args[0][-1], beat)  # и на выпечке та же самая
+
     def test_the_clock_ffmpeg_prints_becomes_seconds(self):
         """Ход выпечки ffmpeg сообщает временем записи, а не долей. В первые доли секунды
         там стоит «N/A» — на нём разбор в лоб и падал бы, ровно на первой строке."""
-        self.assertAlmostEqual(bake.clock("00:01:23.500000"), 83.5)
-        self.assertAlmostEqual(bake.clock("01:00:00.000000"), 3600.0)
-        self.assertIsNone(bake.clock("N/A"))
-        self.assertIsNone(bake.clock(""))
+        self.assertAlmostEqual(bake.timecode("00:01:23.500000"), 83.5)
+        self.assertAlmostEqual(bake.timecode("01:00:00.000000"), 3600.0)
+        self.assertIsNone(bake.timecode("N/A"))
+        self.assertIsNone(bake.timecode(""))
 
     def test_a_long_phase_says_how_far_it_got_and_how_much_is_left(self):
         """Тринадцать минут молчания на скачивании сырья неотличимы от зависшей пекарни,
         и человек снимает работу с полпути — так и вышло 10.09.2026. Отчёт нужен обеим
         долгим фазам, поэтому проверяем общий пульс: сколько сделано, сколько осталось.
         """
-        said = io.StringIO()
+        said, beats = io.StringIO(), []
         with contextlib.redirect_stdout(said):
             pulse = bake.Pulse(600.0, unit=bake.spell, pace=bake.times)
             pulse.last = 0  # обычно первая строка ждёт своей секунды, а тесту ждать нечем
             bake.follow(["frame=12", "out_time=N/A", "out_time=00:00:00.000000",
-                         "out_time=00:01:00.000000"], pulse)
+                         "out_time=00:01:00.000000"], pulse, lambda: beats.append(1))
+
+        self.assertTrue(beats)  # отсюда же уходит и весточка сайту: выпечка молчит долго
 
         line = said.getvalue()
         self.assertIn("1 мин 00 с из 10 мин 00 с", line)
@@ -603,11 +691,11 @@ class BakeryTests(SimpleTestCase):
                 return False
 
         target = Path(tempfile.mkdtemp(prefix="bake-test-")) / "source.mkv"
-        said = io.StringIO()
+        said, beats = io.StringIO(), []
         try:
             with mock.patch.object(bake.urllib.request, "urlopen", return_value=Answer()), \
                     mock.patch.object(bake, "QUIET", 0), contextlib.redirect_stdout(said):
-                weight = bake.fetch_source("https://r2/get", target)
+                weight = bake.fetch_source("https://r2/get", target, lambda: beats.append(1))
 
             self.assertEqual(weight, 3 * 1024 ** 2)
             self.assertEqual(target.stat().st_size, 3 * 1024 ** 2)
@@ -616,6 +704,7 @@ class BakeryTests(SimpleTestCase):
 
         self.assertIn("из 3.0 МБ", said.getvalue())
         self.assertIn("МБ/с", said.getvalue())
+        self.assertTrue(beats)  # 16 ГБ по плохому каналу — час, и сайту это надо знать
 
     def test_in_a_live_console_the_line_rewrites_itself(self):
         """Под tmux на пекарню смотрят живьём, и там строка обязана переписывать себя
@@ -663,7 +752,7 @@ class BakeryTests(SimpleTestCase):
         finally:
             shutil.rmtree(out, ignore_errors=True)
 
-        asked, seconds = watched.call_args[0]
+        asked, seconds, _beat = watched.call_args[0]
         self.assertEqual(seconds, 7200.0)  # длительность записи, иначе процент не тот
         self.assertEqual(asked[0], "ffmpeg")
 
@@ -790,6 +879,55 @@ class QueueTests(TestCase):
 
         self.assertTrue(prefix.startswith("lectures/"))
         self.assertEqual(MediaJob.objects.get().prefix, prefix)
+
+    def test_a_working_machine_does_not_have_its_job_taken_away(self):
+        """Срок идёт от последней вести, а не от захвата. Иначе долгая работа — 16 ГБ
+        сырья по плохому каналу, потом выпечка — уезжала бы к другой машине прямо
+        из-под работающей, и обе делали бы одно и то же (так и вышло с #210 10.09.2026).
+        """
+        token = self.claim()["token"]
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+
+        self.assertEqual(self.call("intake_alive", token=token).status_code, 200)
+        self.assertIsNone(self.claim())  # час прошёл, но машина сказала «жива»
+
+    def test_a_machine_that_says_nothing_still_loses_the_job(self):
+        """Обратная половина того же: молчание дольше срока — и задание свободно.
+        Без неё упавшая пекарня заморозила бы лекцию навсегда."""
+        self.claim()
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+
+        self.assertIsNotNone(self.claim())
+
+    def test_the_replaced_machine_cannot_hold_the_job_by_beating(self):
+        """Задание уже передали — значит, старая пекарня не хозяйка, и продлевать ей
+        нечего. Иначе она удержала бы работу, которую в эту минуту делает другая."""
+        token = self.claim()["token"]
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+        self.claim()
+
+        self.assertEqual(self.call("intake_alive", token=token).status_code, 409)
+
+    def test_handing_in_the_manifest_counts_as_a_word(self):
+        """Правило одно на все ручки: всякое слово пекарни продлевает срок. Манифест
+        приходит сразу после выпечки — самой долгой фазы, — и молчание перед ним уже
+        могло почти исчерпать час."""
+        token = self.claim()["token"]
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+
+        self.call("intake_plan", token=token, manifest=made_manifest())
+
+        self.assertIsNone(self.claim())
+
+    def test_asking_for_links_counts_as_a_word(self):
+        """Заливка кусков идёт порциями по 200 и длится столько, сколько отдаст канал.
+        Отдельная весточка тут не нужна — сама просьба о ссылках и есть весточка."""
+        token = self.claim()["token"]
+        self.call("intake_plan", token=token, manifest=made_manifest())
+        MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
+
+        self.assertEqual(self.call("intake_sign", token=token, names=["0/seg00000.m4s"]).status_code, 200)
+        self.assertIsNone(self.claim())
 
     def test_links_are_signed_under_the_jobs_own_folder(self):
         token = self.claim()["token"]

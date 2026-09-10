@@ -16,6 +16,7 @@ from django.contrib.auth.decorators import login_not_required
 from django.core import signing
 from django.db import transaction
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -123,6 +124,20 @@ def _gone():
     return JsonResponse({"error": "задание закрыто или отдано другому"}, status=409)
 
 
+def _still_here(job):
+    """Всякое слово пекарни продлевает срок задания.
+
+    `CLAIM_TIMEOUT` отмеряется от ПОСЛЕДНЕЙ вести, а не от захвата, и это не мелочь:
+    скачать 16 ГБ сырья — час сам по себе, испечь двухчасовую запись — ещё двадцать минут,
+    залить две с половиной тысячи кусков — сколько отдаст канал. Считая от захвата, сайт
+    отбирал бы задание у работающей машины и отдавал его второй (так и вышло с #210
+    10.09.2026): обе делали одну работу, а первая к тому же не могла уже и отчитаться —
+    номер попытки сменился вместе с передачей.
+    """
+    job.claimed_at = timezone.now()
+    job.save(update_fields=["claimed_at", "updated"])
+
+
 @login_not_required
 @csrf_exempt
 @require_POST
@@ -178,7 +193,8 @@ def plan(request):
     stale = job.prefix
     job.prefix = f"lectures/{uuid4().hex}"
     job.manifest = body["manifest"]
-    job.save(update_fields=["prefix", "manifest", "updated"])
+    job.claimed_at = timezone.now()  # см. _still_here: срок идёт от последней вести
+    job.save(update_fields=["prefix", "manifest", "claimed_at", "updated"])
     sweep(stale)
     return JsonResponse({"prefix": job.prefix})
 
@@ -195,6 +211,7 @@ def sign(request):
     if job is None or not job.prefix:
         return _gone()
 
+    _still_here(job)  # заливка идёт порциями, и каждая — весточка, что машина жива
     urls, types = {}, {}
     for name in list(body.get("names") or [])[:MAX_SIGNED]:
         # Имя даёт пекарня, а ключ подписываем мы: «../» увело бы запись в чужую папку.
@@ -257,6 +274,26 @@ def commit(request):
     # Через `sweep`, а не напрямую: он же и убережёт от повторного `commit`, когда
     # «прошлая» папка — это та самая, что мы только что поставили лекции.
     sweep(replaced)
+    return JsonResponse({"ok": True})
+
+
+@login_not_required
+@csrf_exempt
+@require_POST
+def alive(request):
+    """«Ещё работаю». Скачивание сырья и выпечка идут без единого запроса к сайту, и на
+    длинной записи это часы — продлевать срок было бы попросту нечем.
+
+    Стучит не таймер пекарни, а сама её работа (`tools/bake.Beat`): весточка уходит из
+    цикла скачивания и из разбора хода ffmpeg. Фоновый удар по расписанию держал бы
+    задание и за повисшей машиной — то есть ровно в том случае, ради которого срок заведён.
+    """
+    if refusal := guard(request):
+        return refusal
+    job = _job(_body(request))
+    if job is None:
+        return _gone()
+    _still_here(job)
     return JsonResponse({"ok": True})
 
 
