@@ -772,8 +772,18 @@ def fetch_source(url, target, beat=None):
 
     Своим циклом, а не `shutil.copyfileobj`, ровно затем, чтобы отчитываться по дороге —
     и человеку, и сайту: на четырёх мегабитах эта фаза длится дольше самой выпечки.
+
+    Сырья нет — это отказ, а не обрыв связи. HTTPError — тоже OSError, и без этой ветки
+    404 уходил бы в `release`: задание возвращалось в очередь, пекарня тут же брала его
+    снова, и так по кругу, пока 30.09.2026 у сайта не переполнился счётчик попыток.
     """
-    with urllib.request.urlopen(url, timeout=120) as answer, target.open("wb") as file:
+    try:
+        answer = urllib.request.urlopen(url, timeout=120)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise SystemExit("сырья нет в хранилище (404) — запись придётся загрузить заново") from error
+        raise
+    with answer, target.open("wb") as file:
         pulse = Pulse(int(answer.headers.get("Content-Length") or 0), pace=rate)
         while chunk := answer.read(CHUNK):
             file.write(chunk)
@@ -830,7 +840,8 @@ def upload(site, token, job_token, folder):
 
 
 def serve_once(site, token, ffmpeg, encoder, denoise, known):
-    """Взять одно задание и довести до конца. False — работы не было."""
+    """Взять одно задание и довести до конца. False — пора передохнуть: работы не было
+    или оборвалась связь."""
     answer = talk(site, token, "/intake/claim/", {"worker": socket.gethostname()})
     job = answer.get("job")
     if not job:
@@ -880,6 +891,10 @@ def serve_once(site, token, ffmpeg, encoder, denoise, known):
         # красное «не обработалась» из-за чужого отвалившегося VPN. Возвращаем в очередь.
         say(f"  СВЯЗЬ ОБОРВАЛАСЬ: {error}")
         tell(site, token, "/intake/release/", {"token": job["token"]})
+        # И сразу за работой не идём: связь за секунду не вернётся, а задание в голове
+        # очереди — ровно то, что сейчас вернули. Повтор через секунду крутил бы его
+        # по кругу тысячи раз в сутки.
+        return False
     except KeyboardInterrupt:
         # Ctrl+C — это НЕ отказ: печь лекцию по-прежнему можно, просто некому прямо
         # сейчас. Сказать `fail` было бы неправдой — запись загорелась бы человеку

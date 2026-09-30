@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from django.conf import settings
+from django.contrib import admin
 from django.core import signing
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -31,7 +32,8 @@ from tools import bake
 from users.models import User
 
 from . import mp4, spec, views
-from .models import CLAIM_TIMEOUT, MediaJob
+from .admin import MediaJobAdmin
+from .models import CLAIM_TIMEOUT, MAX_TRIES, MediaJob
 from .spec import MASTER, POSTER
 from .tasks import drop_source
 
@@ -464,9 +466,54 @@ class BakeryTests(SimpleTestCase):
             worked = bake.serve_once("https://knt-mipt.ru", "OqRZ7yTn3xK1", "ffmpeg",
                                      bake.NVENC, "", spec.RECIPES)
 
-        self.assertTrue(worked)  # вернулись живыми, а не улетели трейсбеком наружу
+        self.assertFalse(worked)  # вернулись живыми — и с просьбой передохнуть, см. ниже
         self.assertIn("/intake/release/", knocked)
         self.assertNotIn("/intake/fail/", knocked)
+
+    def test_after_a_dropped_connection_the_bakery_does_not_come_straight_back(self):
+        """Возвращённое задание стоит в голове очереди, и через секунду пекарня получила бы
+        его же. Так 30.09.2026 одно задание прокрутилось 32767 раз — пока у сайта
+        не переполнился счётчик попыток и `claim` не начал падать пятисоткой у всех."""
+        job = {"id": 17, "recipe": "lecture", "token": "подпись",
+               "source": "https://r2/get", "name": "zapis.mkv"}
+        claims = iter([{"job": job}, KeyboardInterrupt])
+
+        def talk(site, token, where, body):
+            if where != "/intake/claim/":
+                return {}
+            answer = next(claims)
+            if answer is KeyboardInterrupt:
+                raise answer
+            return answer
+
+        slept = []
+        with mock.patch.object(bake, "talk", talk), mock.patch.object(bake, "say"), \
+                mock.patch.object(bake, "fetch_source", side_effect=urllib.error.URLError("оборвалось")), \
+                mock.patch.object(bake.time, "sleep", slept.append):
+            bake.serve(argparse.Namespace(once=False, every=60), "ffmpeg", bake.NVENC, "",
+                       spec.RECIPES, "https://knt-mipt.ru", "OqRZ7yTn3xK1")
+
+        self.assertEqual(slept, [60])
+
+    def test_a_missing_source_is_a_failure_and_not_a_dropped_connection(self):
+        """HTTPError — тоже OSError, и 404 на сырьё уходил в `release`: задание, которое
+        не испечётся никогда, возвращалось в очередь и выдавалось снова, по кругу.
+        Человеку же надо сказать, что запись придётся загрузить заново."""
+        job = {"id": 17, "recipe": "lecture", "token": "подпись",
+               "source": "https://r2/get", "name": "zapis.mkv"}
+        told = {}
+
+        def talk(site, token, where, body):
+            told[where] = body
+            return {"job": job} if where == "/intake/claim/" else {}
+
+        missing = urllib.error.HTTPError("https://r2/get", 404, "Not Found", {}, io.BytesIO(b""))
+        with mock.patch.object(bake, "talk", talk), mock.patch.object(bake, "say"), \
+                mock.patch.object(bake.urllib.request, "urlopen", side_effect=missing):
+            bake.serve_once("https://knt-mipt.ru", "OqRZ7yTn3xK1", "ffmpeg", bake.NVENC, "", spec.RECIPES)
+
+        self.assertNotIn("/intake/release/", told)
+        self.assertIn("загрузить заново", told["/intake/fail/"]["error"])
 
     def test_a_site_that_does_not_answer_at_all_leaves_the_daemon_waiting(self):
         """`talk` заворачивает в SystemExit только ОТВЕТЫ сайта, а «не отвечает вовсе»
@@ -1076,6 +1123,41 @@ class QueueTests(TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(self.call("intake_plan", token=first, manifest=made_manifest()).status_code, 409)
         self.assertEqual(self.call("intake_plan", token=second, manifest=made_manifest()).status_code, 200)
+
+    def test_a_job_handed_back_over_and_over_is_given_up(self):
+        """Так и было 30.09.2026: пекарня брала задание, тут же спотыкалась, возвращала
+        его — и брала снова. 32767 кругов, потом счётчик переполнился, и `claim` стал
+        падать пятисоткой у всех. Такое задание сломано само, и человеку надо это сказать."""
+        for _ in range(MAX_TRIES):
+            self.call("intake_release", token=self.claim()["token"])
+
+        self.assertIsNone(self.claim())
+        job = MediaJob.objects.get()
+        self.assertEqual(job.status, MediaJob.Status.FAILED)
+        self.assertIn(f"{MAX_TRIES} раз", job.note)
+
+    def test_a_worn_out_job_does_not_block_the_queue(self):
+        """Очередь идёт от старых к новым, и сломанное задание стоит в самой её голове:
+        не пропусти его — и новые записи не пеклись бы никогда."""
+        MediaJob.objects.update(tries=MAX_TRIES)
+        fresh = MediaJob.objects.create(recipe="lecture", source="uploads/def/novaya.mkv")
+
+        self.assertEqual(self.claim()["id"], fresh.pk)
+        self.assertEqual(MediaJob.objects.get(pk=self.job.pk).status, MediaJob.Status.FAILED)
+
+    def test_a_person_putting_the_job_back_gives_it_a_fresh_run(self):
+        """Иначе закрытое по пределу задание, возвращённое из админки, закрылось бы снова
+        на первом же `claim`. Номер попытки при этом не сбрасывается — он живёт в токене,
+        и сброс воскресил бы токены прошлых пекарен."""
+        MediaJob.objects.update(status=MediaJob.Status.FAILED, tries=MAX_TRIES, attempts=MAX_TRIES)
+        job = MediaJob.objects.get()
+        job.status = MediaJob.Status.WAITING
+
+        MediaJobAdmin(MediaJob, admin.site).save_model(None, job, mock.Mock(changed_data=["status"]), True)
+
+        self.assertIsNotNone(self.claim())
+        job.refresh_from_db()
+        self.assertEqual((job.tries, job.attempts), (1, MAX_TRIES + 1))
 
 
 @override_settings(INTAKE_TOKEN=TOKEN)

@@ -16,6 +16,11 @@ from django.utils import timezone
 # Столько ждём вестей от взявшего задание. Двухчасовая лекция печётся минут двадцать,
 # час — с запасом на медленную машину и на скачивание сырья.
 CLAIM_TIMEOUT = 3600
+# Столько раз задание выдаётся, прежде чем сайт признаёт: не испечётся. Возвраты
+# в очередь честны поодиночке — обрыв связи, остановка на ночь, — но задание, которое
+# отдают снова и снова, сломано само, и без предела оно крутится вечно: 30.09.2026
+# одно такое набрало 32767 выдач, переполнило счётчик и заперло собой всю очередь.
+MAX_TRIES = 20
 
 
 class MediaJob(models.Model):
@@ -42,7 +47,13 @@ class MediaJob(models.Model):
 
     claimed_by = models.CharField("кто взял", max_length=100, blank=True)
     claimed_at = models.DateTimeField("когда взяли", null=True, blank=True)
-    attempts = models.PositiveSmallIntegerField("попыток", default=0)
+    # Номер попытки. Живёт в токене задания (intake.views._job) и потому только растёт:
+    # сброс воскресил бы старые токены. По той же причине не smallint — его 32767
+    # однажды кончились.
+    attempts = models.PositiveIntegerField("попыток", default=0)
+    # Выдач с тех пор, как задание встало в очередь. В отличие от `attempts`, это счётчик
+    # для предела (MAX_TRIES), и его сбрасывает человек, возвращая задание из админки.
+    tries = models.PositiveSmallIntegerField("выдач подряд", default=0)
     note = models.CharField("что пошло не так", max_length=300, blank=True)
 
     created = models.DateTimeField("создано", default=timezone.now)
@@ -110,23 +121,40 @@ def take(worker):
 
     Заодно подбираем брошенные: задание, взятое час назад и молчащее, вернулось
     в очередь. Иначе упавшая машина заморозила бы лекцию навсегда.
+
+    А выданное MAX_TRIES раз и так и не доделанное больше не выдаём — закрываем отказом,
+    как если бы пекарня сказала `fail`. Очередь идёт от старых к новым, и такое задание
+    стояло бы в её голове вечно: каждая пекарня первым делом получала бы его.
     """
     stale = timezone.now() - timezone.timedelta(seconds=CLAIM_TIMEOUT)
     with transaction.atomic():
-        job = (
+        free = (
             MediaJob.objects.select_for_update(skip_locked=True)
             .filter(
                 models.Q(status=MediaJob.Status.WAITING)
                 | models.Q(status=MediaJob.Status.BAKING, claimed_at__lt=stale)
             )
             .order_by("created")
-            .first()
         )
+        for worn in free.filter(tries__gte=MAX_TRIES):
+            _give_up(worn)
+        job = free.filter(tries__lt=MAX_TRIES).first()
         if job is None:
             return None
         job.status = MediaJob.Status.BAKING
         job.claimed_by = worker[:100]
         job.claimed_at = timezone.now()
         job.attempts += 1
-        job.save(update_fields=["status", "claimed_by", "claimed_at", "attempts", "updated"])
+        job.tries += 1
+        job.save(update_fields=["status", "claimed_by", "claimed_at", "attempts", "tries", "updated"])
     return job
+
+
+def _give_up(job):
+    """Закрыть задание, которое раз за разом берут и не доделывают. Причина уходит
+    человеку — так же, как отказ пекарни (intake.views.fail), и так же снимается папка."""
+    stale, job.prefix = job.prefix, ""
+    job.status = MediaJob.Status.FAILED
+    job.note = f"пекарня бралась за запись {job.tries} раз и ни разу не довела её до конца"
+    job.save(update_fields=["status", "note", "prefix", "updated"])
+    sweep(stale)
