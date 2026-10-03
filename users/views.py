@@ -24,6 +24,7 @@ from cosmetics.services import inventory, outfit
 from core.models import ALUMNI, Moderated, Team
 from core.search import by_name
 from core.throttle import client_ip, throttled
+from economy.models import BalanceLog
 from library.models import Book
 from materials.models import Material
 
@@ -96,8 +97,14 @@ def _people():
     рамку — уехал вниз. А ещё баланс — дело личное (чужой кошелёк в профиле не
     показывается), тогда как заработанное складывается из того, что и так на виду:
     материалов, книг, отзывов, клеток на Стене.
+
+    Возврат награды за удалённое — минус, но не трата: он заработанное отменяет, и
+    вещи, за которую платили, на виду уже нет. Поэтому он в сумму входит.
     """
-    earned = Sum("wallet__entries__amount", filter=Q(wallet__entries__amount__gt=0))
+    earned = Sum(
+        "wallet__entries__amount",
+        filter=Q(wallet__entries__amount__gt=0) | Q(wallet__entries__reason__in=BalanceLog.TAKEN_BACK),
+    )
     return (
         User.objects.filter(is_active=True)
         .select_related("team")

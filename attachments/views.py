@@ -1,9 +1,11 @@
 import json
+import logging
 from functools import wraps
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
+from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage
 from django.db.models import F
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
@@ -11,6 +13,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils.cache import patch_vary_headers
 from django.views.decorators.http import require_POST, require_http_methods
 
+from core.throttle import client_ip
 from economy import rewards
 
 from .hls import MANIFEST_TYPE, manifest
@@ -21,6 +24,8 @@ from .uploads import (
     MAX_DIRECT_SIZE, MAX_PARTS, abort_multipart, begin_multipart, check_name, direct_upload,
     finish_multipart, max_upload_size, multipart, part_size, part_urls, sign_upload, uploaded_parts,
 )
+
+logger = logging.getLogger(__name__)
 
 # Внутренние адреса nginx: снаружи недоступны, попасть туда можно только
 # заголовком X-Accel-Redirect (см. nginx.conf).
@@ -39,6 +44,8 @@ SEGMENT_MAX_AGE = 365 * 24 * 3600
 # правку раздачи часть людей не увидит год. Час — и перепроверок почти нет, и руки
 # не связаны.
 MANIFEST_MAX_AGE = 3600
+# Столько одно скачивание файла с одного адреса не считается повторно.
+DOWNLOAD_ONCE = 24 * 3600
 
 
 def files_host_only(view):
@@ -82,6 +89,24 @@ def _deliver(name):
     return HttpResponse(content_type=content_type(name), headers={"X-Accel-Redirect": target})
 
 
+def _first_today(request, pk):
+    """Первое ли это скачивание файла с этого адреса за сутки.
+
+    Ссылка открывается без входа, а счётчик приносит токены загрузившему: считай мы
+    каждый запрос, цикл из ста запросов был бы сотней «скачиваний». Кто скачал, мы не
+    знаем (на домене файлов нет сессии) — остаётся адрес. Под одним адресом бывает
+    целое общежитие, и оно за сутки даст файлу плюс один: недосчитать тут дешевле,
+    чем платить за накрутку.
+
+    Кэш лёг — не считаем вовсе, а файл отдаём: раздача не должна зависеть от счётчика.
+    """
+    try:
+        return cache.add(f"download:{pk}:{client_ip(request)}", 1, DOWNLOAD_ONCE)
+    except Exception:  # noqa: BLE001 — какой именно, зависит от бекенда кэша
+        logger.exception("Кэш недоступен, скачивание файла %s не посчитано", pk)
+        return False
+
+
 @login_not_required
 @files_host_only
 def download(request, token, name):
@@ -92,9 +117,9 @@ def download(request, token, name):
         raise Http404
 
     file = get_object_or_404(File, pk=pk)
-    if "Range" not in request.headers:
-        # Просмотрщик pdf дочитывает книгу кусками по тому же адресу — считаем только
-        # первый запрос, иначе одно открытие давало бы десяток «скачиваний».
+    # Просмотрщик pdf дочитывает книгу кусками по тому же адресу — считаем только
+    # первый запрос, иначе одно открытие давало бы десяток «скачиваний».
+    if "Range" not in request.headers and _first_today(request, pk):
         File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
         # Пересчёт зовём не на каждое скачивание, а только когда набралась порция:
         # он стоит несколько запросов, а раздача файлов — самый горячий путь на сайте.

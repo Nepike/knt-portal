@@ -3,6 +3,9 @@
 Правда о деньгах лежит в журнале, поле в кошельке — лишь кэш. Поэтому запись всегда
 идёт парой «строка журнала + новый кэш», и обе под блокировкой строки кошелька:
 два одновременных списания иначе прочитали бы один и тот же баланс и потратили дважды.
+
+Операций три: начислить (`credit`), потратить (`spend` — не ниже нуля) и забрать
+начисленное назад (`reclaim` — может увести в минус).
 """
 
 from django.db import transaction
@@ -44,11 +47,25 @@ def spend(user, amount, reason, note="", key=""):
     return _move(user, -amount, reason, note, key)
 
 
+def reclaim(user, amount, reason, note="", key=""):
+    """Забрать начисленное назад. amount положительный — знак ставим сами.
+
+    Единственная операция, которая уводит баланс в минус. Трата обязана упираться в
+    ноль, а возврат — нет: иначе «получил награду, потратил, удалил» оставалось бы
+    бесплатным, и удалять выгодно было бы именно с пустым кошельком.
+    """
+    if amount <= 0:
+        raise ValueError("возврат должен быть положительным")
+    return _move(user, -amount, reason, note, key, debt=True)
+
+
 @transaction.atomic
-def _move(user, delta, reason, note, key=""):
+def _move(user, delta, reason, note, key="", debt=False):
     wallet = lock(user)
     balance = wallet.balance + delta
-    if balance < 0:
+    # Только списание: начисление кошельку в минусе его ещё не закрывает, но отказывать
+    # в нём незачем.
+    if delta < 0 and balance < 0 and not debt:
         raise NotEnoughFunds(f"нужно {-delta}, на балансе {wallet.balance}")
     wallet.balance = balance
     wallet.save(update_fields=["balance"])

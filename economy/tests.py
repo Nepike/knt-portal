@@ -1,5 +1,9 @@
+import json
 from io import BytesIO, StringIO
+from unittest import mock
 
+from django.contrib.auth.models import Permission
+from django.contrib.messages import get_messages
 from django.core.management import call_command
 from django.template import Context, Template
 from django.test import TestCase
@@ -10,9 +14,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image as PilImage
 
 from attachments.models import File
+from chats.models import Chat, Message
 from core.models import Subject
 from comments.models import Comment
 from lectorium.models import Playlist
+from library.models import Book
 from materials.models import Material
 from teachers.models import Review, Teacher
 from users.models import User
@@ -21,7 +27,7 @@ from wall.models import WallProfile
 from . import rewards
 from .admin import GrantForm
 from .models import BalanceLog, Wallet
-from .services import NotEnoughFunds, credit, recount, spend, wallet_of
+from .services import NotEnoughFunds, credit, reclaim, recount, spend, wallet_of
 
 MANUAL = BalanceLog.Reason.MANUAL
 SPENT = BalanceLog.Reason.MANUAL  # трат по правилам пока нет — списываем вручную
@@ -81,6 +87,28 @@ class BalanceTests(TestCase):
             credit(self.user, -5, MANUAL)
         with self.assertRaises(ValueError):
             spend(self.user, 0, SPENT)
+        with self.assertRaises(ValueError):
+            reclaim(self.user, -5, MANUAL)
+
+    def test_taking_a_reward_back_may_leave_a_debt(self):
+        """Иначе «получил награду, потратил, удалил» оставалось бы бесплатным."""
+        credit(self.user, 10, MANUAL)
+        reclaim(self.user, 30, MANUAL)
+
+        self.assertEqual(wallet_of(self.user).balance, -20)
+        self.assertEqual(BalanceLog.objects.first().balance_after, -20)
+
+    def test_nothing_is_bought_on_credit(self):
+        """В минус уводит только возврат. Трата по-прежнему упирается в ноль — и тем
+        более не идёт из минуса."""
+        credit(self.user, 10, MANUAL)
+        with self.assertRaises(NotEnoughFunds):
+            spend(self.user, 11, SPENT)
+
+        reclaim(self.user, 30, MANUAL)
+        with self.assertRaises(NotEnoughFunds):
+            spend(self.user, 1, SPENT)
+        self.assertEqual(wallet_of(self.user).balance, -20)
 
     def test_saving_the_user_does_not_touch_the_balance(self):
         """Ради этого кошелёк и вынесен из User: user.save() пишет все поля разом."""
@@ -117,6 +145,17 @@ class RecountTests(TestCase):
         call_command("recount_balances", "--apply", stdout=StringIO())
         self.assertEqual(wallet_of(user).balance, 100)
 
+    def test_a_wallet_in_debt_is_repaired_like_any_other(self):
+        """Минус по журналу — не поломка, а возврат награды, которую успели потратить."""
+        user = make_user()
+        credit(user, 10, MANUAL)
+        reclaim(user, 30, MANUAL)
+        break_cache(user, 7)
+
+        call_command("recount_balances", "--apply", stdout=StringIO())
+
+        self.assertEqual(wallet_of(user).balance, -20)
+
 
 class AdminGrantTests(TestCase):
     """Форма журнала в админке — это ручная выдача валюты, и она обязана идти через сервис."""
@@ -147,6 +186,14 @@ class AdminGrantTests(TestCase):
         response = self.post(-5)
         self.assertContains(response, "на балансе только 0")
         self.assertEqual(BalanceLog.objects.filter(wallet=self.wallet).count(), 0)
+
+    def test_a_wallet_in_debt_can_still_be_granted_to(self):
+        """Проверка «хватит ли» касается только списания: иначе человеку в минусе
+        нельзя было бы начислить ничего меньше самого долга."""
+        reclaim(self.user, 50, MANUAL)
+
+        self.assertEqual(self.post(20).status_code, 302)
+        self.assertEqual(wallet_of(self.user).balance, -30)
 
     def test_only_manual_reasons_are_offered_by_hand(self):
         """Награда руками — это строка без ключа, она зачлась бы как «уже выплачено»;
@@ -277,14 +324,68 @@ class RewardTests(TestCase):
         self.assertEqual(self.paid(BalanceLog.Reason.LIKES), 0)
         self.assertEqual(wallet_of(self.user).balance, rewards.WELCOME + rewards.MATERIAL)
 
+    def fans(self, count, tag="fan"):
+        return [make_user(f"{tag}{number}@t.local") for number in range(count)]
+
     def test_likes_pay_the_author_net_of_dislikes(self):
         teacher = Teacher.objects.create(name="Пётр", surname="Петров")
         review = Review.objects.create(teacher=teacher, author=self.user, text="подробно")
-        review.liked_users.add(make_user("a@t.local"), make_user("b@t.local"), make_user("c@t.local"))
+        review.liked_users.add(*self.fans(rewards.LIKE_FROM + 2))
         review.disliked_users.add(make_user("d@t.local"))
         rewards.sync(self.user)
 
-        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * 2)
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * (rewards.LIKE_FROM + 1))
+
+    def test_likes_pay_nothing_until_there_are_enough_of_them(self):
+        """Двое друзей иначе лайкали бы друг другу комментарии без конца. А как набралось —
+        платим сразу за все, и дальше за каждый."""
+        teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+        review = Review.objects.create(teacher=teacher, author=self.user, text="подробно")
+        fans = self.fans(rewards.LIKE_FROM + 1)
+
+        review.liked_users.add(*fans[:rewards.LIKE_FROM - 1])
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), 0)
+
+        review.liked_users.add(fans[rewards.LIKE_FROM - 1])
+        rewards.sync(User.objects.get(pk=self.user.pk))
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * rewards.LIKE_FROM)
+
+        review.liked_users.add(fans[rewards.LIKE_FROM])
+        rewards.sync(User.objects.get(pk=self.user.pk))
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * (rewards.LIKE_FROM + 1))
+        self.assertEqual(rewards.LIKE_FROM, 5)  # так условились; порог в один — это его отсутствие
+
+    def test_your_own_like_brings_nothing(self):
+        """Поставить лайк себе можно, но в счёт он не идёт — ни к порогу, ни к сумме."""
+        teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+        review = Review.objects.create(teacher=teacher, author=self.user, text="подробно")
+        review.liked_users.add(self.user, *self.fans(rewards.LIKE_FROM - 1))  # со своим — ровно порог
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), 0)
+
+        review.liked_users.add(make_user("last@t.local"))
+        rewards.sync(User.objects.get(pk=self.user.pk))
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * rewards.LIKE_FROM)
+
+    def test_your_own_dislike_does_not_count_either(self):
+        teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+        review = Review.objects.create(teacher=teacher, author=self.user, text="подробно")
+        review.liked_users.add(*self.fans(rewards.LIKE_FROM))
+        review.disliked_users.add(self.user)
+        rewards.sync(self.user)
+
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * rewards.LIKE_FROM)
+
+    def test_a_comment_follows_the_same_rule(self):
+        comment = Comment.objects.create(material=self.material(), author=self.user, text="разбор")
+        comment.liked_users.add(self.user, *self.fans(rewards.LIKE_FROM - 1))
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), 0)
+
+        comment.liked_users.add(make_user("last@t.local"))
+        rewards.sync(User.objects.get(pk=self.user.pk))
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * rewards.LIKE_FROM)
 
     def test_a_disliked_review_never_goes_into_debt(self):
         # Иначе первый же дизлайк отбивал бы охоту писать вообще.
@@ -308,16 +409,16 @@ class RewardTests(TestCase):
         # Иначе снять и поставить лайк заново было бы бесконечной фермой.
         teacher = Teacher.objects.create(name="Пётр", surname="Петров")
         review = Review.objects.create(teacher=teacher, author=self.user, text="подробно")
-        fan = make_user("a@t.local")
-        review.liked_users.add(fan)
+        fans = self.fans(rewards.LIKE_FROM)
+        review.liked_users.add(*fans)
         rewards.sync(self.user)
 
-        review.liked_users.remove(fan)
+        review.liked_users.remove(fans[0])
         rewards.sync(User.objects.get(pk=self.user.pk))
-        review.liked_users.add(fan)
+        review.liked_users.add(fans[0])
         rewards.sync(User.objects.get(pk=self.user.pk))
 
-        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE)
+        self.assertEqual(self.paid(BalanceLog.Reason.LIKES), rewards.LIKE * rewards.LIKE_FROM)
 
     def downloaded(self, *counts):
         material = self.material()
@@ -326,6 +427,23 @@ class RewardTests(TestCase):
                 material=material, name=f"f{number}", file=f"f{number}.pdf",
                 size=1, uploader=self.user, downloads=count,
             )
+
+    def test_only_published_work_counts_towards_downloads(self):
+        """Вложение чата и файл черновика видит один автор — и скачивал бы их он же."""
+        enough = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
+        book = Book.objects.create(title="Черновик", uploader=self.user, status=Book.Status.PENDING)
+        message = Message.objects.create(
+            chat=Chat.objects.create(kind="group", title="Болталка"), author=self.user, text="держи",
+        )
+        owners = ({"material": self.material(status=Material.Status.PENDING)}, {"book": book}, {"message": message})
+        for owner in owners:
+            File.objects.create(name="f", file="f.pdf", size=1, uploader=self.user, downloads=enough, **owner)
+        rewards.sync(self.user)
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), 0)
+
+        Book.objects.filter(pk=book.pk).update(status=Book.Status.APPROVED)
+        rewards.sync(User.objects.get(pk=self.user.pk))
+        self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH)
 
     def test_downloads_are_capped_per_file(self):
         # Счётчик лежит на файле, кто скачал — нигде: без потолка накрутка окупалась бы.
@@ -468,8 +586,9 @@ class RewardTests(TestCase):
 
         self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), rewards.PLAYLIST * 2)
 
-    def test_a_deleted_course_does_not_take_its_payment_back(self):
-        """Выплаченное назад не забирается — иначе «удалить и залить заново» стало бы фермой."""
+    def test_a_course_that_vanished_by_itself_does_not_take_its_payment_back(self):
+        """Курс исчез не рукой автора (каскад, чистка, модератор) — выплаченное остаётся.
+        Назад награду забирает только сам автор, см. TakeBackTests."""
         course = self.course()
         rewards.sync(self.user)
         course.delete()
@@ -707,3 +826,298 @@ class RegroupMigrationTests(TestCase):
             self.downloads(user),
             [("1", rewards.DOWNLOAD_BATCH), ("2", rewards.DOWNLOAD_BATCH)],
         )
+
+
+class TakeBackTests(TestCase):
+    """Награда за вещь уходит назад, когда автор удаляет её САМ, — и только тогда.
+
+    Без этого «написал — получил — удалил — написал заново» было фермой: у новой вещи
+    новый ключ, и платили за неё заново.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+        cls.teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+
+    def setUp(self):
+        self.user = make_user()
+        self.other = make_user("other@t.local")
+
+    def balance(self, user=None):
+        return wallet_of(user or self.user).balance
+
+    def sync(self, user=None):
+        rewards.sync(User.objects.get(pk=(user or self.user).pk))
+
+    def review(self):
+        return Review.objects.create(teacher=self.teacher, author=self.user, text="подробно")
+
+    def material(self, **extra):
+        return Material.objects.create(**{
+            "title": "Конспект", "subject": self.subject, "uploader": self.user,
+            "status": Material.Status.APPROVED, **extra,
+        })
+
+    def fans(self):
+        return [make_user(f"fan{number}@t.local") for number in range(rewards.LIKE_FROM)]
+
+    def test_deleting_your_own_review_takes_its_reward_back(self):
+        review = self.review()
+        self.sync()
+
+        taken = rewards.remove(review, by=self.user)
+
+        self.assertEqual(taken, rewards.REVIEW_TEXT)
+        self.assertFalse(Review.objects.exists())
+        self.assertEqual(self.balance(), rewards.WELCOME)
+        row = BalanceLog.objects.filter(wallet__user=self.user).first()
+        self.assertEqual(
+            (row.amount, row.reason, row.note),
+            (-rewards.REVIEW_TEXT, BalanceLog.Reason.REVIEW, "удалён отзыв о Петров"),
+        )
+
+    def test_deleting_and_writing_again_earns_nothing(self):
+        for _ in range(3):
+            review = self.review()
+            self.sync()
+            rewards.remove(review, by=self.user)
+        self.review()
+        self.sync()
+
+        self.assertEqual(self.balance(), rewards.WELCOME + rewards.REVIEW_TEXT)
+
+    def test_someone_elses_hand_costs_the_author_nothing(self):
+        """Модератор удалил — человек за это не платит: штрафовать за чужое действие не за что."""
+        review = self.review()
+        self.sync()
+
+        self.assertEqual(rewards.remove(review, by=self.other), 0)
+
+        self.assertFalse(Review.objects.exists())
+        self.assertEqual(self.balance(), rewards.WELCOME + rewards.REVIEW_TEXT)
+        self.assertFalse(BalanceLog.objects.filter(amount__lt=0).exists())
+
+    def test_a_reward_already_spent_leaves_a_debt(self):
+        """Иначе хватало бы потратить награду до удаления."""
+        review = self.review()
+        self.sync()
+        spend(self.user, self.balance(), SPENT)
+
+        rewards.remove(review, by=self.user)
+
+        self.assertEqual(self.balance(), -rewards.REVIEW_TEXT)
+        with self.assertRaises(NotEnoughFunds):
+            spend(self.user, 1, SPENT)
+
+    def test_likes_go_back_together_with_the_review(self):
+        review = self.review()
+        review.liked_users.add(*self.fans())
+        self.sync()
+
+        taken = rewards.remove(review, by=self.user)
+
+        self.assertEqual(taken, rewards.REVIEW_TEXT + rewards.LIKE * rewards.LIKE_FROM)
+        self.assertEqual(self.balance(), rewards.WELCOME)
+
+    def test_a_comment_takes_the_authors_own_replies_along(self):
+        """Ответы уезжают каскадом. Свои среди них автор удаляет тем же движением, а чужие
+        исчезают не по воле своих авторов — им это ничего не стоит."""
+        material = self.material(uploader=self.other)
+        root = Comment.objects.create(material=material, author=self.user, text="корень")
+        theirs = Comment.objects.create(material=material, author=self.other, text="ответ", parent=root)
+        deep = Comment.objects.create(material=material, author=self.user, text="ответ на ответ", parent=theirs)
+        fans = self.fans()
+        for comment in (root, theirs, deep):
+            comment.liked_users.add(*fans)
+        self.sync()
+        self.sync(self.other)
+        theirs_before = self.balance(self.other)
+
+        taken = rewards.remove(root, by=self.user)
+
+        self.assertEqual(taken, 2 * rewards.LIKE * rewards.LIKE_FROM)
+        self.assertEqual(self.balance(), rewards.WELCOME)
+        self.assertFalse(Comment.objects.exists())
+        self.assertEqual(self.balance(self.other), theirs_before)
+
+    def test_a_material_a_book_and_a_course_go_back_too(self):
+        things = [
+            self.material(),
+            Book.objects.create(title="Зорич", uploader=self.user, status=Book.Status.APPROVED),
+            Playlist.objects.create(
+                title="Матан", subject=self.subject, uploader=self.user, status=Playlist.Status.APPROVED,
+            ),
+        ]
+        self.sync()
+        self.assertEqual(
+            self.balance(), rewards.WELCOME + rewards.MATERIAL + rewards.BOOK + rewards.PLAYLIST,
+        )
+
+        for thing in things:
+            rewards.remove(thing, by=self.user)
+
+        self.assertEqual(self.balance(), rewards.WELCOME)
+        notes = BalanceLog.objects.filter(amount__lt=0).order_by("id").values_list("note", flat=True)
+        self.assertEqual(
+            list(notes), ["удалён материал «Конспект»", "удалена книга «Зорич»", "удалён курс «Матан»"],
+        )
+
+    def test_what_downloads_brought_stays(self):
+        """Порции скачиваний — отметка «до скольки выплачено»: заново за них не платят,
+        поэтому и забирать их незачем."""
+        material = self.material()
+        File.objects.create(
+            material=material, name="f", file="f.pdf", size=1, uploader=self.user,
+            downloads=rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN,
+        )
+        self.sync()
+
+        rewards.remove(material, by=self.user)
+
+        self.assertEqual(self.balance(), rewards.WELCOME + rewards.DOWNLOAD_BATCH)
+
+    def test_what_was_never_paid_is_not_taken(self):
+        draft = self.material(status=Material.Status.PENDING)
+        self.sync()
+
+        self.assertEqual(rewards.remove(draft, by=self.user), 0)
+        self.assertFalse(BalanceLog.objects.filter(amount__lt=0).exists())
+
+    def test_the_price_of_deleting_is_known_beforehand(self):
+        review = self.review()
+        review.liked_users.add(*self.fans())
+        self.sync()
+
+        self.assertEqual(
+            rewards.at_stake(review, self.user), rewards.REVIEW_TEXT + rewards.LIKE * rewards.LIKE_FROM,
+        )
+        self.assertEqual(rewards.at_stake(review, self.other), 0)
+
+    def test_what_was_taken_once_is_not_taken_again(self):
+        """Считаем по журналу: начисленное минус уже забранное."""
+        review = self.review()
+        self.sync()
+        reclaim(self.user, rewards.REVIEW_TEXT, BalanceLog.Reason.REVIEW, key=str(review.pk))
+
+        self.assertEqual(rewards.at_stake(review, self.user), 0)
+
+    def test_the_message_names_the_sum_in_proper_russian(self):
+        self.assertEqual(rewards.taken_note(0), "")
+        for taken, said in ((1, " 1 токен "), (22, " 22 токена "), (25, " 25 токенов "), (11, " 11 токенов ")):
+            self.assertIn(said, rewards.taken_note(taken))
+
+
+class DeleteOnTheSiteTests(TestCase):
+    """Те же правила через сами ручки удаления: кто удаляет, тот и определяет, будет ли возврат."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+        cls.teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+        cls.author = make_user("author@t.local")
+        cls.moderator = make_user("moderator@t.local")
+        cls.moderator.user_permissions.add(*Permission.objects.filter(codename__in=[
+            "delete_review", "change_comment", "change_material", "change_book", "change_playlist",
+        ]))
+
+    def setUp(self):
+        self.material = Material.objects.create(
+            title="Конспект", subject=self.subject, uploader=self.author, status=Material.Status.APPROVED,
+        )
+        self.book = Book.objects.create(title="Зорич", uploader=self.author, status=Book.Status.APPROVED)
+        self.course = Playlist.objects.create(
+            title="Матан", subject=self.subject, uploader=self.author, status=Playlist.Status.APPROVED,
+        )
+        self.review = Review.objects.create(teacher=self.teacher, author=self.author, text="подробно")
+        self.comment = Comment.objects.create(material=self.material, author=self.author, text="разбор")
+        self.comment.liked_users.add(
+            *[make_user(f"fan{number}@t.local") for number in range(rewards.LIKE_FROM)]
+        )
+        rewards.sync(self.author)
+        self.before = wallet_of(self.author).balance
+
+    def delete(self, who, name, thing):
+        self.client.force_login(who)
+        with mock.patch("materials.views.notify"), mock.patch("library.views.notify"), \
+                mock.patch("lectorium.views.notify"):
+            return self.client.post(reverse(name, args=[thing.pk]))
+
+    def said(self, response):
+        return " ".join(str(message) for message in get_messages(response.wsgi_request))
+
+    def lost(self):
+        return self.before - wallet_of(self.author).balance
+
+    def test_the_author_pays_back_and_is_told_so(self):
+        cases = (
+            ("review_delete", self.review, rewards.REVIEW_TEXT),
+            ("book_delete", self.book, rewards.BOOK),
+            ("playlist_delete", self.course, rewards.PLAYLIST),
+            ("material_delete", self.material, rewards.MATERIAL),
+        )
+        for name, thing, price in cases:
+            with self.subTest(name=name):
+                self.before = wallet_of(self.author).balance
+
+                response = self.delete(self.author, name, thing)
+
+                self.assertFalse(type(thing).objects.filter(pk=thing.pk).exists())
+                self.assertEqual(self.lost(), price)
+                self.assertIn(f"Списано {price} ", self.said(response))
+
+    def test_a_moderator_deleting_it_costs_the_author_nothing(self):
+        cases = (
+            ("review_delete", self.review), ("comment_delete", self.comment), ("book_delete", self.book),
+            ("playlist_delete", self.course), ("material_delete", self.material),
+        )
+        for name, thing in cases:
+            with self.subTest(name=name):
+                response = self.delete(self.moderator, name, thing)
+
+                self.assertFalse(type(thing).objects.filter(pk=thing.pk).exists())
+                self.assertEqual(self.lost(), 0)
+                self.assertNotIn("Списано", self.said(response))
+                self.assertNotIn("HX-Trigger", response.headers)
+
+    def test_a_comment_says_it_right_on_the_page(self):
+        """Лента приходит куском, страница не перезагружается — обычное сообщение всплыло
+        бы только на следующей. Поэтому тут оно едет событием для всплывающей плашки."""
+        response = self.delete(self.author, "comment_delete", self.comment)
+
+        self.assertEqual(self.lost(), rewards.LIKE * rewards.LIKE_FROM)
+        notice = json.loads(response.headers["HX-Trigger"])["toast"]
+        self.assertIn(f"Списано {rewards.LIKE * rewards.LIKE_FROM} токенов", notice["text"])
+
+    def test_the_form_warns_the_author_before_the_button_is_pressed(self):
+        pages = (
+            ("material_edit", self.material, rewards.MATERIAL), ("book_edit", self.book, rewards.BOOK),
+            ("playlist_edit", self.course, rewards.PLAYLIST),
+        )
+        for name, thing, price in pages:
+            with self.subTest(name=name):
+                self.client.force_login(self.author)
+                self.assertContains(self.client.get(reverse(name, args=[thing.pk])), f"Спишется {price} токенов")
+
+                self.client.force_login(self.moderator)  # ему удаление чужого ничего не стоит
+                self.assertNotContains(self.client.get(reverse(name, args=[thing.pk])), "Спишется")
+
+    def test_a_liked_comment_warns_its_author(self):
+        """Предупреждаем только там, где есть что терять: без оплаченных лайков удаление
+        комментария ничего не стоит."""
+        Comment.objects.create(material=self.material, author=self.author, text="без лайков")
+        page = reverse("material_detail", args=[self.material.pk])
+
+        self.client.force_login(self.author)
+        self.assertContains(self.client.get(page), "Токены за лайки на нём спишутся.", count=1)
+
+        self.client.force_login(self.moderator)
+        self.assertNotContains(self.client.get(page), "спишутся")
+
+    def test_the_review_card_warns_its_author_only(self):
+        page = reverse("teacher_detail", args=[self.teacher.pk])
+        self.client.force_login(self.author)
+        self.assertContains(self.client.get(page), "Токены, начисленные за него, спишутся.")
+
+        self.client.force_login(self.moderator)
+        self.assertNotContains(self.client.get(page), "спишутся")

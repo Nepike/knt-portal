@@ -160,6 +160,7 @@ def material_edit(request, pk=None):
         "max_image_size": MAX_IMAGE_SIZE, "max_image_hint": human_size(MAX_IMAGE_SIZE),
         "saved_files": saved_files(material), "saved_images": saved_images(material),
         "pending": pending_uploads(request) if request.method == "POST" else [],
+        "refund": rewards.at_stake(material, request.user) if material else 0,
     })
 
 
@@ -168,9 +169,10 @@ def material_delete(request, pk):
     material = get_object_or_404(visible(request.user), pk=pk)
     if not _may_edit(request.user, material):
         return HttpResponseForbidden("Удалить материал может только тот, кто его добавил.")
-    material.delete()  # файлы и картинки уедут каскадом, блобы снимет post_delete
+    # Файлы и картинки уедут каскадом, блобы снимет post_delete.
+    taken = rewards.remove(material, by=request.user)
     notify(MODERATION, "telegram/material_deleted.html", {"material": material, "editor": request.user})
-    messages.success(request, "Материал удалён.")
+    messages.success(request, "Материал удалён." + rewards.taken_note(taken))
     return redirect("material_list")
 
 

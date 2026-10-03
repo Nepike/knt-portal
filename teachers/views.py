@@ -136,8 +136,8 @@ def review_delete(request, pk):
     review = get_object_or_404(Review, pk=pk)
     if review.author_id != request.user.pk and not request.user.has_perm("teachers.delete_review"):
         raise PermissionDenied
-    review.delete()
-    messages.success(request, "Отзыв удалён")
+    taken = rewards.remove(review, by=request.user)
+    messages.success(request, "Отзыв удалён." + rewards.taken_note(taken))
     return _hx_refresh()
 
 
@@ -150,7 +150,7 @@ def review_vote(request, pk, vote):
     else:
         mine.add(request.user)
         other.remove(request.user)
-    # Награда автору, не голосующему. Снятый лайк её не отнимает — как и удалённый
-    # материал: sync только доначисляет, вниз пересчёта нет вовсе.
+    # Награда автору, не голосующему. Снятый лайк её не отнимает: sync только
+    # доначисляет. Назад её забирает лишь сам автор, удалив отзыв (rewards.remove).
     rewards.sync(review.author)
     return review_card(request, pk)

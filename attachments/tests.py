@@ -911,6 +911,57 @@ class DropPrefixBatchTests(SimpleTestCase):
         self.assertEqual(calls[0].kwargs["Delete"]["Objects"][0]["Key"], "dev/lectures/abc/0/seg00000.m4s")
 
 
+class DownloadCountTests(TestCase):
+    """Счётчик скачиваний приносит токены загрузившему, а ссылка открывается без входа."""
+
+    def setUp(self):
+        cache.clear()  # отметки «уже считали» живут в кэше и переживают тесты
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=make_user())
+        self.file = File.objects.create(book=book, name="z.pdf", file=ContentFile(b"pdf", name="z.pdf"))
+
+    def download(self, file=None, ip="10.0.0.7"):
+        return self.client.get(file_url(file or self.file), REMOTE_ADDR=ip)
+
+    def count(self, file=None):
+        return File.objects.get(pk=(file or self.file).pk).downloads
+
+    def test_the_same_address_counts_once(self):
+        """Иначе цикл из ста запросов был бы сотней «скачиваний»."""
+        for _ in range(3):
+            self.assertEqual(self.download().status_code, 302)  # а файл отдаём каждый раз
+
+        self.assertEqual(self.count(), 1)
+
+    def test_different_addresses_count_separately(self):
+        self.download(ip="10.0.0.7")
+        self.download(ip="10.0.0.8")
+
+        self.assertEqual(self.count(), 2)
+
+    def test_another_file_from_the_same_address_counts_too(self):
+        other = File.objects.create(book=self.file.book, name="y.pdf", file=ContentFile(b"pdf", name="y.pdf"))
+        self.download()
+        self.download(other)
+
+        self.assertEqual((self.count(), self.count(other)), (1, 1))
+
+    def test_the_mark_is_kept_for_a_day(self):
+        with mock.patch("attachments.views.cache.add", return_value=True) as add:
+            self.download()
+
+        self.assertEqual(add.call_args.args[2], 24 * 3600)
+
+    def test_a_dead_cache_serves_the_file_and_counts_nothing(self):
+        """Раздача не должна зависеть от счётчика. А не считать безопаснее, чем считать
+        всё подряд: счётчик — это чьи-то токены."""
+        with mock.patch("attachments.views.cache.add", side_effect=ConnectionError("Redis не отвечает")):
+            with self.assertLogs("attachments.views", "ERROR"):
+                response = self.download()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.count(), 0)
+
+
 IMMUTABLE = "public, max-age=31536000, immutable"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 

@@ -182,6 +182,7 @@ def book_edit(request, pk=None):
         "max_size_hint": human_size(max_upload_size(request.user)), "upload_limits": upload_limits(request.user),
         "saved_files": saved_files(book),
         "pending": pending_uploads(request) if request.method == "POST" else [],
+        "refund": rewards.at_stake(book, request.user) if book else 0,
     })
 
 
@@ -190,9 +191,9 @@ def book_delete(request, pk):
     book = get_object_or_404(visible(request.user), pk=pk)
     if not _may_edit(request.user, book):
         return HttpResponseForbidden("Удалить книгу может только тот, кто её добавил.")
-    book.delete()  # файлы уедут каскадом, блобы снимет post_delete
+    taken = rewards.remove(book, by=request.user)  # файлы уедут каскадом, блобы снимет post_delete
     notify(MODERATION, "telegram/book_deleted.html", {"book": book, "editor": request.user})
-    messages.success(request, "Книга удалена.")
+    messages.success(request, "Книга удалена." + rewards.taken_note(taken))
     return redirect("book_list")
 
 

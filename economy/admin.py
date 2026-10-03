@@ -35,7 +35,8 @@ class GrantForm(forms.ModelForm):
         if wallet and amount is not None:
             if amount == 0:
                 raise forms.ValidationError("нулевая операция ничего не меняет")
-            if wallet.balance + amount < 0:
+            # Только списание: кошельку в минусе (возврат награды) начислить можно.
+            if amount < 0 and wallet.balance + amount < 0:
                 raise forms.ValidationError(f"на балансе только {wallet.balance}")
         return data
 

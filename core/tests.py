@@ -28,7 +28,7 @@ from . import nav
 from .legacy_markup import to_markdown
 from .management.commands.import_legacy_files import extension, filename
 from .search import by_name
-from .throttle import throttled
+from .throttle import client_ip, throttled
 from .markup import render
 from .tasks import ping
 
@@ -571,6 +571,38 @@ class SupportWithoutLoginTests(TestCase):
             for _ in range(14):
                 self.client.post(reverse("support"), payload)
         self.assertEqual(sent.call_count, 10)
+
+    def test_a_made_up_forwarded_address_does_not_reset_the_limit(self):
+        """Счёт шёл по первому адресу из X-Forwarded-For, а его пишет сам клиент:
+        новый заголовок на каждый запрос — и ограничителя нет."""
+        payload = {"topic": "other", "text": "спам", "contact": "spam@x.ru"}
+        with patch("core.views.notify") as sent:
+            for number in range(14):
+                self.client.post(reverse("support"), payload, headers={"x-forwarded-for": f"10.1.1.{number}"})
+        self.assertEqual(sent.call_count, 10)
+
+
+class ClientIpTests(SimpleTestCase):
+    """Чей это запрос. Верим только адресу, который видел наш nginx."""
+
+    def ip(self, **meta):
+        return client_ip(RequestFactory().get("/", **meta))
+
+    def test_the_address_is_the_one_nginx_saw(self):
+        self.assertEqual(self.ip(HTTP_X_REAL_IP="203.0.113.5", REMOTE_ADDR="172.18.0.1"), "203.0.113.5")
+        self.assertEqual(self.ip(HTTP_X_REAL_IP="2001:db8::1", REMOTE_ADDR="172.18.0.1"), "2001:db8::1")
+
+    def test_what_the_client_says_about_itself_is_not_asked(self):
+        seen = self.ip(HTTP_X_FORWARDED_FOR="1.2.3.4, 203.0.113.5", HTTP_X_REAL_IP="203.0.113.5")
+        self.assertEqual(seen, "203.0.113.5")
+
+    def test_without_nginx_it_is_the_address_of_the_connection(self):
+        self.assertEqual(self.ip(HTTP_X_FORWARDED_FOR="1.2.3.4", REMOTE_ADDR="10.0.0.7"), "10.0.0.7")
+
+    def test_what_is_not_an_address_is_nothing(self):
+        """Строка отсюда едет в поле адреса сессии: мусор там — это пятисотка на входе."""
+        self.assertEqual(self.ip(HTTP_X_REAL_IP="unknown", REMOTE_ADDR="10.0.0.7"), "10.0.0.7")
+        self.assertEqual(self.ip(HTTP_X_REAL_IP="unknown", REMOTE_ADDR="тоже не адрес"), "")
 
 
 class ThrottleTests(SimpleTestCase):

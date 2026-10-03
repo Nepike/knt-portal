@@ -22,7 +22,7 @@ from PIL import Image as PilImage
 from attachments.media import media_url
 from core.models import ALUMNI, Subject, Team, Term
 from economy.models import BalanceLog
-from economy.services import credit, spend
+from economy.services import credit, reclaim, spend
 from materials.models import Material
 
 from .forms import AVATAR_PX, MAX_AVATAR_DATA
@@ -348,6 +348,25 @@ class UserSessionTests(TestCase):
         self.assertEqual(row.ip, "10.0.0.7")
         self.assertEqual(row.where(), "Chrome · Windows")
 
+    def test_the_address_is_the_one_nginx_saw(self):
+        self.client.post(
+            reverse("login"), {"username": "me@t.local", "password": "pass12345"},
+            headers={"x-real-ip": "203.0.113.5", "x-forwarded-for": "1.2.3.4, 203.0.113.5"},
+            REMOTE_ADDR="172.18.0.1",
+        )
+
+        self.assertEqual(self.rows().get().ip, "203.0.113.5")
+
+    def test_a_made_up_forwarded_address_does_not_break_the_login(self):
+        """«unknown» в X-Forwarded-For уезжал в поле адреса сессии, и вход падал пятисоткой."""
+        response = self.client.post(
+            reverse("login"), {"username": "me@t.local", "password": "pass12345"},
+            headers={"x-forwarded-for": "unknown"}, REMOTE_ADDR="10.0.0.7",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.rows().get().ip, "10.0.0.7")
+
     def test_edge_is_not_mistaken_for_chrome(self):
         # Edge представляется и хромом тоже — частные имена обязаны стоять раньше общих.
         self.enter(agent=CHROME + " Edg/120")
@@ -618,6 +637,18 @@ class StudentListTests(TestCase):
         self.assertEqual([person.full_name for person in listed][0], "Сидорова Анна")
         self.assertEqual(listed[0].earned, 900)
         self.assertEqual(listed[0].wallet.balance, 50)
+
+    def test_a_reward_taken_back_no_longer_counts(self):
+        """Возврат за удалённое — минус, но не трата: вещи, за которую платили, уже нет."""
+        # Суммы больше стартовых — их получает каждый, кто хоть раз вошёл.
+        self.earn(self.anna, 9000)
+        reclaim(self.anna, 9000, BalanceLog.Reason.MATERIAL, key="9000")
+        self.earn(self.petr, 5000)
+
+        listed = self.get(sort="contribution").context["people"]
+
+        self.assertEqual(listed[0].full_name, "Петров Пётр")
+        self.assertEqual({person.full_name: person.earned for person in listed}["Сидорова Анна"], 0)
 
     def test_a_junk_sort_does_not_break_the_page(self):
         self.assertEqual(self.get(sort="; drop table").status_code, 200)

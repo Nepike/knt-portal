@@ -5,6 +5,7 @@
 единственное место, где приложение комментариев смотрит наружу.
 """
 
+import json
 from collections import defaultdict
 
 from django.db.models import Count, Exists, OuterRef
@@ -192,10 +193,15 @@ def comment_delete(request, pk):
     if not _may_touch(request.user, comment):
         return HttpResponseForbidden("Это чужой комментарий.")
     owner = comment.owner
-    comment.delete()  # ответы уедут каскадом, картинку снимет post_delete
+    taken = rewards.remove(comment, by=request.user)  # ответы уедут каскадом, картинку снимет post_delete
     # Отдаём ленту целиком, а не пустоту: вместе с комментарием исчезают его ответы
     # и меняется счётчик — точечным удалением узла этого не показать.
-    return _block(request, owner)
+    response = _block(request, owner)
+    if taken:
+        # Страница не перезагружается, обычное сообщение всплыло бы только на следующей.
+        notice = {"type": "info", "text": "Комментарий удалён." + rewards.taken_note(taken)}
+        response["HX-Trigger"] = json.dumps({"toast": notice})
+    return response
 
 
 @require_POST

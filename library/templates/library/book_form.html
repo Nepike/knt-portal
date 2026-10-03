@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load static %}
+{% load static text_extras %}
 
 {% block title %}{% if book %}Редактирование книги{% else %}Новая книга{% endif %}{% endblock %}
 
@@ -22,7 +22,7 @@
       <i class="fa-solid fa-trash"></i>Удалить книгу
     </button>
     <div x-show="confirming" x-cloak class="flex flex-wrap items-center gap-3">
-      <span class="text-sm">Удалить книгу вместе с файлами?</span>
+      <span class="text-sm">Удалить книгу вместе с файлами?{% if refund %} Спишется {{ refund }} {{ refund|plural:"токен,токена,токенов" }} — награда за неё.{% endif %}</span>
       <form method="post" action="{% url 'book_delete' book.pk %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-danger">Удалить</button>

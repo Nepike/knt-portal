@@ -8,20 +8,24 @@
 удаливший свой материал не получил бы за новый: число вернулось бы к прежнему, а
 с ним и «положено». Поэтому у каждой награды свой ключ (`BalanceLog.key`).
 
-Отсюда: повторный вызов ничего не меняет, звать можно откуда угодно; выплаченное назад
-НЕ забирается — ни при удалении материала, ни при снятом лайке (иначе «снять и поставить
-заново» стало бы фермой), и вниз пересчёта нет вовсе; достижения лягут сюда же
-предикатами на том же состоянии. А чего в состоянии нет, того и не начисляем: «зашёл
-сегодня» тут не появится, пока где-то не будет храниться, за сколько дней уже заплачено.
+Отсюда: повторный вызов ничего не меняет, звать можно откуда угодно; вниз пересчёта нет —
+снятый лайк, вещь, ушедшая на повторную проверку или удалённая модератором, выплаченного
+не отнимают (иначе «снять и поставить заново» стало бы фермой, а чужое действие — штрафом).
+Достижения лягут сюда же предикатами на том же состоянии. А чего в состоянии нет, того
+и не начисляем: «зашёл сегодня» тут не появится, пока где-то не будет храниться, за
+сколько дней уже заплачено.
+
+Назад забирается одно: награда за вещь, которую автор удалил САМ (`remove`). Без этого
+«написал — получил — удалил — написал заново» было фермой: ключ у новой вещи новый.
 """
 
 from collections import namedtuple
 
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 
 from .models import BalanceLog
-from .services import credit, lock
+from .services import credit, lock, reclaim
 
 # --- расценки, одно место на весь сайт ---
 
@@ -42,15 +46,19 @@ REVIEW_TEXT = 20  # отзыв, в котором есть что читать: 
 REVIEW_SCORES = 5  # голые оценки — это клик, но статистике преподавателя они нужны
 MODERATION = 5  # за разобранную чужую работу, одобрил её модератор или вернул
 
-# Лайки — единственный признак КАЧЕСТВА, а не объёма: чужой палец вверх себе не поставишь.
-# Считаем чистыми (минус дизлайки) и с потолком на запись, иначе десяток друзей
-# превращает один отзыв в главный доход.
+# Лайки — единственный признак КАЧЕСТВА, а не объёма. Считаем только чужие (свой голос
+# автору ничего не приносит), чистыми (минус дизлайки) и с потолком на запись, иначе
+# десяток друзей превращает один отзыв в главный доход.
 LIKE = 5
 LIKE_CAP = 15
+# Платим, когда чистых лайков набралось столько, — сразу за все, дальше за каждый. До
+# порога ничего: иначе двое друзей лайкали бы друг другу комментарии без конца, а
+# комментариев можно написать сколько угодно.
+LIKE_FROM = 5
 
-# Кто именно скачал, нигде не пишется — «скачал свой файл сто раз» не ловится. Отсюда
-# щадящий курс и потолок на файл: накрутка не окупается, а честной раздаче хватает
-# (потолок перебирают 27 файлов из 2422).
+# Скачивание считается раз в сутки с одного адреса (attachments.views.download), но кто
+# именно скачал, нигде не пишется. Отсюда щадящий курс и потолок на файл: накрутка не
+# окупается, а честной раздаче хватает (потолок перебирают 27 файлов из 2422).
 DOWNLOADS_PER_COIN = 5
 DOWNLOAD_CAP = 50
 # Через сколько скачиваний звать пересчёт: раздача файлов — самый горячий путь на сайте.
@@ -112,10 +120,9 @@ def _reviews(user):
 
     Лайки идут отдельной наградой, но тем же запросом.
     """
-    rows = user.teacher_reviews.annotate(
-        likes=Count("liked_users", distinct=True),
-        dislikes=Count("disliked_users", distinct=True),
-    ).values_list("pk", "text", "image", "teacher__surname", "likes", "dislikes")
+    rows = _votes(user.teacher_reviews, user).values_list(
+        "pk", "text", "image", "teacher__surname", "likes", "dislikes",
+    )
 
     for pk, text, image, surname, likes, dislikes in rows:
         detailed = bool(text or image)
@@ -135,20 +142,32 @@ def _comments(user):
     либо под лекцией. Ключ награды (`c<номер>`) от переезда модели не поменялся — иначе
     уже выплаченное начислилось бы второй раз.
     """
-    rows = user.comments.annotate(
-        likes=Count("liked_users", distinct=True),
-        dislikes=Count("disliked_users", distinct=True),
-    ).values_list("pk", "material__title", "lecture__title", "likes", "dislikes")
+    rows = _votes(user.comments, user).values_list(
+        "pk", "material__title", "lecture__title", "likes", "dislikes",
+    )
 
     for pk, material, lecture, likes, dislikes in rows:
         if net := _net(likes, dislikes):
             yield Award(R.LIKES, f"c{pk}", LIKE * net, f"лайки на комментарии к «{material or lecture}»")
 
 
+def _votes(rows, author):
+    """Голоса за записи автора без его собственных: поставить лайк себе можно, но
+    награды за него нет — иначе её давал бы каждый свой комментарий."""
+    return rows.annotate(
+        likes=Count("liked_users", distinct=True)
+        - Count("liked_users", filter=Q(liked_users=author), distinct=True),
+        dislikes=Count("disliked_users", distinct=True)
+        - Count("disliked_users", filter=Q(disliked_users=author), distinct=True),
+    )
+
+
 def _net(likes, dislikes):
-    """Чистые лайки, с потолком. Минус уводим в ноль, а не в долг: спорную запись
-    не награждают, но и не наказывают — иначе первый дизлайк отбивал бы охоту писать."""
-    return min(max(likes - dislikes, 0), LIKE_CAP)
+    """Оплачиваемые лайки: чистые, с потолком и от порога. Ниже порога — ноль, а не
+    долг: спорную запись не награждают, но и не наказывают — иначе первый дизлайк
+    отбивал бы охоту писать."""
+    net = min(likes - dislikes, LIKE_CAP)
+    return net if net >= LIKE_FROM else 0
 
 
 def _downloads(user):
@@ -163,8 +182,14 @@ def _downloads(user):
     `File.downloads` держит это живьём и точно, а журнал про деньги.
     """
     from attachments.models import File
+    from core.models import Moderated
 
-    rows = File.objects.filter(uploader=user, downloads__gte=DOWNLOADS_PER_COIN).values_list("downloads", flat=True)
+    # Только то, что прошло проверку: вложение чата и файл черновика видит один автор,
+    # и скачивал бы их он же.
+    published = Q(material__status=Moderated.Status.APPROVED) | Q(book__status=Moderated.Status.APPROVED)
+    rows = File.objects.filter(
+        published, uploader=user, downloads__gte=DOWNLOADS_PER_COIN,
+    ).values_list("downloads", flat=True)
     total = sum(min(count // DOWNLOADS_PER_COIN, DOWNLOAD_CAP) for count in rows)
     yield from _batches(R.DOWNLOAD, total, DOWNLOAD_BATCH, "скачивают твои файлы")
 
@@ -178,7 +203,9 @@ def _batches(reason, total, size, note):
     не меняется, сколько бы ни набежало сверху.
 
     Счётчики только растут, поэтому и номера только прибавляются; уменьшись они (файл
-    удалили), выплаченное всё равно не отбирается — за этим следит `pending`.
+    удалили), выплаченное не отбирается — за этим следит `pending`. Но и заново не
+    платится: пока сумма не перерастёт уже оплаченные номера, новых порций нет. Поэтому
+    `remove` эти награды не трогает — «удалить и залить заново» тут ничего не даёт.
     """
     for number in range(1, total // size + 1):
         yield Award(reason, str(number), size, note)
@@ -249,3 +276,94 @@ def sync(user):
         credit(user, gap, award.reason, note=award.note, key=award.key)
         added[award.reason] = added.get(award.reason, 0) + gap
     return added
+
+
+def _own(item):
+    """Чья это вещь: у отзыва и комментария автор, у материала, книги и курса — загрузивший."""
+    return getattr(item, "author_id", None) or getattr(item, "uploader_id", None)
+
+
+def _branch(comment):
+    """Номера комментариев ветки, с ним самим: ответы уезжают каскадом, и за свои среди
+    них автору тоже платили."""
+    found, level = [comment.pk], [comment.pk]
+    while level:
+        level = list(type(comment).objects.filter(parent_id__in=level).values_list("pk", flat=True))
+        found += level
+    return found
+
+
+def _claims(item):
+    """По каким ключам за эту вещь платили и как подписать возврат."""
+    kind = item._meta.model_name
+    if kind == "review":
+        return [(R.REVIEW, str(item.pk)), (R.LIKES, f"r{item.pk}")], f"удалён отзыв о {item.teacher.surname}"
+    if kind == "comment":
+        return [(R.LIKES, f"c{pk}") for pk in _branch(item)], f"удалён комментарий к «{item.owner.title}»"
+    reason, note = {
+        "material": (R.MATERIAL, "удалён материал"),
+        "book": (R.BOOK, "удалена книга"),
+        "playlist": (R.PLAYLIST, "удалён курс"),
+    }[kind]
+    return [(reason, str(item.pk))], f"{note} «{item.title}»"
+
+
+def _paid_for(item):
+    """Что выплачено за вещь её автору и ещё не забрано: ([(причина, ключ, сумма)], подпись).
+
+    Считаем по журналу, а не по расценкам: ровно то, что по этим ключам начислено,
+    минус уже забранное, — повторный возврат поэтому ничего не находит.
+    """
+    keys, note = _claims(item)
+    wanted = Q()
+    for reason, key in keys:
+        wanted |= Q(reason=reason, key=key)
+    rows = (
+        BalanceLog.objects.filter(wanted, wallet__user_id=_own(item))
+        .values("reason", "key").annotate(total=Sum("amount"))
+    )
+    return [(row["reason"], row["key"], row["total"]) for row in rows if row["total"] > 0], note
+
+
+def at_stake(item, by):
+    """Сколько токенов спишется, если `by` удалит эту вещь, — для предупреждения перед
+    удалением. У не-автора ноль: см. `remove`."""
+    if _own(item) != by.pk:
+        return 0
+    return sum(total for _, _, total in _paid_for(item)[0])
+
+
+@transaction.atomic
+def remove(item, by):
+    """Удалить вещь и забрать выплаченное за неё, если удаляет сам автор. Возвращает,
+    сколько забрали.
+
+    Правило узкое намеренно. Чужое действие — модератор удалил, сняли лайк, вещь ушла
+    на повторную проверку — человеку ничего не стоит: штрафовать за него не за что.
+    А своё удаление без возврата было фермой: новая вещь получает новый ключ и
+    оплачивается заново. Баланс при этом может уйти в минус (services.reclaim) — иначе
+    хватало бы потратить награду до удаления.
+
+    Одним действием с самим удалением, потому что порядок и неделимость обязательны:
+    после удаления у вещи нет номера, по которому искать выплаты, а возврат без удаления
+    оставил бы человека и без токенов, и с вещью, за которую заплатят заново.
+    """
+    taken = 0
+    if _own(item) == by.pk:
+        lock(by)  # до чтения журнала: два удаления разом иначе забрали бы одно и то же дважды
+        paid, note = _paid_for(item)
+        for reason, key, total in paid:
+            reclaim(by, total, reason, note=note, key=key)
+            taken += total
+    item.delete()
+    return taken
+
+
+def taken_note(taken):
+    """Хвост сообщения об удалении. О списании человек должен узнать от нас и сразу,
+    а не из журнала кошелька когда-нибудь потом."""
+    if not taken:
+        return ""
+    from core.templatetags.text_extras import plural
+
+    return f" Списано {taken} {plural(taken, 'токен,токена,токенов')} — награда за удалённое."

@@ -7,6 +7,7 @@
 иначе у каждого процесса был бы свой счётчик и лимит на деле оказывался бы кратно выше.
 """
 
+import ipaddress
 import logging
 
 from django.core.cache import cache
@@ -45,5 +46,17 @@ def _count(key, window):
 
 
 def client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR", "")
+    """Адрес клиента — тот, что видел наш nginx, а не тот, что клиент назвал сам.
+
+    X-Real-IP nginx ставит сам и присланное значение затирает (nginx.conf). А в
+    X-Forwarded-For он дописывает настоящий адрес в КОНЕЦ, и первым остаётся то, что
+    прислал клиент: сменой этого заголовка обходились лимиты, а «unknown» в нём ронял
+    вход — строка уезжала в поле адреса сессии. Без nginx (разработка) заголовка нет,
+    берём адрес соединения. Не адрес — значит пусто.
+    """
+    for raw in (request.META.get("HTTP_X_REAL_IP"), request.META.get("REMOTE_ADDR")):
+        try:
+            return str(ipaddress.ip_address((raw or "").strip()))
+        except ValueError:
+            continue
+    return ""

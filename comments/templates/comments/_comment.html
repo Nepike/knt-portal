@@ -62,7 +62,7 @@
       <button type="button" hx-get="{% url 'comment_edit' c.pk %}" hx-target="#comment-{{ c.pk }}" hx-swap="outerHTML"
               class="text-slate-400 hover:text-accent transition-colors">Изменить</button>
       <button type="button" hx-post="{% url 'comment_delete' c.pk %}" hx-target="#comments" hx-swap="outerHTML"
-              hx-confirm="Удалить комментарий{% if c.answers %} вместе с ответами{% endif %}?"
+              hx-confirm="Удалить комментарий{% if c.answers %} вместе с ответами{% endif %}?{% if c.author_id == user.pk and c.likes >= 5 %} Токены за лайки на нём спишутся.{% endif %}"
               class="text-slate-400 hover:text-rose-500 transition-colors">Удалить</button>
       {% endif %}
     </div>

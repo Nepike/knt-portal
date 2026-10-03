@@ -32,19 +32,12 @@ class Command(BaseCommand):
         for wallet, journal in broken:
             self.stdout.write(f"{wallet.user}: в кошельке {wallet.balance}, по журналу {journal}")
 
-        # Пересчётом это не лечится: отрицательная сумма значит, что списаний записано
-        # больше, чем начислений, — сначала надо понять, откуда взялись лишние строки.
-        negative = [wallet for wallet, journal in broken if journal < 0]
-        if negative:
-            self.stdout.write(self.style.ERROR(f"журнал уходит в минус у {len(negative)} — разбираться руками"))
-
         if not options["apply"]:
             self.stdout.write(self.style.WARNING("ничего не сделано — запусти с --apply"))
             return
 
-        fixed = 0
-        for wallet, journal in broken:
-            if journal >= 0:
-                recount(wallet)
-                fixed += 1
-        self.stdout.write(self.style.SUCCESS(f"поправлено: {fixed}"))
+        # Минус по журналу — не поломка: так выглядит возврат награды за удалённое,
+        # если её успели потратить (rewards.remove). Чиним такой кошелёк как любой.
+        for wallet, _ in broken:
+            recount(wallet)
+        self.stdout.write(self.style.SUCCESS(f"поправлено: {len(broken)}"))

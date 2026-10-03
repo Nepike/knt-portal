@@ -66,7 +66,7 @@
               class="text-xs text-accent hover:underline">Изменить</button>
       {% endif %}
       {% if r.author_id == user.pk or perms.teachers.delete_review %}
-      <button type="button" hx-post="{% url 'review_delete' r.pk %}" hx-confirm="Удалить отзыв? Оценки тоже пропадут."
+      <button type="button" hx-post="{% url 'review_delete' r.pk %}" hx-confirm="Удалить отзыв? Оценки тоже пропадут.{% if r.author_id == user.pk %} Токены, начисленные за него, спишутся.{% endif %}"
               class="text-xs text-rose-500 hover:underline">Удалить</button>
       {% endif %}
     </div>

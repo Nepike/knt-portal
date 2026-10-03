@@ -1,5 +1,5 @@
 {% extends "core/base.html" %}
-{% load static %}
+{% load static text_extras %}
 
 {% block title %}{% if playlist %}Правка курса{% else %}Новый курс{% endif %}{% endblock %}
 
@@ -95,7 +95,7 @@
       <i class="fa-solid fa-trash"></i>Удалить курс
     </button>
     <div x-show="confirming" x-cloak class="flex flex-wrap items-center gap-3">
-      <span class="text-sm">Удалить курс вместе со всеми записями и видео?</span>
+      <span class="text-sm">Удалить курс вместе со всеми записями и видео?{% if refund %} Спишется {{ refund }} {{ refund|plural:"токен,токена,токенов" }} — награда за него.{% endif %}</span>
       <form method="post" action="{% url 'playlist_delete' playlist.pk %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-danger">Удалить</button>

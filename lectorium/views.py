@@ -153,6 +153,7 @@ def playlist_edit(request, pk=None):
         "form": form,
         "playlist": playlist if pk else None,
         "lectures": list(playlist.lectures.select_related("job")) if pk else [],
+        "refund": rewards.at_stake(playlist, request.user) if pk else 0,
     })
 
 
@@ -167,10 +168,10 @@ def playlist_delete(request, pk):
     # Считаем ДО удаления: после него у объекта в памяти уже нет ни номера, ни записей,
     # а модерации важно, сколько работы исчезло.
     lectures = playlist.lectures.count()
-    playlist.delete()
+    taken = rewards.remove(playlist, by=request.user)
     notify(MODERATION, "telegram/playlist_deleted.html",
            {"playlist": playlist, "editor": request.user, "lectures": lectures})
-    messages.success(request, "Курс удалён.")
+    messages.success(request, "Курс удалён." + rewards.taken_note(taken))
     return redirect("playlist_list")
 
 
