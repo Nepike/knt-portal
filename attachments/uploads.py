@@ -8,6 +8,7 @@ from django.core import signing
 from django.urls import reverse
 
 from django.core.files.storage import FileSystemStorage
+from PIL import Image as PilImage
 
 from .media import media_url
 from .models import File, Image, human_size
@@ -92,12 +93,63 @@ def saved_images(owner):
     )
 
 
+# Картинки, которые покажет любой браузер: формат по Pillow → расширение ключа в хранилище.
+# MPO — тот же JPEG: так Pillow зовёт снимки телефонов, где следом лежит второй кадр.
+PICTURES = {"JPEG": ".jpg", "MPO": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}
+PICTURE_HINT = "Подойдут JPEG, PNG, WebP и GIF"
+# Для полей формы: там файл, который Pillow не открыл, отсекает сам Django — раньше нашей
+# проверки и со словами «файл повреждён». HEIC попадает именно сюда.
+UNREADABLE_PICTURE = f"Не получилось прочитать картинку. {PICTURE_HINT}; снимок HEIC с айфона сохрани как JPEG."
+# Так начинается HEIC — формат фотографий айфона. Ему отдельный отказ: случай частый,
+# а «это не картинка» про собственный снимок человека только запутает.
+HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"}
+
+
+def picture_format(upload):
+    """Формат картинки по СОДЕРЖИМОМУ (как его зовёт Pillow) или None, если это не картинка.
+
+    Не по имени и не по типу из запроса: и то и другое пишет отправитель. А модельный
+    ImageField содержимое не проверяет вовсе — это делает только поле формы.
+    """
+    try:
+        with PilImage.open(upload) as image:
+            kind = image.format
+            image.verify()
+    except Exception:  # noqa: BLE001 — Pillow бросает чем придётся, и всё это «не картинка»
+        return None
+    finally:
+        upload.seek(0)  # файл ещё сохранять
+    return kind
+
+
+def check_picture(upload):
+    """Причина не принимать файл как картинку, или None.
+
+    Берём только то, что покажет любой браузер. Иначе картинка честно загружена, лежит
+    в хранилище — а у половины людей на её месте пустой квадрат: так на сайт попал HEIC,
+    который умеет один Safari.
+    """
+    kind = picture_format(upload)
+    if kind in PICTURES:
+        return None
+    head = upload.read(12)
+    upload.seek(0)
+    if head[4:8] == b"ftyp" and head[8:12] in HEIC_BRANDS:
+        return f"«{upload.name}» — формат HEIC браузеры не показывают. Сохрани как JPEG и загрузи снова"
+    if kind is None:
+        return f"«{upload.name}» — это не картинка. {PICTURE_HINT}"
+    return f"«{upload.name}» — формат {kind} показывают не все браузеры. {PICTURE_HINT}"
+
+
 def check_images(uploads):
-    """Ошибки по картинкам галереи. Что это вообще картинка, проверит ImageField."""
-    return [
-        f"«{upload.name}» больше {human_size(MAX_IMAGE_SIZE)}"
-        for upload in uploads if upload.size > MAX_IMAGE_SIZE
-    ]
+    """Ошибки по картинкам галереи: размер и формат."""
+    errors = []
+    for upload in uploads:
+        if upload.size > MAX_IMAGE_SIZE:
+            errors.append(f"«{upload.name}» больше {human_size(MAX_IMAGE_SIZE)}")
+        elif problem := check_picture(upload):
+            errors.append(problem)
+    return errors
 
 
 def drop_replaced(form, field="image"):
@@ -429,9 +481,14 @@ def sync_images(request, owner):
 
     order = len(by_pk)
     for upload in request.FILES.getlist("images"):
+        shown = upload.name
+        # Расширение ключа — по содержимому, а не по имени: по нему объекту назначается
+        # тип (storage.CONTENT_TYPES), и снимок, названный «фото.txt» или «фото.heic»,
+        # иначе уехал бы браузеру текстом или тем, чего тот не показывает.
+        upload.name = Path(shown).stem + PICTURES[picture_format(upload)]
         Image.objects.create(
             **{owner._meta.model_name: owner},
-            name=upload.name[:150], image=upload, uploader=request.user, order=order,
+            name=shown[:150], image=upload, uploader=request.user, order=order,
         )
         order += 1
 

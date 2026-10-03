@@ -45,6 +45,16 @@ class ReviewImageTests(TestCase):
         self.assertTrue(review.image)
         self.assertTrue(review.is_detailed())  # значит виден всем и ему ставят лайки
 
+    def test_a_picture_only_some_browsers_show_is_refused(self):
+        from attachments.tests import heic, picture
+
+        response = self.client.post(self.url, {"text": "Доска после пары", "image": picture("TIFF")})
+        self.assertContains(response, "формат TIFF показывают не все браузеры")
+
+        response = self.client.post(self.url, {"text": "Доска после пары", "image": heic()})
+        self.assertContains(response, "снимок HEIC с айфона сохрани как JPEG")
+        self.assertFalse(Review.objects.exists())
+
     def test_an_empty_review_is_still_refused(self):
         response = self.client.post(self.url, {"text": ""})
         self.assertFalse(Review.objects.exists())

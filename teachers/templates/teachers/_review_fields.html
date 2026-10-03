@@ -18,3 +18,4 @@
 
 {% include "core/inputs.html" with field=form.text %}
 {% include "attachments/_image_pick.html" with field=form.image saved=form.initial.image %}
+{% if form.image.errors %}<p class="text-xs text-rose-500">{{ form.image.errors.0 }}</p>{% endif %}

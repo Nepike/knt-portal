@@ -36,11 +36,11 @@
        @drop.prevent="over = false; add($event.dataTransfer.files)" x-data="{ over: false }" class="mt-2">
     <label class="flex flex-col items-center gap-1 rounded-2xl border-2 border-dashed px-4 py-6 text-center cursor-pointer transition border-slate-300 dark:border-slate-700"
            :class="over && 'border-accent bg-accent/5'">
-      <input type="file" name="images" multiple accept="image/*" x-ref="images"
+      <input type="file" name="images" multiple accept="image/jpeg,image/png,image/webp,image/gif" x-ref="images"
              @change="add($event.target.files)" class="hidden">
       <i class="fa-solid fa-images text-2xl text-slate-400"></i>
       <span class="text-sm">Перетащи картинки сюда или нажми, чтобы выбрать</span>
-      <span class="text-xs text-slate-400">до {{ max_image_hint }} на картинку</span>
+      <span class="text-xs text-slate-400">JPEG, PNG, WebP или GIF, до {{ max_image_hint }} на картинку</span>
     </label>
   </div>
 

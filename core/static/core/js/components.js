@@ -807,6 +807,8 @@ document.addEventListener("alpine:init", () => {
 
   // Галерея материала. Проще fileForm: картинки маленькие и едут обычным multipart,
   // поэтому ни подписанных ссылок, ни прогресса — только выбор, порядок и удаление.
+  // Берём только то, что покажет любой браузер (apng для него — тот же png).
+  const PICTURE_TYPES = ["image/jpeg", "image/png", "image/apng", "image/webp", "image/gif"];
   Alpine.data("gallery", (saved = [], maxSize = 0) => ({
     saved: saved.map((image) => ({ ...image, marked: false })),
     picked: [], // { id, file, url } — url живёт до отправки формы, это objectURL
@@ -817,8 +819,15 @@ document.addEventListener("alpine:init", () => {
     add(files) {
       this.errors = [];
       for (const file of files) {
-        if (!file.type.startsWith("image/")) {
-          this.errors.push(`«${file.name}» — это не картинка`);
+        // HEIC — отдельно и по имени тоже: тип у него браузер называет не всегда, а случай
+        // частый, это формат фотографий айфона. Последнее слово всё равно за сервером:
+        // он смотрит на содержимое, а не на имя (attachments.uploads.check_picture).
+        if (/\.hei[cf]$/i.test(file.name) || /^image\/hei[cf]/.test(file.type)) {
+          this.errors.push(`«${file.name}» — формат HEIC браузеры не показывают. Сохрани как JPEG и загрузи снова`);
+          continue;
+        }
+        if (!PICTURE_TYPES.includes(file.type)) {
+          this.errors.push(`«${file.name}» — подойдут JPEG, PNG, WebP и GIF`);
           continue;
         }
         if (maxSize && file.size > maxSize) {

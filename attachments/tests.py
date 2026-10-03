@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -24,6 +25,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from PIL import Image as PilImage
 
 from core.models import Subject
 from intake.models import MediaJob
@@ -38,8 +40,8 @@ from .r2 import R2Storage
 from .storage import CONTENT_TYPES, content_type, drop_prefix, file_storage, media_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
-    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, UPLOAD_SALT,
-    max_upload_size, new_key, part_size,
+    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, PICTURES, UPLOAD_SALT,
+    check_picture, max_upload_size, new_key, part_size,
 )
 
 
@@ -909,6 +911,78 @@ class DropPrefixBatchTests(SimpleTestCase):
         self.assertEqual(sizes, [1000, 1000, 500])
         # Префикс хранилища listdir не отдаёт, а в бакете он часть ключа.
         self.assertEqual(calls[0].kwargs["Delete"]["Objects"][0]["Key"], "dev/lectures/abc/0/seg00000.m4s")
+
+
+def picture(kind="PNG", name=None):
+    """Настоящая картинка в названном формате: проверка смотрит на содержимое."""
+    buffer = BytesIO()
+    image = PilImage.new("RGB", (4, 4), "red")
+    extra = {"save_all": True, "append_images": [image]} if kind == "MPO" else {}
+    image.save(buffer, format=kind, **extra)
+    return SimpleUploadedFile(name or f"снимок.{kind.lower()}", buffer.getvalue())
+
+
+def heic(name="IMG_5022.HEIC"):
+    """Начало файла HEIC, каким его снимает айфон: Pillow такое не открывает."""
+    return SimpleUploadedFile(name, b"\x00\x00\x00\x24ftypheic\x00\x00\x00\x00mif1heic" + bytes(64))
+
+
+class PictureFormatTests(SimpleTestCase):
+    """Что годится в картинки: то, что покажет любой браузер. Иначе файл честно
+    загружен, а у половины людей на его месте пустой квадрат."""
+
+    def test_what_every_browser_shows_is_accepted(self):
+        for kind in ("JPEG", "PNG", "WEBP", "GIF"):
+            self.assertIsNone(check_picture(picture(kind)), kind)
+
+    def test_a_phone_photo_with_a_second_frame_is_still_a_jpeg(self):
+        """Pillow зовёт такой снимок MPO, а для браузера это обычный JPEG. Откажи мы ему —
+        отказали бы половине фотографий с телефона."""
+        self.assertIsNone(check_picture(picture("MPO", name="снимок.jpg")))
+
+    def test_the_bytes_decide_and_not_the_name(self):
+        self.assertIsNone(check_picture(picture("PNG", name="снимок.txt")))
+        self.assertIn("не картинка", check_picture(SimpleUploadedFile("снимок.png", b"<html>hello</html>")))
+
+    def test_an_iphone_photo_gets_a_reason_one_can_act_on(self):
+        """«Это не картинка» про собственный снимок человека только запутало бы."""
+        problem = check_picture(heic())
+
+        self.assertIn("HEIC", problem)
+        self.assertIn("Сохрани как JPEG", problem)
+
+    def test_a_format_only_some_browsers_show_is_refused_by_name(self):
+        self.assertIn("формат TIFF", check_picture(picture("TIFF")))
+        self.assertIn("формат AVIF", check_picture(picture("AVIF")))
+
+    def test_a_picture_cut_short_is_not_a_picture(self):
+        """Заголовок цел, а дальше обрыв: открыть такой файл Pillow даёт, проверить — нет."""
+        whole = picture("PNG").read()
+
+        self.assertIn("не картинка", check_picture(SimpleUploadedFile("обрыв.png", whole[:len(whole) - 8])))
+
+    def test_the_page_and_the_server_name_the_same_formats(self):
+        """Форма отсеивает лишнее до отправки, сервер — по содержимому после. Разойдись
+        списки — человек выбрал бы файл, который ему тут же вернут."""
+        script = (settings.BASE_DIR / "core/static/core/js/components.js").read_text(encoding="utf-8")
+        listed = re.search(r"const PICTURE_TYPES = \[(.*?)\];", script).group(1)
+        on_the_page = {name.strip(' "') for name in listed.split(",")}
+
+        on_the_server = {content_type("x" + suffix) for suffix in PICTURES.values()}
+        self.assertEqual(on_the_page - {"image/apng"}, on_the_server)  # apng для сервера — тот же png
+
+        template = (settings.BASE_DIR / "attachments/templates/attachments/_gallery.html").read_text(encoding="utf-8")
+        offered = set(re.search(r'accept="([^"]+)"', template).group(1).split(","))
+        self.assertEqual(offered, on_the_server)
+
+    def test_the_file_is_left_ready_to_be_saved(self):
+        for upload in (picture("PNG"), heic(), SimpleUploadedFile("x.png", b"not a picture")):
+            body = upload.read()
+            upload.seek(0)
+
+            check_picture(upload)
+
+            self.assertEqual(upload.read(), body)
 
 
 class DownloadCountTests(TestCase):

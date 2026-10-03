@@ -41,6 +41,37 @@ class CommentTests(TestCase):
         self.assertContains(response, "Спасибо, выручил")
         self.assertEqual(Comment.objects.get().author, self.reader)
 
+    def test_a_picture_only_some_browsers_show_is_refused(self):
+        from attachments.tests import picture
+
+        response = self.add(text="смотрите", image=picture("TIFF"))
+
+        self.assertContains(response, "формат TIFF показывают не все браузеры")
+        self.assertFalse(Comment.objects.exists())
+
+    def test_an_iphone_photo_is_refused_with_a_way_out(self):
+        """Такой файл Pillow не открывает, и Django отсекает его сам — со словами «файл
+        повреждён». Подменяем их: про HEIC человеку надо сказать, что с ним делать."""
+        from attachments.tests import heic
+
+        response = self.add(text="смотрите", image=heic())
+
+        self.assertContains(response, "снимок HEIC с айфона сохрани как JPEG")
+        self.assertFalse(Comment.objects.exists())
+
+    def test_editing_the_text_does_not_read_the_old_picture_back(self):
+        """Прежняя картинка лежит в хранилище: проверять её заново — значит скачивать."""
+        self.add(text="было", image=make_image())
+        comment = Comment.objects.get()
+
+        with mock.patch("attachments.uploads.check_picture") as check:
+            self.client.post(reverse("comment_edit", args=[comment.pk]), {"text": "стало"})
+
+        check.assert_not_called()
+        comment.refresh_from_db()
+        self.assertEqual(comment.text, "стало")
+        self.assertTrue(comment.image)
+
     def test_empty_comment_is_refused(self):
         response = self.add(text="   ")
 

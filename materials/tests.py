@@ -418,6 +418,32 @@ class GalleryTests(TestCase):
         self.assertEqual([i.pk for i in material.images.all()], [second.pk])
         self.assertFalse(Image.objects.filter(pk=first.pk).exists())
 
+    def test_a_photo_browsers_cannot_show_is_refused_with_a_reason(self):
+        """Так на сайт попал HEIC: у картинок галереи проверялся только размер."""
+        from attachments.tests import heic
+
+        response = self.client.post(reverse("material_new"), self.fields(images=heic()))
+
+        self.assertContains(response, "формат HEIC браузеры не показывают")
+        self.assertFalse(Material.objects.exists())
+
+    def test_a_file_that_is_not_a_picture_is_refused(self):
+        page = SimpleUploadedFile("страница.png", b"<html>hello</html>", content_type="image/png")
+
+        response = self.client.post(reverse("material_new"), self.fields(images=page))
+
+        self.assertContains(response, "это не картинка")
+        self.assertFalse(Image.objects.exists())
+
+    def test_the_key_takes_its_extension_from_the_content(self):
+        """По расширению ключа объекту назначается тип. Снимок, названный «фото.txt»,
+        иначе уехал бы браузеру текстом — и на его месте был бы пустой квадрат."""
+        self.client.post(reverse("material_new"), self.fields(images=make_image("фото.txt")))
+
+        image = Image.objects.get()
+        self.assertTrue(image.image.name.endswith("/фото.png"), image.image.name)
+        self.assertEqual(image.name, "фото.txt")  # а человеку показываем то имя, что он дал
+
     def test_huge_image_is_refused(self):
         with mock.patch("attachments.uploads.MAX_IMAGE_SIZE", 10):
             response = self.client.post(reverse("material_new"), self.fields(images=make_image()))
