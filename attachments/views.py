@@ -1,4 +1,5 @@
 import json
+from functools import wraps
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
@@ -40,6 +41,24 @@ SEGMENT_MAX_AGE = 365 * 24 * 3600
 MANIFEST_MAX_AGE = 3600
 
 
+def files_host_only(view):
+    """Загруженное людьми отдаётся только с домена файлов.
+
+    Подпись в адресе от домена не зависит, а раздача подключена и к домену сайта (на
+    случай пустого FILES_BASE_URL) — так что тот же адрес открывался и в origin сайта,
+    рядом с куками сессии. Переадресация, а не отказ: старые ссылки продолжают работать.
+    Временная: постоянную браузер запомнил бы и вёл бы на домен файлов и после того,
+    как его отключат.
+    """
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        base = settings.FILES_BASE_URL
+        if base and request.get_host().lower() != urlsplit(base).netloc.lower():
+            return redirect(base + request.get_full_path())
+        return view(request, *args, **kwargs)
+    return wrapped
+
+
 def _deliver(name):
     """Байты отдаёт nginx: он сам сходит в хранилище, закеширует и отправит файл.
     Наш процесс освобождается сразу — через приложение байты не идут никогда."""
@@ -56,13 +75,15 @@ def _deliver(name):
         target = f"{ACCEL_R2}{parts.path}?{parts.query}"
 
     # Тип ставим и мы: с дефолтным text/html браузер показал бы pdf текстом, а картинку —
-    # ничем. Но побеждает он только на промахе кеша — на попадании до браузера доезжает
-    # тип, записанный в самом объекте хранилища. Поэтому список один на оба конца
-    # (storage.content_type), и заливка объявляет ровно то же самое.
+    # ничем. Но до браузера он доезжает только с локального диска. У R2 побеждает тип,
+    # записанный в самом объекте, — и на попадании в кеш, и на промахе (замерено
+    # 03.10.2026). Поэтому список один на оба конца (storage.content_type), и заливка
+    # объявляет ровно то же самое.
     return HttpResponse(content_type=content_type(name), headers={"X-Accel-Redirect": target})
 
 
 @login_not_required
+@files_host_only
 def download(request, token, name):
     """Через нас ссылка идёт ради счётчика; разрешение — сама подпись (см. media.file_url).
     Имя в хвосте адреса чисто для браузера, мы его не читаем."""
@@ -108,6 +129,7 @@ def _allow_our_origin(request, response):
 
 @login_not_required
 @require_http_methods(["GET", "HEAD", "OPTIONS"])
+@files_host_only
 def hls_piece(request, token, name):
     """Кусок HLS: манифест или сегмент. Разрешение — сама подпись, как и у файлов.
 
@@ -150,6 +172,7 @@ def hls_piece(request, token, name):
 
 
 @login_not_required
+@files_host_only
 def media_image(request, token):
     key = media_key(token)
     if key is None:

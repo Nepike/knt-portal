@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from attachments.media import hls_url, redirect_url
+from attachments.media import hls_url, image_url
 from attachments.models import human_size
 from attachments.storage import file_storage
 from attachments.uploads import max_upload_size, upload_key, upload_limits
@@ -396,7 +396,7 @@ def check(request):
         manifest = hls_url(key)
         beside = posixpath.join(posixpath.dirname(key), POSTER)
         if file_storage().exists(beside):
-            poster = redirect_url(beside)
+            poster = image_url(beside)
 
     return render(request, "lectorium/check.html",
                   {"key": key, "manifest": manifest, "poster": poster, "problem": problem})

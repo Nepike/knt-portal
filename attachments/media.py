@@ -44,6 +44,11 @@ def redirect_url(key):
     return reverse("media_image", args=[_signer(MEDIA_SALT).sign_object(key, compress=True)])
 
 
+def image_url(key):
+    """Адрес картинки по ключу — там, где за ней нет поля модели (обложка лекции)."""
+    return _external(redirect_url(key))
+
+
 def media_url(field):
     """Адрес картинки для разметки. Пустое поле — пустая строка."""
     if not field:

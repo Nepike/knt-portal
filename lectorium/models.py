@@ -17,7 +17,7 @@ from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
 
-from attachments.media import hls_url, redirect_url
+from attachments.media import hls_url, image_url
 from core.models import Moderated, Subject, Term
 from intake.spec import MASTER, POSTER
 from teachers.models import Teacher
@@ -108,7 +108,7 @@ class Lecture(models.Model):
         return hls_url(self.manifest_key)
 
     def poster_url(self):
-        return redirect_url(self.poster_key)
+        return image_url(self.poster_key)
 
     def stage(self):
         """Что написать вместо кадра, пока набора нет.

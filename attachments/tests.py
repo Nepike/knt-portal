@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from botocore.exceptions import ClientError
 from django.conf import settings
@@ -255,6 +255,74 @@ class MediaImageTests(TestCase):
 
     def test_tampered_token_is_not_found(self):
         self.assertEqual(self.client.get(redirect_url(self.key) + "x/").status_code, 404)
+
+
+@override_settings(FILES_BASE_URL="https://files.example", ALLOWED_HOSTS=["testserver", "files.example"])
+class FilesHostTests(TestCase):
+    """Загруженное людьми отдаётся только с домена файлов.
+
+    Подпись от домена не зависит, и тот же адрес открывался на домене сайта — то есть
+    чужой файл оказывался в одном origin с куками сессии.
+    """
+
+    def setUp(self):
+        key = file_storage().save("images/board.png", ContentFile(b"png"))
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=make_user())
+        self.file = File.objects.create(book=book, name="z.pdf", file=ContentFile(b"pdf", name="z.pdf"))
+        self.addresses = [
+            redirect_url(key),
+            urlsplit(file_url(self.file)).path,
+            urlsplit(hls_url("lectures/abc/0/seg1.m4s")).path,
+        ]
+
+    def test_on_the_site_host_every_file_address_leads_to_the_files_host(self):
+        for address in self.addresses:
+            with self.subTest(address=address.split("/")[1]):
+                response = self.client.get(address + "?t=1")
+
+                self.assertRedirects(
+                    response, f"https://files.example{address}?t=1", fetch_redirect_response=False,
+                )
+
+    def test_the_files_host_itself_serves_them(self):
+        for address in self.addresses:
+            with self.subTest(address=address.split("/")[1]):
+                response = self.client.get(address, headers={"Host": "files.example"})
+
+                self.assertNotIn("files.example", response["Location"])  # 302 — уже в хранилище
+
+    def test_the_host_is_compared_without_regard_to_case(self):
+        """Иначе домен файлов, набранный заглавными, переадресовывал бы сам на себя."""
+        response = self.client.get(self.addresses[0], headers={"Host": "FILES.example"})
+
+        self.assertIn("/media/images/board", response["Location"])
+
+    def test_a_download_is_not_counted_on_the_way_through(self):
+        """Иначе одно скачивание по старой ссылке считалось бы дважды."""
+        self.client.get(self.addresses[1])
+
+        self.file.refresh_from_db()
+        self.assertEqual(self.file.downloads, 0)
+
+    def test_the_way_is_not_remembered_forever(self):
+        """Постоянную переадресацию браузер запомнил бы и вёл бы на домен файлов и после
+        того, как его отключат (R2_BUCKET и FILES_BASE_URL пусты — аварийный режим)."""
+        response = self.client.get(self.addresses[0])
+
+        self.assertTrue(response["Location"].startswith("https://files.example/"))
+        self.assertEqual(response.status_code, 302)
+
+    @override_settings(FILES_BASE_URL="")
+    def test_without_a_files_host_the_site_serves_them_itself(self):
+        response = self.client.get(self.addresses[0])
+
+        self.assertIn("/media/images/board", response["Location"])
+
+    def test_a_lecture_poster_is_asked_from_the_files_host_right_away(self):
+        """Обложка шла адресом без домена — то есть с сайта, и теперь это был бы лишний круг."""
+        lecture = Lecture(prefix="lectures/abc")
+
+        self.assertTrue(lecture.poster_url().startswith("https://files.example/img/"))
 
 
 MASTER = """#EXTM3U
