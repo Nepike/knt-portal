@@ -11,7 +11,7 @@ from django.core.files.storage import FileSystemStorage
 
 from .media import media_url
 from .models import File, Image, human_size
-from .storage import file_storage, random_key
+from .storage import content_type, file_storage, random_key
 
 MB = 1024 * 1024
 # Через приложение файл держит воркер и место на диске — лимит скромный.
@@ -35,8 +35,9 @@ MULTIPART_SALT = "attachments.multipart"
 MULTIPART_MAX_AGE = 24 * 3600
 # Картинки галереи идут обычным multipart и держат воркер — им хватит и десятки.
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
-# Медиа отдаётся с домена сайта: html/svg/js в браузере выполнились бы как код сайта.
-# Второй рубеж — Content-Disposition: attachment на /media/ в nginx.
+# То, что браузер исполнил бы как страницу, а человек — запустил бы у себя. Рубеж не
+# единственный и не главный: что бы сюда ни проскочило, тип ему назначает закрытый
+# список storage.CONTENT_TYPES, и всё, чего в нём нет, отдаётся потоком байтов.
 FORBIDDEN_EXTENSIONS = {"html", "htm", "xhtml", "svg", "js", "mjs", "exe", "msi", "bat", "cmd", "sh"}
 UPLOAD_SALT = "attachments.direct-upload"
 UPLOAD_MAX_AGE = 6 * 3600  # столько живёт токен между подписью и отправкой формы
@@ -149,15 +150,20 @@ def sign_upload(name):
     объект потом не собрать. Заголовок хранилище присылает всегда, а вот ЧИТАТЬ его
     скрипту браузер даёт только с этого разрешения. Забыть его — значит залить гигабайты
     и споткнуться на последнем шаге, поэтому клиент говорит об этом прямым текстом.
+
+    Тип входит в подпись: хранилище примет файл только с этим заголовком, и возвращаем
+    мы его затем, чтобы браузер прислал ровно его. Иначе тип объекта выбирал бы
+    загружающий — и с ним файл потом уезжал бы всем остальным (storage.CONTENT_TYPES).
     """
     key = new_key(name)
+    kind = content_type(key)
     storage = file_storage()
     url = storage.connection.meta.client.generate_presigned_url(
         "put_object",
-        Params={"Bucket": storage.bucket_name, "Key": _prefixed(storage, key)},
+        Params={"Bucket": storage.bucket_name, "Key": _prefixed(storage, key), "ContentType": kind},
         ExpiresIn=UPLOAD_MAX_AGE,
     )
-    return url, adopt_token(key, name)
+    return url, adopt_token(key, name), kind
 
 
 def new_key(name):
@@ -252,8 +258,9 @@ def begin_multipart(name):
     """Начать многочастную загрузку. Возвращает токен, в котором ключ и номер загрузки."""
     key = new_key(name)
     storage = file_storage()
+    # Тип у собранного объекта — тот, с которым загрузку начали; части его не несут.
     started = storage.connection.meta.client.create_multipart_upload(
-        Bucket=storage.bucket_name, Key=_prefixed(storage, key),
+        Bucket=storage.bucket_name, Key=_prefixed(storage, key), ContentType=content_type(key),
     )
     return signing.dumps({"key": key, "name": name, "id": started["UploadId"]}, salt=MULTIPART_SALT)
 

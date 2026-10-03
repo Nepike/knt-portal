@@ -33,9 +33,9 @@ def remote_storage():
     if not settings.R2_BUCKET:
         raise CommandError("R2 не настроен (пустой R2_BUCKET) — переносить некуда.")
 
-    from storages.backends.s3 import S3Storage
+    from attachments.r2 import R2Storage
 
-    return S3Storage(**{**settings.R2_OPTIONS, "file_overwrite": True})
+    return R2Storage(**{**settings.R2_OPTIONS, "file_overwrite": True})
 
 
 def already_there(storage):

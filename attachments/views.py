@@ -210,8 +210,8 @@ def upload_url(request):
     if size > MAX_DIRECT_SIZE:
         return JsonResponse({"error": f"«{name}» не влезет одним куском"}, status=400)
 
-    url, token = sign_upload(name)
-    return JsonResponse({"url": url, "token": token})
+    url, token, kind = sign_upload(name)
+    return JsonResponse({"url": url, "token": token, "type": kind})
 
 
 def _stale():

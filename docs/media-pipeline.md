@@ -554,8 +554,12 @@ journalctl -u bakery -f
   Уже залитое чинится отдельно, копией объекта на себя:
 
   ```bash
-  docker compose exec web python manage.py storage_retype --prefix lectures --apply
+  docker compose exec web python manage.py storage_retype --prefix lectures --apply --journal /tmp/retype.jsonl
   ```
+
+  Без `--prefix` команда обходит всё, кроме `lectures/`, — так чинятся файлы людей. Журнал
+  хранит прежние типы, по нему же они возвращаются (`--restore`); лежит он в контейнере,
+  поэтому сразу после починки его стоит забрать: `docker compose cp web:/tmp/retype.jsonl .`
 
   **И сразу за ней — кеш nginx.** Тип, в отличие от CORS, не вычисляется на каждый ответ,
   а лежит в кеше вместе с байтами. Ключ — `$uri$slice_range`, ни подписи, ни ETag в нём

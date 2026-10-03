@@ -51,7 +51,7 @@ services:
     ports:
       - "127.0.0.1:8001:8000"   # хост-порт 8001 (рядом с основным сайтом), nginx проксирует
     volumes:
-      - ./media:/app/media       # bind-mount: nginx отдаёт /media с хоста
+      - ./media:/app/media       # bind-mount: nginx отдаёт каталог с хоста (/__local/)
     restart: unless-stopped
 
   # Фоновые задачи: почта, телеграм — всё, чего запрос пользователя ждать не должен.

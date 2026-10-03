@@ -1,4 +1,3 @@
-import mimetypes
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -12,13 +11,18 @@ from django.core.files.storage import FileSystemStorage
 # а хранилище молча урезало бы имя и разошлось с тем, что записано в базе.
 KEY_MAX = 100
 
-# Тип содержимого по расширению — СВОЙ список, а не один mimetypes.
+# Тип содержимого по расширению — СВОЙ и ЗАКРЫТЫЙ список, без mimetypes.
 #
 # Тип попадает В САМ ОБЪЕКТ хранилища при заливке, и потом браузер получает именно его:
 # на попадании в кеш nginx заголовок хранилища побеждает наш. Значит объявлять тип
 # должны одинаково и сайт, и пекарня — а mimetypes на Windows читает реестр и на чужой
 # машине отвечает что попало. `.m4s` он не знает вовсе ни на одной системе, и куски
 # лекций уезжали в R2 никем: браузер получал `application/x-www-form-urlencoded`.
+#
+# Закрытый — потому что домен файлов раздаёт то, что загрузили люди. mimetypes знает
+# `.xml` как text/xml и `.svgz` как image/svg+xml, а в обоих браузер исполняет скрипты:
+# список запрещённых расширений такое пропускал. Сюда идёт только то, что браузер
+# показывает, но не исполняет; всё прочее он сохраняет на диск.
 CONTENT_TYPES = {
     ".m3u8": "application/vnd.apple.mpegurl",
     ".mp4": "video/mp4",
@@ -27,23 +31,31 @@ CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".apng": "image/apng",
     ".webp": "image/webp",
     ".gif": "image/gif",
+    ".avif": "image/avif",
+    ".heic": "image/heic",
     ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    # Без charset: кодировку конспекта десятилетней давности браузер угадает лучше нас.
+    ".txt": "text/plain",
+    ".c": "text/plain",
+    ".h": "text/plain",
+    ".cpp": "text/plain",
+    ".py": "text/plain",
 }
 
 
 def content_type(name):
-    """Чем объект объявляется браузеру.
+    """Чем объект объявляется браузеру: типом из CONTENT_TYPES или потоком байтов.
 
-    Неизвестное — потоком байтов: это честнее, чем угадать неверно. С octet-stream
-    браузер предложит сохранить файл, а с неверным типом попробует показать и покажет
-    мусор. Отдельно от `mimetypes` только то, что мы кладём сами (см. CONTENT_TYPES).
+    С octet-stream браузер предложит сохранить файл — это честнее, чем угадать неверно,
+    и безопаснее, чем угадать верно: страница или svg, открытые с домена файлов,
+    исполнились бы в нём как код.
     """
-    suffix = Path(name).suffix.lower()
-    if suffix in CONTENT_TYPES:
-        return CONTENT_TYPES[suffix]
-    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return CONTENT_TYPES.get(Path(name).suffix.lower(), "application/octet-stream")
 
 
 def random_key(folder, filename):
@@ -71,9 +83,9 @@ def media_storage():
     if not settings.R2_BUCKET:
         return FileSystemStorage()
 
-    from storages.backends.s3 import S3Storage
+    from .r2 import R2Storage
 
-    return S3Storage(**settings.R2_OPTIONS)
+    return R2Storage(**settings.R2_OPTIONS)
 
 
 def file_storage():

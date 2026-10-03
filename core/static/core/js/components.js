@@ -528,9 +528,9 @@ document.addEventListener("alpine:init", () => {
     // Маленький файл — одним PUT, большой — частями. Возвращает токен для формы.
     async send(item, total) {
       if (config.partsFrom && item.file.size >= config.partsFrom) return this.sendParts(item, total);
-      const { url, token } = await this.ask(config.signUrl, { name: item.file.name, size: item.file.size });
+      const { url, token, type } = await this.ask(config.signUrl, { name: item.file.name, size: item.file.size });
       if (this.cancelled) throw new Error("Загрузка отменена");
-      await this.putWhole(url, item, total);
+      await this.putWhole(url, item, total, type);
       return token;
     },
 
@@ -548,24 +548,28 @@ document.addEventListener("alpine:init", () => {
       return data;
     },
 
-    putWhole(url, item, total) {
+    putWhole(url, item, total, type) {
       return this.put(url, item.file, {
         onProgress: (loaded) => {
           item.percent = Math.round((loaded / item.file.size) * 100);
           this.percent = Math.round(((this.sent + loaded) / total) * 100);
         },
         broken: `Не удалось загрузить «${item.name}»`,
+        type,
       });
     },
 
     // Общая отдача куска в хранилище. Возвращает ETag — для части он и есть расписка,
     // без которой объект потом не собрать.
-    put(url, blob, { onProgress, broken, tag = false }) {
+    put(url, blob, { onProgress, broken, tag = false, type = "" }) {
       return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
         this.flying.add(request);
         const finish = (fn, value) => { this.flying.delete(request); fn(value); };
         request.open("PUT", url);
+        // Тип назначает сервер, и он входит в подпись ссылки: с любым другим хранилище
+        // откажет. Сам браузер подставил бы file.type — у каждой системы свой.
+        if (type) request.setRequestHeader("Content-Type", type);
         request.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
         request.onload = () => {
           if (request.status >= 300) {

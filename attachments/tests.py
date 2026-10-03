@@ -6,6 +6,8 @@ import ast
 import json
 import os
 import re
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import unquote
@@ -17,7 +19,9 @@ from django.core import signing
 from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
@@ -30,7 +34,8 @@ from users.models import User
 from . import hls
 from .media import MEDIA_CACHE, file_url, hls_key, hls_url, media_key, media_url, redirect_url
 from .models import File
-from .storage import content_type, drop_prefix, file_storage, random_key
+from .r2 import R2Storage
+from .storage import CONTENT_TYPES, content_type, drop_prefix, file_storage, media_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
     MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, UPLOAD_SALT,
@@ -53,6 +58,16 @@ def fake_storage():
     return storage
 
 
+def r2_storage(**options):
+    """Настоящее хранилище с выдуманными ключами: подпись и параметры записи считаются
+    на месте, до сети дело не доходит."""
+    return R2Storage(
+        bucket_name="knt-files", endpoint_url="https://account.r2.example", access_key="key",
+        secret_key="secret", region_name="auto", signature_version="s3v4", addressing_style="path",
+        **options,
+    )
+
+
 @override_settings(R2_BUCKET="knt-files")
 class PresignTests(TestCase):
     @classmethod
@@ -62,8 +77,8 @@ class PresignTests(TestCase):
     def setUp(self):
         self.client.force_login(self.user)
 
-    def ask(self, name="Зорич том 1.pdf", size=1024):
-        with mock.patch("attachments.uploads.file_storage", fake_storage):
+    def ask(self, name="Зорич том 1.pdf", size=1024, storage=None):
+        with mock.patch("attachments.uploads.file_storage", lambda: storage or fake_storage()):
             return self.client.post(
                 reverse("upload_url"), json.dumps({"name": name, "size": size}),
                 content_type="application/json",
@@ -78,6 +93,31 @@ class PresignTests(TestCase):
         self.assertEqual(payload["name"], "Зорич том 1.pdf")
         # Ключ выбирает сервер: свой прислать нельзя, а имя остаётся читаемым.
         self.assertRegex(payload["key"], r"^uploads/[0-9a-f]{32}/Зорич том 1\.pdf$")
+
+    def test_the_type_is_ours_and_the_browser_is_told_which(self):
+        """Тип объекта выбирает сервер и отдаёт браузеру: тот обязан прислать ровно его."""
+        for name, kind in (("слайды.pptx", "application/octet-stream"), ("Зорич.pdf", "application/pdf")):
+            with self.subTest(name=name):
+                storage = fake_storage()
+                answer = self.ask(name=name, storage=storage).json()
+
+                signed = storage.connection.meta.client.generate_presigned_url.call_args.kwargs["Params"]
+                self.assertEqual(signed["ContentType"], kind)
+                self.assertEqual(answer["type"], kind)
+
+    def test_the_signature_covers_the_type(self):
+        """Настоящая подпись, без сети: заголовок Content-Type должен в неё входить —
+        только тогда хранилище откажет браузеру, приславшему другой тип."""
+        answer = self.ask(name="страница.xml", storage=r2_storage()).json()
+
+        self.assertIn("X-Amz-SignedHeaders=content-type%3Bhost", answer["url"])
+
+    def test_the_upload_script_sends_the_type_it_was_given(self):
+        """Вторая половина договора живёт в скрипте. Без этой строки браузер пошлёт свой
+        file.type, и хранилище откажет каждой загрузке, где он не совпал с подписанным."""
+        script = (settings.BASE_DIR / "core/static/core/js/components.js").read_text(encoding="utf-8")
+
+        self.assertIn('if (type) request.setRequestHeader("Content-Type", type);', script)
 
     def test_dangerous_and_huge_are_refused(self):
         self.assertEqual(self.ask(name="страница.html").status_code, 400)
@@ -427,12 +467,61 @@ class ContentTypeTests(SimpleTestCase):
         self.assertEqual(content_type("master.m3u8"), "application/vnd.apple.mpegurl")
         self.assertEqual(content_type("0/init_0.mp4"), "video/mp4")
 
-    def test_everything_else_falls_back_to_the_system_list(self):
-        self.assertEqual(content_type("Конспект.pdf"), "application/pdf")
+    def test_what_people_upload_is_shown_from_our_own_list(self):
+        shown = {
+            "Конспект.pdf": "application/pdf", "Фото.JPG": "image/jpeg", "семинар.mp3": "audio/mpeg",
+            "запись.m4a": "audio/mp4", "main.c": "text/plain", "решение.cpp": "text/plain",
+        }
+        for name, kind in shown.items():
+            self.assertEqual(content_type(name), kind, name)
+
+    def test_what_a_browser_would_run_goes_out_as_bytes(self):
+        """Системный список знает `.xml` как text/xml, а `.svgz` как image/svg+xml — и то
+        и другое браузер исполняет. Запрещённые расширения тут же: запрет стоит на входе,
+        а тип отвечает за то, что его всё-таки миновало."""
+        for name in ("страница.xml", "схема.svg", "схема.svgz", "страница.html", "страница.xhtml",
+                     "код.js", "слайды.pptx", "архив.tar.gz"):
+            self.assertEqual(content_type(name), "application/octet-stream", name)
+
+    def test_the_list_itself_holds_nothing_a_browser_would_run(self):
+        """Сторож на будущее: список будут дополнять, а строка с svg в нём выглядит
+        безобидной картинкой."""
+        for suffix, kind in CONTENT_TYPES.items():
+            self.assertNotRegex(kind, r"html|xml|svg|script", suffix)
 
     def test_the_unknown_is_a_stream_of_bytes(self):
         """Честнее, чем угадать неверно: браузер предложит сохранить, а не покажет мусор."""
         self.assertEqual(content_type("archive.чтотото"), "application/octet-stream")
+
+
+class R2StorageTests(SimpleTestCase):
+    """Что уезжает в бакет вместе с байтами при загрузке ЧЕРЕЗ приложение."""
+
+    def sent(self, name, upload):
+        storage = r2_storage(file_overwrite=True, object_parameters={"CacheControl": "public"})
+        storage._bucket = mock.MagicMock()  # дальше него — уже сеть
+        storage.save(name, upload)
+        return storage._bucket.Object.return_value.upload_fileobj.call_args.kwargs["ExtraArgs"]
+
+    def test_the_type_comes_from_the_name_and_not_from_the_browser(self):
+        """Заголовок части формы пишет браузер загрузившего, то есть он сам. Попади
+        этот тип в объект — с ним файл и уехал бы всем остальным."""
+        upload = SimpleUploadedFile("страница.xml", b"<x/>", content_type="text/html")
+
+        params = self.sent("books/abc/страница.xml", upload)
+
+        self.assertEqual(params["ContentType"], "application/octet-stream")
+        self.assertEqual(params["CacheControl"], "public")  # остальные параметры на месте
+
+    def test_no_encoding_is_guessed_from_the_name(self):
+        """`.svgz` для системного списка — это svg в gzip: браузер распаковал бы его сам."""
+        params = self.sent("books/abc/схема.svgz", ContentFile(b"x"))
+
+        self.assertNotIn("ContentEncoding", params)
+
+    @override_settings(R2_BUCKET="knt-files")
+    def test_this_is_the_storage_the_site_runs_on(self):
+        self.assertIsInstance(media_storage(), R2Storage)
 
 
 # Встроенные переменные nginx, которые раздача берёт как есть. Всё остальное обязано
@@ -473,6 +562,55 @@ class NginxConfigTests(SimpleTestCase):
             "remote_addr", "proxy_add_x_forwarded_for", "request_uri", "http_upgrade",
         }
         self.assertEqual(self.used(self.site) - known, set())
+
+    def code(self, text):
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+    def blocks(self, text, opening):
+        """Блоки конфига по слову в начале: {то, что между словом и скобкой: тело}."""
+        found, code = {}, self.code(text)
+        for match in re.finditer(opening + r"\s*([^{;]*?)\s*\{", code, re.M):
+            depth, at = 1, match.end()
+            while depth:
+                depth += {"{": 1, "}": -1}.get(code[at], 0)
+                at += 1
+            found.setdefault(match.group(1), code[match.end():at - 1])
+        return found
+
+    def files_host(self):
+        return next(
+            body for body in re.split(r"^server\s*\{", self.code(self.site), flags=re.M)
+            if re.search(r"listen 443.*server_name\s+files\.inbicst\.ru;", body, re.S)
+        )
+
+    def test_the_files_host_lets_through_nothing_but_the_three_file_addresses(self):
+        """Со сквозным `location /` на домене файлов отвечал весь сайт: вход, админка,
+        сброс пароля. А это origin, с которого раздаётся загруженное людьми."""
+        locations = self.blocks(self.files_host(), r"^\s*location")
+        proxied = [header for header, body in locations.items() if "proxy_pass" in body]
+
+        self.assertEqual(len(proxied), 1)
+        self.assertIn("return 404;", locations["/"])
+
+        allowed = re.compile(proxied[0].removeprefix("~").strip())
+        for address in (
+            reverse("file_download", args=["подпись", "Зорич.pdf"]),
+            reverse("media_image", args=["подпись"]),
+            reverse("hls_piece", args=["подпись", "master.m3u8"]),
+        ):
+            self.assertRegex(address, allowed)
+        for address in (reverse("login"), reverse("admin:index"), reverse("upload_url"), "/"):
+            self.assertNotRegex(address, allowed)
+
+    def test_both_ways_out_forbid_guessing_the_type(self):
+        """Файл, отданный потоком байтов, браузер иначе мог бы распознать как страницу."""
+        locations = self.blocks(self.files, r"^location")
+
+        for way in ("/__r2/", "/__local/"):
+            self.assertIn("add_header X-Content-Type-Options nosniff always;", locations[way], way)
+
+    def test_the_media_folder_is_not_handed_out_past_the_signature(self):
+        self.assertNotIn("/srv/knt/media", self.code(self.site))
 
     def test_the_cors_map_says_the_same_as_the_settings(self):
         """Список источников в nginx — вынужденная копия CSRF_TRUSTED_ORIGINS: настроек
@@ -524,6 +662,14 @@ class MultipartTests(TestCase):
 
         self.assertEqual(signing.loads(answer["token"], salt=MULTIPART_SALT)["id"], "u-1")
         self.assertEqual(answer["done"], {})
+
+    def test_the_object_gets_its_type_when_the_upload_begins(self):
+        """Части типа не несут: каким загрузку начали, таким объект и соберётся."""
+        self.call("upload_start", name="запись.mp4", size=1024 ** 3)
+        self.call("upload_start", name="запись.mkv", size=1024 ** 3)
+
+        kinds = [call.kwargs["ContentType"] for call in self.api.create_multipart_upload.call_args_list]
+        self.assertEqual(kinds, ["video/mp4", "application/octet-stream"])
 
     def test_parts_are_sized_to_fit_the_ten_thousand_limit(self):
         """У S3 не больше 10 000 частей на объект. На обычном файле берём 16 МБ,
@@ -695,6 +841,126 @@ class DropPrefixBatchTests(SimpleTestCase):
         self.assertEqual(sizes, [1000, 1000, 500])
         # Префикс хранилища listdir не отдаёт, а в бакете он часть ключа.
         self.assertEqual(calls[0].kwargs["Delete"]["Objects"][0]["Key"], "dev/lectures/abc/0/seg00000.m4s")
+
+
+IMMUTABLE = "public, max-age=31536000, immutable"
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+class RetypeTests(SimpleTestCase):
+    """Починка типов у уже лежащего в бакете. Бакет — словарь {ключ: метаданные}."""
+
+    def setUp(self):
+        self.bucket = {
+            "books/a/Зорич.pdf": {"ContentType": "application/pdf", "CacheControl": IMMUTABLE},
+            "books/b/слайды.pptx": {"ContentType": PPTX, "CacheControl": IMMUTABLE},
+            # Тип уже верный, не так только кодировка: её storages дописывал по хвосту имени.
+            "books/c/данные.gz": {"ContentType": "application/octet-stream", "ContentEncoding": "gzip"},
+            "uploads/d/страница.xml": {"ContentType": "text/html"},
+            "lectures/e/0/seg1.m4s": {"ContentType": "application/x-www-form-urlencoded"},
+        }
+        self.before = {key: dict(meta) for key, meta in self.bucket.items()}
+
+        storage = fake_storage()
+        storage.listdir.return_value = (["books", "lectures", "uploads"], [])
+        self.api = storage.connection.meta.client
+        self.api.list_objects_v2.side_effect = lambda Bucket, Prefix: {
+            "Contents": [{"Key": key} for key in self.bucket if key.startswith(Prefix)],
+        }
+        self.api.head_object.side_effect = lambda Bucket, Key: dict(self.bucket[Key])
+        self.api.copy_object.side_effect = self.copy
+        for where in ("attachments.uploads", "attachments.management.commands.storage_retype"):
+            patch = mock.patch(f"{where}.file_storage", return_value=storage)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.journal = str(Path(folder.name) / "было.jsonl")
+
+    def copy(self, Bucket, Key, CopySource, MetadataDirective, Metadata, **meta):
+        """Как у настоящего хранилища: REPLACE оставляет объекту только присланное."""
+        self.assertEqual((CopySource["Key"], MetadataDirective), (Key, "REPLACE"))
+        self.bucket[Key] = meta
+
+    def retype(self, *args):
+        call_command("storage_retype", *args, stdout=mock.MagicMock())
+
+    def test_a_fitting_only_looks(self):
+        self.retype()
+
+        self.assertEqual(self.bucket, self.before)
+
+    def test_what_people_uploaded_gets_the_type_of_our_list(self):
+        self.retype("--apply", "--journal", self.journal)
+
+        self.assertEqual(self.bucket["books/b/слайды.pptx"]["ContentType"], "application/octet-stream")
+        self.assertEqual(self.bucket["uploads/d/страница.xml"]["ContentType"], "application/octet-stream")
+        # Верное не трогаем: копия на себя — это запрос, а их тут тысячи.
+        self.assertEqual(self.api.copy_object.call_count, 3)
+
+    def test_lecture_sets_are_left_alone_unless_asked_for(self):
+        """Их миллионы кусков: один листинг этой папки длится дольше всей починки."""
+        self.retype("--apply", "--journal", self.journal)
+
+        listed = [call.kwargs["Prefix"] for call in self.api.list_objects_v2.call_args_list]
+        self.assertEqual(sorted(listed), ["books/", "uploads/"])
+        self.assertEqual(self.bucket["lectures/e/0/seg1.m4s"], self.before["lectures/e/0/seg1.m4s"])
+
+    def test_an_explicit_prefix_reaches_the_lecture_sets(self):
+        self.retype("--prefix", "lectures", "--apply", "--journal", self.journal)
+
+        self.assertEqual(self.bucket["lectures/e/0/seg1.m4s"]["ContentType"], "video/iso.segment")
+        self.assertEqual(self.api.copy_object.call_count, 1)
+
+    def test_the_rest_of_the_metadata_survives_the_copy(self):
+        """REPLACE стирает всё разом: без переноса объект терял бы вечный кеш."""
+        self.retype("--apply", "--journal", self.journal)
+
+        self.assertEqual(self.bucket["books/b/слайды.pptx"]["CacheControl"], IMMUTABLE)
+
+    def test_an_encoding_guessed_from_the_name_goes_away(self):
+        """С `Content-Encoding: gzip` браузер молча распаковывает архив при скачивании."""
+        self.retype("--apply", "--journal", self.journal)
+
+        self.assertEqual(self.bucket["books/c/данные.gz"], {"ContentType": "application/octet-stream"})
+
+    def test_nothing_is_changed_without_a_journal_to_go_back_by(self):
+        with self.assertRaises(CommandError):
+            self.retype("--apply")
+
+        self.assertEqual(self.bucket, self.before)
+
+    def test_the_journal_puts_everything_back(self):
+        self.retype("--apply", "--journal", self.journal)
+        self.assertNotEqual(self.bucket, self.before)
+
+        self.retype("--restore", self.journal)
+        self.assertNotEqual(self.bucket, self.before)  # без --apply и возврат — только примерка
+
+        self.retype("--restore", self.journal, "--apply")
+        self.assertEqual(self.bucket, self.before)
+
+    def test_a_journal_is_never_written_over(self):
+        """Оборвавшийся запуск повторяют, и второй записал бы поверх только недочиненное —
+        прежние типы уже исправленного пропали бы."""
+        self.retype("--apply", "--journal", self.journal)
+        kept = Path(self.journal).read_text(encoding="utf-8")
+        self.bucket["uploads/d/страница.xml"]["ContentType"] = "text/html"
+
+        with self.assertRaises(CommandError):
+            self.retype("--apply", "--journal", self.journal)
+
+        self.assertEqual(Path(self.journal).read_text(encoding="utf-8"), kept)
+        self.assertEqual(self.bucket["uploads/d/страница.xml"]["ContentType"], "text/html")
+
+    def test_a_raw_recording_too_big_to_copy_is_only_reported(self):
+        self.bucket["uploads/f/запись.mkv"] = {"ContentType": "video/x-matroska", "ContentLength": 5 * 1024 ** 3}
+
+        self.retype("--apply", "--journal", self.journal)
+
+        self.assertEqual(self.bucket["uploads/f/запись.mkv"]["ContentType"], "video/x-matroska")
+        self.assertNotIn("запись.mkv", Path(self.journal).read_text(encoding="utf-8"))
 
 
 class AdoptUploadTests(TestCase):
