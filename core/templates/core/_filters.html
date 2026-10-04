@@ -1,3 +1,4 @@
+{% load text_extras %}
 {% comment %}
   Блок подбора: семестр, предмет, преподаватель. Один на материалы и лекторий — поля
   и поведение у них одинаковые (core/filters.py).
@@ -5,9 +6,25 @@
   Возвращается вместе со списком (oob-заменой): выбрали семестр — в предметах
   и преподавателях остаются только те, у кого в этом семестре что-то есть.
   Порядок — как ищут: сначала семестр, потом предмет, потом преподаватель.
+
+  pills — вид для раздела со строкой поиска (лекторий): фильтры пилюлями под ней,
+  рядом сброс и число найденного. Они здесь, а не в шапке, потому что блок перерисовывается
+  с каждым ответом — и число, и сброс всегда про то, что сейчас на экране.
 {% endcomment %}
+{% if pills %}
+<div id="filters" class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% include "core/_filter_pill.html" with field=form.term %}
+  {% include "core/_filter_pill.html" with field=form.subject %}
+  {% include "core/_filter_pill.html" with field=form.teacher %}
+  <div class="flex items-center gap-3 text-sm sm:ml-auto sm:pl-2">
+    {% if filters %}<a href="{{ request.path }}" class="text-accent hover:underline">Сбросить</a>{% endif %}
+    <span class="ml-auto text-slate-400 whitespace-nowrap">{{ page.paginator.count }} {{ page.paginator.count|plural:counted }}</span>
+  </div>
+</div>
+{% else %}
 <div id="filters" class="grid gap-3 grid-cols-1 sm:grid-cols-3"{% if oob %} hx-swap-oob="true"{% endif %}>
   {% include "core/inputs.html" with field=form.term hide_optional=True %}
   {% include "core/inputs.html" with field=form.subject hide_optional=True %}
   {% include "core/inputs.html" with field=form.teacher hide_optional=True %}
 </div>
+{% endif %}

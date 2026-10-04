@@ -7,6 +7,7 @@ from django.contrib.auth.models import (
     PermissionsMixin,
 )
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 from attachments.storage import media_storage, random_key
@@ -39,6 +40,11 @@ class UserManager(BaseUserManager):
         extra.setdefault("is_superuser", True)
         extra.setdefault("must_change_password", False)
         return self.create_user(email, name, surname, patronymic, password, **extra)
+
+    def get_by_natural_key(self, email):
+        """Так человека ищет вход. Без учёта регистра: буквы в адресе никто не помнит,
+        а телефон первую сам делает заглавной."""
+        return self.get(email__iexact=email)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
@@ -80,6 +86,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name = "пользователь"
         verbose_name_plural = "пользователи"
         ordering = ["id"]
+        constraints = [
+            # unique у поля различает регистр, а save() обходят update() и bulk_create.
+            models.UniqueConstraint(
+                Lower("email"), name="users_user_email_ci",
+                violation_error_message="Человек с такой почтой уже зарегистрирован",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Адрес — логин: храним строчными, каким бы путём человека ни завели.
+        self.email = self.email.lower()
+        super().save(*args, **kwargs)
 
     @property
     def full_name(self):

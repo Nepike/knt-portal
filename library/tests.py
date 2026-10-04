@@ -62,6 +62,18 @@ class BookListTests(TestCase):
         self.assertContains(response, "Черновик")
         self.assertContains(response, "на проверке")
 
+    def test_the_form_carries_the_search_both_filters_and_the_sorting(self):
+        """Вид у подбора тот же, что в лектории: строка поиска, под ней фильтры пилюлями.
+        Каждое поле в разметке одно — два набора с одним именем ушли бы в запрос дважды."""
+        page = self.get(q="зорич", subject=self.matan.pk).content.decode()
+
+        self.assertEqual(page.count('name="q" value="зорич"'), 1)
+        for name in ("subject", "term", "sort"):
+            self.assertEqual(page.count(f'type="hidden" name="{name}"'), 1, name)
+        self.assertEqual(page.count("sm:rounded-full"), 2)
+        # Выбранное приезжает в поле: иначе пилюля после перезагрузки стояла бы пустой.
+        self.assertEqual(page.count(f"value: ([&quot;{self.matan.pk}&quot;][0] ?? null)"), 1)
+
     def test_search_matches_title_and_author(self):
         self.assertContains(self.get(q="математич"), "Зорич")
         self.assertNotContains(self.get(q="математич"), "Иродов")

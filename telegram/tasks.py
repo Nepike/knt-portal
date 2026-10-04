@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 from base64 import b64decode
 
@@ -12,7 +13,37 @@ from .models import TelegramChat
 logger = logging.getLogger(__name__)
 
 
-CAPTION_LIMIT = 1024  # столько телеграм отводит под подпись к фото; у сообщения — 4096
+CAPTION_LIMIT = 1024  # столько телеграм отводит под подпись к фото
+MESSAGE_LIMIT = 4096  # а столько — под сообщение
+CUT = "\n… обрезано"
+
+
+def fit(text, limit=MESSAGE_LIMIT):
+    """Уложить сообщение в предел телеграма, обрезав с конца.
+
+    Длиннее предела он не принимает вовсе, и повторять такую ошибку бесполезно —
+    уведомление просто пропадало бы. А описание материала или курса длиной не ограничено.
+
+    Обрезать мало: режим HTML не прощает ни оборванного тега, ни незакрытого. Поэтому
+    режем по границе строки (тег на две строки не делится), а когда до неё далеко —
+    посреди строки, но не посреди тега или &-замены; начатое выше обреза закрываем сами.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - len(CUT) - 32]  # запас на закрывающие теги
+    line = cut.rfind("\n")
+    if line > len(cut) - 400:
+        cut = cut[:line]
+    else:
+        cut = re.sub(r"(<[^>]*|&[#\w]*)$", "", cut)
+
+    opened = []
+    for closing, tag in re.findall(r"<(/?)(\w+)[^>]*>", cut):
+        if not closing:
+            opened.append(tag)
+        elif opened and opened[-1] == tag:
+            opened.pop()
+    return cut + "".join(f"</{tag}>" for tag in reversed(opened)) + CUT
 
 
 def to_console(chat_name, text):
@@ -49,7 +80,7 @@ def send_message(chat_name, text, parse_mode="HTML"):
     bot, chat = _target(chat_name)
     if bot:
         bot.send_message(
-            chat_id=chat.chat_id, message_thread_id=chat.topic_id, text=text, parse_mode=parse_mode,
+            chat_id=chat.chat_id, message_thread_id=chat.topic_id, text=fit(text), parse_mode=parse_mode,
         )
 
 
@@ -70,5 +101,5 @@ def send_photo(chat_name, text, image, name="image.png", parse_mode="HTML"):
     where = {"chat_id": chat.chat_id, "message_thread_id": chat.topic_id}
     caption = text if len(text) <= CAPTION_LIMIT else None
     if caption is None:
-        bot.send_message(**where, text=text, parse_mode=parse_mode)
+        bot.send_message(**where, text=fit(text), parse_mode=parse_mode)
     bot.send_photo(**where, photo=b64decode(image), caption=caption, parse_mode=parse_mode)

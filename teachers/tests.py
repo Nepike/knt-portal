@@ -1,5 +1,6 @@
 from io import BytesIO
 
+from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -95,3 +96,95 @@ class ReviewImageTests(TestCase):
         self.assertNotEqual(review.image.name, old)
         self.assertFalse(storage.exists(old))
         self.assertTrue(storage.exists(review.image.name))
+
+
+class ReviewVoteTests(TestCase):
+    """Голосуют за то, что можно прочесть. У отзыва из одних оценок кнопок голоса нет,
+    и ручка отвечает тем же: лайки оплачиваются."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = make_user("a@t.local")
+        cls.voter = make_user("v@t.local")
+        cls.teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+
+    def setUp(self):
+        self.client.force_login(self.voter)
+
+    def review(self, **fields):
+        return Review.objects.create(teacher=self.teacher, author=self.author, **fields)
+
+    def vote(self, review, name="review_like"):
+        return self.client.post(reverse(name, args=[review.pk])).status_code
+
+    def test_a_review_with_text_takes_a_vote(self):
+        review = self.review(text="Объясняет понятно")
+
+        self.assertEqual(self.vote(review), 200)
+        self.assertEqual(list(review.liked_users.all()), [self.voter])
+
+    def test_a_picture_alone_is_enough_to_vote_for(self):
+        review = self.review(image=make_image())
+
+        self.assertEqual(self.vote(review, "review_dislike"), 200)
+        self.assertEqual(list(review.disliked_users.all()), [self.voter])
+
+    def test_scores_alone_take_no_vote(self):
+        review = self.review(score_knowledge=5)
+
+        self.assertEqual((self.vote(review), self.vote(review, "review_dislike")), (403, 403))
+        self.assertFalse(review.liked_users.exists() or review.disliked_users.exists())
+
+
+class ReviewRightsTests(TestCase):
+    """Чужой отзыв правит и удаляет тот, кому дано право, — а не всякий вошедший."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = make_user("a@t.local")
+        cls.stranger = make_user("s@t.local")
+        cls.teacher = Teacher.objects.create(name="Пётр", surname="Петров")
+
+    def setUp(self):
+        self.review = Review.objects.create(teacher=self.teacher, author=self.author, text="Было")
+
+    def allowed(self, email, codename):
+        user = make_user(email)
+        user.user_permissions.add(Permission.objects.get(content_type__app_label="teachers", codename=codename))
+        return user
+
+    def edit(self, who):
+        self.client.force_login(who)
+        answer = self.client.post(reverse("review_edit", args=[self.review.pk]), {"text": "Стало"})
+        self.review.refresh_from_db()
+        return answer.status_code, self.review.text
+
+    def delete(self, who):
+        self.client.force_login(who)
+        answer = self.client.post(reverse("review_delete", args=[self.review.pk]))
+        return answer.status_code, Review.objects.filter(pk=self.review.pk).exists()
+
+    def test_a_stranger_can_neither_edit_nor_delete(self):
+        self.assertEqual(self.edit(self.stranger), (403, "Было"))
+        self.assertEqual(self.delete(self.stranger), (403, True))
+
+    def test_a_stranger_does_not_get_the_edit_form_either(self):
+        self.client.force_login(self.stranger)
+
+        self.assertEqual(self.client.get(reverse("review_edit", args=[self.review.pk])).status_code, 403)
+
+    def test_the_author_edits_and_deletes_his_own(self):
+        self.assertEqual(self.edit(self.author), (200, "Стало"))
+        self.assertEqual(self.delete(self.author), (200, False))
+
+    def test_the_right_to_change_lets_one_edit_but_not_delete(self):
+        editor = self.allowed("e@t.local", "change_review")
+
+        self.assertEqual(self.edit(editor), (200, "Стало"))
+        self.assertEqual(self.delete(editor), (403, True))
+
+    def test_the_right_to_delete_lets_one_delete_but_not_edit(self):
+        remover = self.allowed("d@t.local", "delete_review")
+
+        self.assertEqual(self.edit(remover), (403, "Было"))
+        self.assertEqual(self.delete(remover), (200, False))

@@ -1,0 +1,38 @@
+{% load form_extras %}
+{% comment %}
+  Фильтр списка кнопкой-пилюлей. Ждёт field.
+
+  На широком экране — пилюля: пустая показывает название фильтра, выбранная заливается
+  цветом и показывает значение с крестиком. На телефоне — обычное поле во всю ширину
+  с плавающей подписью: пилюли в столбик на узком экране выглядят обрубками.
+
+  Компонент тот же, что у селектов форм (select в components.js), и выпадающий список
+  тот же — своя здесь только кнопка. Ширина с запасом: в неё должны влезать и названия
+  предметов, и строка поиска внутри списка.
+{% endcomment %}
+{% with search=field.field.widget.search d=field|select_json %}
+<div class="relative sm:flex-1 sm:min-w-52 sm:max-w-64"
+     @keydown.escape="close()" @click.outside="close()" @focusin="focused = true" @focusout="onFocusOut($event)"
+     @keydown.arrow-down.prevent="onArrow(1)" @keydown.arrow-up.prevent="onArrow(-1)" @keydown.enter.prevent="onEnter()"
+     x-data="select({ search: {{ search|yesno:'true,false' }}, options: {{ d.options }}, value: ({{ d.selected }}[0] ?? null) })">
+  <input type="hidden" name="{{ field.html_name }}" :value="selectedValue ?? ''">
+
+  <div tabindex="0" @click="toggle()" @keydown.space.prevent="toggle()"
+       class="min-h-12 sm:min-h-10 w-full flex items-center gap-1.5 rounded-btn sm:rounded-full px-2 sm:px-3 py-1.5 cursor-pointer outline-none"
+       :class="active ? 'border-2 border-accent bg-white dark:bg-slate-900'
+             : (selectedValue ? 'border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 sm:border-transparent dark:sm:border-transparent sm:bg-accent/10 dark:sm:bg-accent/10 sm:text-accent sm:font-medium'
+                              : 'border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900')">
+    {# На широком экране название фильтра стоит в самой пилюле; на телефоне его роль играет плавающая подпись ниже. #}
+    <span class="hidden sm:block flex-1 truncate text-sm px-1 text-slate-500 dark:text-slate-400" x-show="!selectedValue">{{ field.label }}</span>
+    <span class="flex-1 truncate text-sm px-1" x-show="selectedValue" x-cloak x-text="selectedLabel"></span>
+    <button type="button" x-show="selectedValue" x-cloak @click.stop="clear()" aria-label="Очистить"
+            class="ml-auto text-slate-400 hover:text-slate-600 sm:text-accent sm:hover:text-accent/70"><i class="fa-solid fa-xmark"></i></button>
+    {# У выбранной пилюли вместо стрелки крестик; значку FontAwesome нужен !hidden, обычный hidden его не прячет. #}
+    <i class="fa-solid fa-chevron-down text-slate-400 text-sm ml-auto transition"
+       :class="{ 'rotate-180': open, 'sm:!hidden': selectedValue }"></i>
+  </div>
+  <span class="field-label sm:hidden" :class="active ? 'fl-accent' : (selectedValue ? 'fl-up' : 'fl-down')">{{ field.label }}</span>
+
+  {% include "core/_select_menu.html" %}
+</div>
+{% endwith %}

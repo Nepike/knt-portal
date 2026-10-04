@@ -629,6 +629,9 @@ class RecountCommandTests(TestCase):
         self.assertEqual(BalanceLog.objects.count(), 0)
         self.assertIn("Пробный прогон", output)
 
+    def test_people_are_named_surname_first_as_on_the_site(self):
+        self.assertIn("Иванов Иван", self.run_it())
+
     def test_apply_credits_everyone(self):
         self.run_it("--apply")
 

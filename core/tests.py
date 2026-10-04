@@ -1,8 +1,10 @@
 import copy
-import json
+import re
 import tempfile
-from io import BytesIO
-from pathlib import Path
+from io import BytesIO, StringIO
+from smtplib import SMTPServerDisconnected
+
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.conf import settings
@@ -11,10 +13,12 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import ResolverMatch, get_resolver, reverse
 
+import yaml
 from PIL import Image as PilImage
 
 from knt.celery import app as celery_app
@@ -25,12 +29,11 @@ from users.models import User
 from chats.models import Chat
 
 from . import nav
-from .legacy_markup import to_markdown
-from .management.commands.import_legacy_files import extension, filename
 from .search import by_name
 from .throttle import client_ip, throttled
 from .markup import render
-from .tasks import ping
+from .mail import pack
+from .tasks import MAIL_RETRIES, ping, send_email
 
 
 class CeleryTests(SimpleTestCase):
@@ -89,65 +92,222 @@ class QueuedMailTests(TestCase):
         self.assertEqual(mail.outbox[0].to, ["student@t.local"])
 
 
-class LegacyMarkupTests(SimpleTestCase):
-    """Тексты старого сайта (Quill Delta и старый HTML) → markdown."""
+class MailFailureTests(TestCase):
+    """Письмо, которое так и не ушло, не пропадает молча: 4 октября 2026 ящик сайта
+    исчез из Workspace, и узнали об этом от людей, оставшихся без сброса пароля."""
 
-    def delta(self, *ops):
-        return to_markdown(json.dumps({"ops": list(ops)}))
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        # Повторы на месте идут только без propagates: с ним наружу летит сам Retry.
+        celery_app.conf.task_eager_propagates = False
+        self.addCleanup(setattr, celery_app.conf, "task_eager_propagates", True)
 
-    def test_empty_delta_gives_empty_text(self):
-        # Так выглядит 1134 материала из 1523: редактор оставил один перенос строки.
-        self.assertEqual(self.delta({"insert": "\n"}), "")
-        self.assertEqual(to_markdown("<p><br></p>"), "")
-        self.assertEqual(to_markdown(""), "")
-
-    def test_block_attributes_come_from_the_newline(self):
-        self.assertEqual(
-            self.delta({"insert": "Заголовок"}, {"attributes": {"header": 3}, "insert": "\n"}),
-            "### Заголовок",
+    def send(self, outcome, to="student@t.local"):
+        """Письмо, доставка которого кончается outcome: сколько было попыток, что ушло боту
+        и чем кончилась задача."""
+        letter = EmailMultiAlternatives("Сброс пароля", "Ссылка: https://knt.local/reset/abc/", to=[to])
+        with patch("core.tasks.deliver", side_effect=outcome) as deliver, \
+             patch("telegram.notify.send_message") as bot:
+            result = send_email.apply(args=[pack(letter)])
+        return SimpleNamespace(
+            attempts=deliver.call_count, sent=[call.args for call in bot.delay.call_args_list], error=result.result,
         )
-        self.assertEqual(
-            self.delta({"insert": "пункт"}, {"attributes": {"list": "ordered"}, "insert": "\n"}),
-            "1. пункт",
+
+    def test_a_letter_that_never_left_is_reported_once_the_attempts_are_over(self):
+        with self.assertLogs("core.mail", "ERROR"):
+            letter = self.send(OSError("сеть лежит"))
+
+        self.assertEqual(letter.attempts, MAIL_RETRIES + 1)
+        self.assertEqual(len(letter.sent), 1)
+        chat, text = letter.sent[0]
+        self.assertEqual(chat, "support")
+        for part in ("Сброс пароля", "student@t.local", "сеть лежит"):
+            self.assertIn(part, text)
+
+    def test_the_body_stays_out_of_the_chat(self):
+        # В теле — ссылка, по которой задают пароль.
+        with self.assertLogs("core.mail", "ERROR"):
+            text = self.send(OSError("сеть лежит")).sent[0][1]
+
+        self.assertNotIn("reset/abc", text)
+
+    def test_a_letter_that_left_on_a_retry_is_not_reported(self):
+        with self.assertNoLogs("core.mail", "ERROR"):
+            letter = self.send([OSError("моргнуло"), None])
+
+        self.assertEqual(letter.attempts, 2)
+        self.assertEqual(letter.sent, [])
+
+    def test_an_error_nobody_retries_is_reported_at_once(self):
+        with self.assertLogs("core.mail", "ERROR"):
+            letter = self.send(ValueError("письмо собрано криво"))
+
+        self.assertEqual(letter.attempts, 1)
+        self.assertEqual(len(letter.sent), 1)
+
+    def test_the_chat_hears_about_the_first_failure_of_the_hour_and_the_log_about_each(self):
+        # Почта ломается вся разом: ведомость курса дала бы сотню одинаковых сообщений.
+        with self.assertLogs("core.mail", "ERROR") as log:
+            first = self.send(OSError("сеть лежит"), to="one@t.local")
+            second = self.send(OSError("сеть лежит"), to="two@t.local")
+
+        self.assertEqual((len(first.sent), len(second.sent)), (1, 0))
+        self.assertIn("one@t.local", log.output[0])
+        self.assertIn("two@t.local", log.output[1])
+
+    def test_a_dropped_connection_comes_with_a_hint_about_the_password(self):
+        # Так у Gmail выглядит отказ во входе: настоящий ответ 535 smtplib теряет.
+        with self.assertLogs("core.mail", "ERROR"):
+            dropped = self.send(SMTPServerDisconnected("Connection unexpectedly closed")).sent[0][1]
+            cache.clear()
+            other = self.send(OSError("сеть лежит")).sent[0][1]
+
+        self.assertIn("отказ в логине или пароле", dropped)
+        self.assertNotIn("отказ в логине или пароле", other)
+
+    def test_a_broken_alert_does_not_hide_the_mail_failure(self):
+        letter = EmailMultiAlternatives("Сброс пароля", "Текст", to=["student@t.local"])
+        with patch("core.tasks.deliver", side_effect=OSError("сеть лежит")), \
+             patch("telegram.notify.send_message") as bot, \
+             self.assertLogs("core.mail", "ERROR") as log:
+            bot.delay.side_effect = RuntimeError("очередь сломана")
+            result = send_email.apply(args=[pack(letter)])
+
+        self.assertIsInstance(result.result, OSError)
+        self.assertIn("Не получилось сообщить", log.output[-1])
+
+
+class DeployTests(SimpleTestCase):
+    """Раскладка контейнеров: то, что ломается молча и видно только на выкладке."""
+
+    APP = ("web", "worker", "beat", "bot")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        text = (settings.BASE_DIR / "docker-compose.yml").read_text(encoding="utf-8")
+        cls.services = yaml.safe_load(text)["services"]
+
+    def test_nothing_of_ours_starts_before_the_migrations_are_done(self):
+        """Иначе новый код встречается со старой схемой: задача, читающая только что
+        добавленную колонку, в это окно падает."""
+        self.assertEqual(self.services["migrate"]["entrypoint"], ["python", "manage.py", "migrate", "--noinput"])
+        for name in self.APP:
+            with self.subTest(name):
+                self.assertEqual(
+                    self.services[name]["depends_on"]["migrate"], {"condition": "service_completed_successfully"},
+                )
+
+    def test_a_failed_migration_is_not_run_in_a_loop(self):
+        self.assertEqual(self.services["migrate"]["restart"], "no")
+
+    def test_the_site_does_not_migrate_on_its_own_any_more(self):
+        # Двое на одной схеме разом только подрались бы.
+        entry = (settings.BASE_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn("manage.py migrate", entry)
+        self.assertIn("manage.py collectstatic", entry)
+
+    def test_the_image_is_built_once_and_shared(self):
+        self.assertEqual([name for name, one in self.services.items() if "build" in one], ["migrate"])
+        for name in self.APP:
+            with self.subTest(name):
+                self.assertEqual(self.services[name]["image"], self.services["migrate"]["image"])
+                # Образ свой, в реестре его нет: без этого compose пошёл бы его скачивать.
+                self.assertEqual(self.services[name]["pull_policy"], "never")
+
+    def test_redis_has_a_ceiling_and_keeps_the_task_queue_out_of_eviction(self):
+        """У очереди Celery срока жизни нет — вытеснять можно только то, у чего он есть."""
+        command = self.services["redis"]["command"]
+
+        self.assertEqual(command[command.index("--maxmemory") + 1], "256mb")
+        self.assertEqual(command[command.index("--maxmemory-policy") + 1], "volatile-lru")
+
+    def test_the_deploy_action_is_pinned_by_commit(self):
+        """Тег автор действия может перевесить на другой код, а шаг держит ключ от сервера."""
+        workflow = (settings.BASE_DIR / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+        used = re.findall(r"^\s*uses:\s*(\S+)", workflow, re.M)
+
+        self.assertTrue(used)
+        for action in used:
+            self.assertRegex(action, r"@[0-9a-f]{40}$")
+
+
+class DevCommandTests(TestCase):
+    """Сиды помечены «только для разработки», но на боевой базе запускались бы как любые:
+    `seed_chats` завела бы там переписку между настоящими людьми."""
+
+    SEEDS = ("seed_books", "seed_materials", "seed_chats")
+
+    def run_it(self, name):
+        # --wipe — самый дешёвый путь по команде: убирать в пустой базе нечего.
+        user = make_user(f"{name}@t.local")
+        extra = ["--user", user.email] if name == "seed_chats" else []
+        call_command(name, "--wipe", *extra, stdout=StringIO())
+
+    def test_outside_development_a_seed_refuses_to_run(self):
+        for name in self.SEEDS:
+            with self.subTest(name), self.assertRaisesMessage(CommandError, "только для разработки"):
+                self.run_it(name)
+
+    @override_settings(DEBUG=True)
+    def test_in_development_it_runs_as_before(self):
+        self.run_it("seed_books")
+        self.run_it("seed_materials")
+        # У переписки отказ свой — в пустой базе не из кого собрать собеседников; до него надо дойти.
+        with self.assertRaisesMessage(CommandError, "слишком мало людей"):
+            self.run_it("seed_chats")
+
+
+@override_settings(ALLOWED_HOSTS=["knt-mipt.ru", "files.inbicst.ru"])
+class MarkupImageTests(SimpleTestCase):
+    """Картинка в тексте грузится у читателя сама — с чужого адреса она сообщает
+    своему хозяину, кто и когда открыл материал."""
+
+    def test_a_foreign_picture_becomes_a_link_to_it(self):
+        html = render("до ![схема](https://evil.example/pixel.png) после")
+
+        self.assertNotIn("<img", html)
+        self.assertIn('<a href="https://evil.example/pixel.png"', html)
+        self.assertIn(">схема</a> после", html)
+
+    def test_without_a_caption_the_link_shows_the_address(self):
+        self.assertIn(">https://evil.example/p.png</a>", render("![](https://evil.example/p.png)"))
+
+    def test_our_own_pictures_stay_pictures(self):
+        for url in ("/static/core/img/logo.png", "https://knt-mipt.ru/static/x.png", "https://files.inbicst.ru/img/x"):
+            with self.subTest(url):
+                self.assertIn(f'src="{url}"', render(f"![наша]({url})"))
+
+    def test_an_address_that_only_looks_like_ours_is_foreign(self):
+        lookalikes = (
+            "https://knt-mipt.ru@evil.example/x.png", "https://knt-mipt.ru.evil.example/x.png",
+            "//evil.example/x.png", "/\\evil.example/x.png", "ftp://knt-mipt.ru/x.png",
         )
+        for url in lookalikes:
+            with self.subTest(url):
+                self.assertNotIn("<img", render(f"![обман]({url})"))
 
-    def test_inline_styles_do_not_swallow_spaces(self):
-        # «** текст **» markdown жирным не считает.
-        self.assertEqual(self.delta({"attributes": {"bold": True}, "insert": "жирно "}), "**жирно**")
+    def test_a_picture_written_as_raw_html_loses_its_address(self):
+        # Такая в дерево markdown не попадает — её ловит уже чистка готового HTML.
+        html = render('<img src="https://evil.example/raw.png" alt="сырая">')
 
-    def test_link_keeps_its_address(self):
-        markdown = self.delta({"attributes": {"link": "http://e.com"}, "insert": "тут"})
-        self.assertEqual(markdown, "[тут](http://e.com)")
+        self.assertNotIn("evil.example", html)
 
-    def test_formula_becomes_dollars(self):
-        self.assertEqual(self.delta({"insert": {"formula": "x^2"}}), "$x^2$")
+    def test_a_tab_hidden_in_the_address_does_not_help(self):
+        # Браузер табы из адреса выкидывает, и «/ + таб + /host» становится «//host».
+        self.assertNotIn("src=", render('<img src="/&#9;/evil.example/x.png">'))
 
-    def test_consecutive_code_lines_make_one_fence(self):
-        markdown = self.delta(
-            {"insert": "a"}, {"attributes": {"code-block": True}, "insert": "\n"},
-            {"insert": "b"}, {"attributes": {"code-block": True}, "insert": "\n"},
-        )
-        self.assertEqual(markdown, "```\na\nb\n```")
+    def test_a_raw_picture_of_ours_keeps_its_address(self):
+        self.assertIn('src="/static/ok.png"', render('<img src="/static/ok.png">'))
 
-    def test_dash_is_escaped_only_at_the_start_of_a_line(self):
-        # В середине фразы это тире, и «\-» показалось бы читателю как есть.
-        self.assertEqual(self.delta({"insert": "тут - тире"}), "тут - тире")
-        self.assertEqual(self.delta({"insert": "- не список"}), r"\- не список")
+    def test_a_foreign_picture_inside_a_link_leaves_the_link_whole(self):
+        html = render("[![кнопка](https://evil.example/in.png)](https://site.example/page)")
 
-    def test_html_formula_is_taken_from_the_source_not_the_rendering(self):
-        raw = (
-            '<p><span class="ql-formula" data-value="a+b">\ufeff'
-            '<span class="katex"><span class="katex-mathml">МУСОР</span></span></span> итого</p>'
-        )
-        self.assertEqual(to_markdown(raw), "$a+b$ итого")
-
-    def test_html_paragraphs_and_lists(self):
-        raw = "<p>Первый</p><ol><li>раз</li><li>два</li></ol>"
-        self.assertEqual(to_markdown(raw), "Первый\n\n1. раз\n1. два")
-
-    def test_result_survives_the_site_renderer(self):
-        markdown = self.delta({"insert": {"formula": "x_1"}}, {"insert": "\n"})
-        self.assertIn("arithmatex", render(markdown))
+        self.assertNotIn("evil.example", html)
+        self.assertIn('<a href="https://site.example/page"', html)
+        self.assertIn("кнопка</span></a>", html)
 
 
 class AlumniTeamTests(TestCase):
@@ -173,12 +333,6 @@ class AlumniTeamTests(TestCase):
     def test_course_chat_is_named_for_people_not_for_a_year(self):
         self.assertEqual(Chat.course_title("bachelor", Team.ALUMNI_YEAR), "Выпускники")
         self.assertEqual(Chat.course_title("bachelor", 2024), "Бакалавриат 2024")
-
-    def test_cleanup_never_takes_the_alumni_team(self):
-        # По обычному правилу её «выпуск» пришёлся бы на шестой год нашей эры.
-        alumni = self.team()
-        call_command("cleanup_legacy", "--apply", verbosity=0)
-        self.assertTrue(Team.objects.filter(pk=alumni.pk).exists())
 
 
 def make_user(email, **extra):
@@ -676,35 +830,6 @@ class StaticBuildTests(SimpleTestCase):
         with tempfile.TemporaryDirectory() as room:
             with override_settings(STORAGES=storages, STATIC_ROOT=room, DEBUG=False):
                 call_command("collectstatic", "--noinput", verbosity=0)
-
-
-class LegacyFileKeyTests(SimpleTestCase):
-    """Имя внутри ключа хранилища: название записи плюс настоящее расширение."""
-
-    def name(self, title, path):
-        return filename(title, extension(Path(path)))
-
-    def test_extension_comes_from_the_file_and_is_not_doubled(self):
-        self.assertEqual(self.name("Матан", "12_0_Матан.pdf"), "Матан.pdf")
-        self.assertEqual(self.name("Матан.pdf", "12_0_Матан.pdf.pdf"), "Матан.pdf")
-        # Название врёт про формат — верим файлу: по расширению выбирается значок.
-        self.assertEqual(self.name("Матан.pdf", "12_0_Матан.zip"), "Матан.pdf.zip")
-
-    def test_a_dot_inside_the_title_is_not_an_extension(self):
-        # «Порай-Кошиц М.А. Основы…» — иначе расширением станет полстроки.
-        self.assertEqual(extension(Path("1_0_Порай-Кошиц М.А. Основы анализа")), "")
-        self.assertEqual(self.name("Порай-Кошиц М.А. Основы", "1_0_Порай-Кошиц М.А. Основы"), "Порай-Кошиц М.А. Основы")
-
-    def test_signs_windows_forbids_are_dropped(self):
-        # Старый сайт жил на линуксе, и на этих названиях перенос падал с Errno 22.
-        self.assertEqual(self.name('Кузьменко "Начала химии"', "1_0_x.pdf"), "Кузьменко Начала химии.pdf")
-        self.assertEqual(self.name("Том 1: Функции", "1_0_x.pdf"), "Том 1 Функции.pdf")
-        self.assertEqual(self.name("Билет 1 | 21 дек.", "1_0_x.pdf"), "Билет 1 21 дек.pdf")
-        self.assertEqual(self.name("темы зачета/экзамена", "1_0_x.doc"), "темы зачета экзамена.doc")
-
-    def test_a_title_that_is_all_punctuation_still_gives_a_name(self):
-        self.assertEqual(self.name("...", "1_0_x.pdf"), "file.pdf")
-        self.assertEqual(self.name("", "1_0_x"), "file")
 
 
 class FooterTests(TestCase):

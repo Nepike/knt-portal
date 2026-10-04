@@ -14,6 +14,7 @@ from materials.models import Material
 from materials.tests import make_image, make_user
 from users.models import User
 
+from .forms import MAX_TEXT
 from .models import Comment
 from .views import thread
 
@@ -77,6 +78,27 @@ class CommentTests(TestCase):
 
         self.assertFalse(Comment.objects.exists())
         self.assertContains(response, "Пустой комментарий")
+
+    def test_a_comment_over_the_limit_is_refused_by_the_server_too(self):
+        # maxlength в поле ввода обходит любой запрос мимо страницы.
+        response = self.add(text="а" * (MAX_TEXT + 1))
+
+        self.assertFalse(Comment.objects.exists())
+        self.assertContains(response, f"длиннее {MAX_TEXT} знаков")
+
+    def test_a_line_break_counts_as_one_sign_the_way_the_browser_counts_it(self):
+        # Иначе текст, который поле ввода пропустило, сервер бы завернул: шлют перенос двумя байтами.
+        text = "\r\n".join(["а" * 99] * (MAX_TEXT // 100))
+
+        self.add(text=text)
+
+        self.assertGreater(len(text), MAX_TEXT)
+        self.assertTrue(Comment.objects.exists())
+
+    def test_the_field_and_the_server_name_the_same_limit(self):
+        page = self.client.get(self.material.get_absolute_url())
+
+        self.assertContains(page, f'maxlength="{MAX_TEXT}"')
 
     def test_comment_text_goes_through_markdown(self):
         self.add(text="**важно** и $x^2$")
@@ -387,6 +409,19 @@ class LectureCommentTests(TestCase):
 
         self.assertContains(page, "спасибо за запись")
         self.assertContains(page, "Обсуждение")
+
+    def test_formulas_are_drawn_under_a_record_too(self):
+        page = self.client.get(self.playlist.get_absolute_url())
+
+        for part in ("katex.min.js", "auto-render.min.js", "core/js/math.js", "katex.min.css"):
+            self.assertContains(page, part)
+
+    def test_a_course_with_nothing_to_discuss_does_not_pull_the_formulas(self):
+        # KaTeX со шрифтами — полмегабайта, а без записи обсуждения на странице нет.
+        empty = Playlist.objects.create(
+            title="Пусто", subject=self.playlist.subject, uploader=self.author, status=Playlist.Status.APPROVED)
+
+        self.assertNotContains(self.client.get(empty.get_absolute_url()), "katex")
 
     def test_replies_work_the_same_way(self):
         self.add(text="корень")

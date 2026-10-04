@@ -264,18 +264,36 @@ def under(prefix):
         from .storage import _under
 
         return set(_under(storage, prefix.strip("/")))
+    return {key for key, _, _ in _listing(storage, prefix)}
 
+
+def listed(prefix):
+    """То же, что `under`, но с датой и весом: {ключ: (когда изменён, байт)}.
+
+    Уборке нужны все три. Листинг бакета отдаёт их сразу, а спрашивать про каждый ключ
+    отдельно — по два запроса на файл, и файлов там столько, сколько загрузок за всё время.
+    """
+    storage = file_storage()
+    if isinstance(storage, FileSystemStorage):
+        from .storage import _under
+
+        return {key: (storage.get_modified_time(key), storage.size(key)) for key in _under(storage, prefix.strip("/"))}
+    return {key: (modified, size) for key, modified, size in _listing(storage, prefix)}
+
+
+def _listing(storage, prefix):
+    """Постраничный обход бакета под префиксом: (ключ без префикса хранилища, дата, вес)."""
     client = storage.connection.meta.client
     keep = f"{storage.location}/" if getattr(storage, "location", "") else ""
-    found, token = set(), {}
+    token = {}
     while True:
         answer = client.list_objects_v2(
             Bucket=storage.bucket_name, Prefix=_prefixed(storage, prefix.strip("/")) + "/", **token,
         )
         for item in answer.get("Contents", []):
-            found.add(item["Key"][len(keep):])
+            yield item["Key"][len(keep):], item.get("LastModified"), item.get("Size", 0)
         if not answer.get("IsTruncated"):
-            return found
+            return
         token = {"ContinuationToken": answer["NextContinuationToken"]}
 
 

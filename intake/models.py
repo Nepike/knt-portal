@@ -63,6 +63,11 @@ class MediaJob(models.Model):
         verbose_name = "задание"
         verbose_name_plural = "очередь выпечки"
         ordering = ["-created"]
+        constraints = [
+            # Сырьё снимается, как только задание закрыто: второму заданию на тот же ключ
+            # печь было бы не из чего.
+            models.UniqueConstraint(fields=["source"], name="intake_job_source_once"),
+        ]
 
     def __str__(self):
         return f"#{self.pk} {self.recipe} ({self.get_status_display()})"

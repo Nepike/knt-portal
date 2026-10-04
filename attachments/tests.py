@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -1398,3 +1399,73 @@ class BlobCleanupTests(TestCase):
     def test_name_without_extension_survives(self):
         key = random_key("books", "конспект")
         self.assertTrue(key.endswith("/конспект"), key)
+
+
+class BucketCleanupTests(TestCase):
+    """Уборка в настоящем бакете. Остальные тесты уборки живут на диске и этих веток
+    не касаются: листинг с датами и многочастные загрузки есть только у хранилища."""
+
+    OLD = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def clean(self, objects=None, uploads=(), location=""):
+        """Прогнать уборку по бакету {ключ: (дата, вес)}. → (хранилище, его клиент)."""
+        storage = fake_storage()
+        storage.location = location
+        storage.listdir.return_value = ([], [])  # готовых наборов нет — не о них речь
+        api = storage.connection.meta.client
+        base = f"{location}/" if location else ""
+        api.list_objects_v2.side_effect = lambda Bucket, Prefix: {"Contents": [
+            {"Key": base + key, "LastModified": when, "Size": size}
+            for key, (when, size) in (objects or {}).items() if (base + key).startswith(Prefix)
+        ]}
+        api.list_multipart_uploads.return_value = {"Uploads": list(uploads), "IsTruncated": False}
+        with mock.patch("attachments.uploads.file_storage", return_value=storage), \
+             mock.patch("attachments.management.commands.clean_uploads.file_storage", return_value=storage):
+            call_command("clean_uploads", "--apply", stdout=mock.MagicMock())
+        return storage, api
+
+    def deleted(self, storage):
+        return [call.args[0] for call in storage.delete.call_args_list]
+
+    def test_the_bucket_is_asked_once_and_not_about_every_file(self):
+        """Папок под uploads/ столько, сколько прямых загрузок было за всё время."""
+        fresh = datetime.now(timezone.utc)
+        storage, api = self.clean({
+            "uploads/a/Забытый.pdf": (self.OLD, 10), "uploads/b/Тоже.pdf": (self.OLD, 20),
+            "uploads/c/Свежий.pdf": (fresh, 30),
+        })
+
+        self.assertEqual(self.deleted(storage), ["uploads/a/Забытый.pdf", "uploads/b/Тоже.pdf"])
+        self.assertEqual(api.list_objects_v2.call_count, 1)
+        storage.get_modified_time.assert_not_called()
+        storage.size.assert_not_called()
+
+    def test_the_storage_prefix_stays_out_of_the_keys(self):
+        """В базе ключ лежит без префикса хранилища — с ним хозяина не нашлось бы ни у кого."""
+        MediaJob.objects.create(recipe="lecture", source="uploads/q/Лекция.mkv")
+
+        storage, api = self.clean(
+            {"uploads/q/Лекция.mkv": (self.OLD, 10), "uploads/a/Забытый.pdf": (self.OLD, 10)}, location="dev",
+        )
+
+        self.assertEqual(api.list_objects_v2.call_args.kwargs["Prefix"], "dev/uploads/")
+        self.assertEqual(self.deleted(storage), ["uploads/a/Забытый.pdf"])
+
+    def test_an_upload_left_halfway_is_aborted_and_a_fresh_one_is_not(self):
+        storage, api = self.clean(uploads=[
+            {"Key": "uploads/x/Лекция.mkv", "UploadId": "старая", "Initiated": self.OLD},
+            {"Key": "uploads/y/Лекция.mkv", "UploadId": "идёт", "Initiated": datetime.now(timezone.utc)},
+        ])
+
+        api.abort_multipart_upload.assert_called_once_with(
+            Bucket="knt-files", Key="uploads/x/Лекция.mkv", UploadId="старая",
+        )
+
+    def test_uploads_under_another_prefix_are_not_even_listed(self):
+        """Бакет у разработки и прода один: уборка из разработки иначе оборвала бы
+        загрузки, которые прямо сейчас идут на проде."""
+        _, api = self.clean(location="dev")
+        self.assertEqual(api.list_multipart_uploads.call_args.kwargs["Prefix"], "dev/")
+
+        _, api = self.clean()
+        self.assertNotIn("Prefix", api.list_multipart_uploads.call_args.kwargs)

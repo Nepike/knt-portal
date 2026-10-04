@@ -11,11 +11,12 @@
 import random
 from datetime import timedelta
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 from django.db import transaction
 from django.utils import timezone
 
 from chats.models import REACTIONS, Chat, Membership, Message
+from core.management.dev import DevCommand
 from users.models import User
 
 # Диалоги: (дней назад, сколько сообщений в конце оставить непрочитанными, реплики).
@@ -91,7 +92,7 @@ GROUPS = [
 TITLES = [title for title, *_ in GROUPS]
 
 
-class Command(BaseCommand):
+class Command(DevCommand):
     help = "Демо-переписка для разработки (диалоги и группы)"
 
     def add_arguments(self, parser):

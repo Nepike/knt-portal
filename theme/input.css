@@ -172,10 +172,6 @@ html { color-scheme: light; }
   .top-link-active {
     @apply bg-accent/10 text-accent;
   }
-  .top-link-off {
-    @apply pointer-events-none opacity-40 cursor-not-allowed select-none text-slate-400 dark:text-slate-500;
-  }
-
 
   .field > input,
   .field > textarea {

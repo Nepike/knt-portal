@@ -1,6 +1,6 @@
 {% comment %}
   Форма отдельным партиалом: при ошибках вьюха возвращает только её, htmx меняет
-  на месте. Успех — редирект, который HtmxRedirectMiddleware превращает в HX-Redirect.
+  на месте. Успех — редирект, который HtmxMiddleware превращает в HX-Redirect.
   Файловая часть общая с библиотекой — см. attachments/_uploader.html.
 {% endcomment %}
 <form id="material-form" method="post" enctype="multipart/form-data" class="relative flex flex-col gap-5"

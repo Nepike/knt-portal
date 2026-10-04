@@ -7,11 +7,12 @@
 from io import BytesIO
 
 from django.core.files.base import ContentFile
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 from django.db import transaction
 from PIL import Image as PilImage, ImageDraw
 
 from attachments.models import File
+from core.management.dev import DevCommand
 from core.models import Subject, Term
 from library.models import Book
 from users.models import User
@@ -52,7 +53,7 @@ def demo_pdf(label, color):
     return ContentFile(buffer.getvalue(), name="demo.pdf")
 
 
-class Command(BaseCommand):
+class Command(DevCommand):
     help = "Заливает демо-книги (только для разработки). --wipe удаляет их обратно."
 
     def add_arguments(self, parser):

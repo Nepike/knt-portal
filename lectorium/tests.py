@@ -1,16 +1,19 @@
 from unittest import mock
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from django.contrib.auth.models import Permission
 from django.contrib.messages import get_messages
 from django.core.cache import cache
 from django.core.files.base import ContentFile
+from django.db import IntegrityError, transaction
 from django.template.loader import render_to_string
 from django.test import TestCase
 from django.urls import reverse
 
 from attachments.storage import file_storage
 from attachments.uploads import adopt_token
+from core.filters import MAX_WORDS
 from core.models import Subject, Term
 from economy import rewards
 from economy.services import wallet_of
@@ -18,6 +21,7 @@ from intake.models import MediaJob
 from teachers.models import Teacher
 from users.models import User
 
+from . import views
 from .forms import PlaylistForm
 from .models import Lecture, Playlist
 from .views import ADD_LIMIT, BATCH, PAGE_SIZE
@@ -147,6 +151,77 @@ class FilterTests(LectoriumTests):
 
         self.assertIn(f"subject={self.matan.pk}", response["HX-Push-Url"])
         self.assertNotIn("term=", response["HX-Push-Url"])
+
+    def test_courses_are_found_by_the_words_of_the_title(self):
+        self.assertEqual(self.titles(self.get(q="АЛГЕБРА линейная")), ["Линейная алгебра"])
+        self.assertEqual(self.titles(self.get(q="алгебра механика")), [])
+
+    def test_the_search_narrows_the_variants_in_the_filters_too(self):
+        self.assertEqual(self.options(self.get(q="алгебра"), "subject"), {self.matan.pk})
+
+    def test_the_search_goes_into_the_address_and_into_the_card_link(self):
+        asked = urlencode({"q": "алгебра"})
+        response = self.client.get(reverse("playlist_list"), {"q": "алгебра"}, headers={"HX-Request": "true"})
+
+        self.assertEqual(response["HX-Push-Url"], f"{reverse('playlist_list')}?{asked}")
+        self.assertContains(response, f"{self.algebra.get_absolute_url()}?{asked}")
+
+    def test_the_search_field_is_on_the_page_and_out_of_the_block_that_redraws_itself(self):
+        page = self.get(q="алг")
+        self.assertContains(page, 'name="q" value="алг"')
+        self.assertContains(page, 'hx-trigger="input delay:300ms, change delay:100ms"')
+
+        # Блок фильтров подменяет сам себя с каждым ответом — поле внутри теряло бы фокус.
+        changed = self.client.get(reverse("playlist_list"), {"q": "алг"}, headers={"HX-Request": "true"})
+        self.assertContains(changed, "hx-swap-oob")
+        self.assertNotContains(changed, 'name="q"')
+
+    def test_words_past_the_limit_are_not_searched_for(self):
+        # Каждое слово — отдельный LIKE, и строка в сотню слов стала бы сотней.
+        words = ["алгебра"] * MAX_WORDS + ["такого-слова-нет"]
+
+        self.assertEqual(self.titles(self.get(q=" ".join(words))), ["Линейная алгебра"])
+
+    def test_the_search_works_together_with_the_filters(self):
+        twin = self.make_playlist("Алгебра для физиков")  # предмет Физика
+        twin.terms.add(self.second)
+
+        self.assertEqual(self.titles(self.get(q="алгебра", subject=self.matan.pk)), ["Линейная алгебра"])
+        self.assertEqual(self.titles(self.get(q="алгебра", term=self.second.pk)), ["Алгебра для физиков"])
+
+    def test_spaces_around_the_search_stay_out_of_the_address(self):
+        response = self.client.get(reverse("playlist_list"), {"q": " алгебра "}, headers={"HX-Request": "true"})
+
+        self.assertEqual(response["HX-Push-Url"], f"{reverse('playlist_list')}?{urlencode({'q': 'алгебра'})}")
+
+    def test_the_course_page_returns_to_the_same_search(self):
+        page = self.client.get(self.algebra.get_absolute_url(), {"q": "алгебра"})
+
+        self.assertEqual(page.context["back_url"], f"{reverse('playlist_list')}?{urlencode({'q': 'алгебра'})}")
+
+    def test_the_filter_row_says_how_many_were_found(self):
+        self.assertContains(self.get(), "2 курса")
+        self.assertContains(self.get(q="алгебра"), "1 курс<")
+
+        # Число едет в блоке, который подменяет сам себя, — после подбора оно уже другое.
+        changed = self.client.get(reverse("playlist_list"), {"q": "алгебра"}, headers={"HX-Request": "true"})
+        self.assertContains(changed, "1 курс<")
+
+    def test_a_reset_is_offered_only_when_there_is_something_to_reset(self):
+        reset = f'<a href="{reverse("playlist_list")}" class="text-accent hover:underline">Сбросить</a>'
+
+        self.assertNotContains(self.get(), "Сбросить")
+        self.assertContains(self.get(q="алгебра"), reset)
+        self.assertContains(self.get(term=self.first.pk), reset)
+
+    def test_each_filter_is_one_field_that_is_a_pill_on_a_wide_screen(self):
+        """Одна разметка на оба вида: два набора полей с одним именем отправили бы
+        в запрос каждый фильтр дважды."""
+        page = self.get().content.decode()
+
+        for name in ("term", "subject", "teacher"):
+            self.assertEqual(page.count(f'type="hidden" name="{name}"'), 1, name)
+        self.assertEqual(page.count("sm:rounded-full"), 3)
 
     def test_a_card_carries_the_picked_filters_into_its_link(self):
         """По этой строке страница курса и узнаёт, куда возвращать по «Лекторий»."""
@@ -608,6 +683,62 @@ class BatchSubmitTests(LectoriumTests):
         self.assertEqual(answer.status_code, 400)
         self.assertIn("не доехала", answer.json()["error"])
         self.assertEqual(self.playlist.lectures.count(), 0)
+
+    def test_the_same_file_handed_twice_is_one_record(self):
+        """Ответ на первую сдачу потерялся — форма шлёт запрос ещё раз. Вторая лекция на
+        то же сырьё упала бы у пекарни: его снимают, как только испечётся первая."""
+        token = self.source()
+
+        first, again = self.hand(token=token), self.hand(title="Повтор", token=token)
+
+        self.assertEqual((first.status_code, again.status_code), (200, 200))
+        self.assertEqual(again.json()["title"], "Первая")
+        self.assertEqual((self.playlist.lectures.count(), MediaJob.objects.count()), (1, 1))
+
+    def test_a_repeat_is_accepted_even_after_the_source_is_gone(self):
+        """К повтору запись могла уже испечься, и сырья в хранилище нет — отвечать
+        «не доехала» на то, что давно принято, нельзя."""
+        token = self.source()
+        self.hand(token=token)
+        file_storage().delete(MediaJob.objects.get().source)
+
+        again = self.hand(token=token)
+
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(self.playlist.lectures.count(), 1)
+
+    def test_a_file_already_given_to_another_course_is_refused(self):
+        other = Playlist.objects.create(title="Оптика", subject=self.subject, uploader=self.keeper)
+        token = self.source()
+        self.hand(token=token)
+
+        answer = self.client.post(
+            reverse("lecture_add", args=[other.pk]), {"title": "Чужая", "uploaded": token},
+            headers={"Accept": "application/json"},
+        )
+
+        self.assertEqual(answer.status_code, 400)
+        self.assertIn("в другой курс", answer.json()["error"])
+        self.assertEqual(other.lectures.count(), 0)
+
+    def test_two_requests_at_once_still_make_one_record(self):
+        """Оба прошли проверку раньше, чем любой записал: тут держит уже ограничение базы."""
+        token = self.source()
+        self.hand(token=token)
+        real = views._job_of
+
+        with mock.patch("lectorium.views._job_of", side_effect=[None, real(MediaJob.objects.get().source)]):
+            again = self.hand(title="Повтор", token=token)
+
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["title"], "Первая")
+        self.assertEqual((self.playlist.lectures.count(), MediaJob.objects.count()), (1, 1))
+
+    def test_the_base_itself_refuses_a_second_job_for_the_same_source(self):
+        MediaJob.objects.create(recipe="lecture", source="uploads/abc/zapis.mkv")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            MediaJob.objects.create(recipe="lecture", source="uploads/abc/zapis.mkv")
 
     def test_one_failure_does_not_stop_the_rest(self):
         """Ровно ради этого запись и заводится своим запросом."""

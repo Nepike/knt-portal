@@ -56,7 +56,7 @@ class Command(BaseCommand):
         key = self.mint(user, minutes)
         logger.warning("Выдана сессия для %s (%s), на %s мин", user.email, user.pk, minutes)
 
-        self.stdout.write(f"\n{user.name} {user.surname} <{user.email}>")
+        self.stdout.write(f"\n{user.full_name} <{user.email}>")
         self.stdout.write(f"персонал: {'да' if user.is_staff else 'нет'} · до {timezone.localtime(timezone.now() + timedelta(minutes=minutes)):%H:%M}")
         self.stdout.write(f"\n  кука {settings.SESSION_COOKIE_NAME} = {key}")
         self.stdout.write(f"  path /{'  ·  обязательно с флагом Secure' if settings.SESSION_COOKIE_SECURE else ''}\n")

@@ -6,8 +6,8 @@ push to `main`.
 
 > **In active development.** First commit June 2026, still moving. The site is serving its users on
 > the production domain, every section open. It replaces the first generation of the same site,
-> [knt-portal-legacy](https://github.com/Nepike/knt-portal-legacy) — the `import_legacy*`
-> management commands exist to carry data across.
+> [knt-portal-legacy](https://github.com/Nepike/knt-portal-legacy); its data was carried across
+> by one-off commands that have since been removed (they live in the history up to October 2026).
 
 The site is behind a login: `LoginRequiredMiddleware` is global and pages opt out explicitly. What
 a visitor without an account gets is the applicants' page at `/about/` — the root sends them there
@@ -17,7 +17,8 @@ the top, where the student layout would have put a column of locked doors.
 
 ## Stack
 
-Python 3.12 · Django 6.0 · PostgreSQL (psycopg 3) · Redis · Celery · Channels + Daphne ·
+Python 3.12 · Django 6.0 · PostgreSQL (psycopg 3) · Redis · Celery · Channels (gunicorn with
+uvicorn workers in production, Daphne behind `runserver` in development) ·
 Cloudflare R2 through django-storages · HTMX + Tailwind 4 · Docker Compose · nginx ·
 GitHub Actions
 
@@ -73,7 +74,7 @@ the header (`MEDIA_ACCEL`).
 
 **The wall keeps a timelapse.** Board dimensions are capped at 255 because the replay journal
 writes three bytes per event — x, y, colour — and a wider board would not fit that format. A
-partial unique constraint guarantees exactly one active board.
+partial unique constraint guarantees at most one active board; with none the page answers 404.
 
 **The wallet is its own row, not a field on the user.** Several places in the code call a plain
 `user.save()`, which writes every field at once; had the balance been a user field, such a save
@@ -81,7 +82,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-1165 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1229 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails
@@ -107,7 +108,9 @@ python manage.py runserver
 
 No `.env` is needed for that: every setting the development profile reads has a default, so it
 comes up on SQLite with an in-memory channel layer and console mail, and nothing else has to be
-running. Redis is still wanted for Celery — `docker compose up redis` is enough. Copy
+running. Redis is still wanted for Celery, on the port development looks at —
+`docker run -d --name knt-redis -p 127.0.0.1:6379:6379 redis:8-alpine`; the compose service does not
+publish one. Copy
 `.env.example` when you want the real database, R2 or the Telegram bot.
 
 Stylesheets are the one thing not in the repository: `core/static/core/css/base.css` is generated

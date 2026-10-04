@@ -8,7 +8,7 @@
 <p class="mb-2 text-xs text-rose-500">{{ error.0 }}</p>
 {% endfor %}
 
-<textarea name="text" rows="3" maxlength="4000" placeholder="Написать комментарий"
+<textarea name="text" rows="3" maxlength="{{ form.max_text }}" placeholder="Написать комментарий"
           class="w-full rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none focus:border-2 focus:border-accent transition resize-y">{{ form.text.value|default:"" }}</textarea>
 
 {% include "attachments/_image_pick.html" with field=form.image saved=form.initial.image %}

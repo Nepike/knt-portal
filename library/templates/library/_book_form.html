@@ -1,6 +1,6 @@
 {% comment %}
   Форма отдельным партиалом: при ошибках вьюха возвращает только её, htmx меняет
-  на месте. Успех — редирект, который HtmxRedirectMiddleware превращает в HX-Redirect.
+  на месте. Успех — редирект, который HtmxMiddleware превращает в HX-Redirect.
 {% endcomment %}
 <form id="book-form" method="post" enctype="multipart/form-data" class="relative flex flex-col gap-5"
       hx-post="{{ request.path }}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="outerHTML"

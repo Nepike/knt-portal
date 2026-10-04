@@ -1,4 +1,7 @@
+from functools import partial
+
 from django.contrib import admin
+from django.db import transaction
 from django.utils.html import format_html
 
 from attachments.media import media_url
@@ -25,6 +28,13 @@ class CosmeticItemAdmin(admin.ModelAdmin):
         from django.db.models import Count
 
         return super().get_queryset(request).annotate(_owners=Count("owners"))
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # Прежние файлы снимаем после коммита: страница идёт одной транзакцией, и при
+        # откате запись останется со старым файлом. У формы списка поля stale нет.
+        for storage, name in getattr(form, "stale", ()):
+            transaction.on_commit(partial(storage.delete, name))
 
     @admin.display(description="")
     def preview(self, obj):

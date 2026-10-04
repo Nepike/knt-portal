@@ -4,17 +4,19 @@
 Новый вид контента добавляется строкой в GROUPS — материалы и лекторий придут сюда же.
 """
 
+from django.db.models import Count
+
 from lectorium.models import Playlist
 from library.models import Book
 from materials.models import Material
 
-# (заголовок, модель, право, шаблон карточки)
+# (заголовок, модель, право, шаблон карточки, чьё число стоит на карточке, что ещё она показывает)
 GROUPS = [
-    ("Книги", Book, "library.change_book", "moderation/_book.html"),
-    ("Материалы", Material, "materials.change_material", "moderation/_material.html"),
+    ("Книги", Book, "library.change_book", "moderation/_book.html", "files", ()),
+    ("Материалы", Material, "materials.change_material", "moderation/_material.html", "files", ("subject",)),
     # Проверяется плейлист целиком, а не отдельная лекция: метаданные на плейлисте,
     # и смотреть курс по одной записи модератору незачем.
-    ("Лекции", Playlist, "lectorium.change_playlist", "moderation/_playlist.html"),
+    ("Лекции", Playlist, "lectorium.change_playlist", "moderation/_playlist.html", "lectures", ("subject",)),
 ]
 
 
@@ -26,10 +28,12 @@ def allowed(user):
 def pending(user):
     """Ожидающее проверки, по группам. Старое сверху: очередь, а не лента."""
     groups = []
-    for title, model, _perm, template in allowed(user):
+    for title, model, _perm, template, counted, shown in allowed(user):
+        # Число файлов (записей) и предмет — тем же запросом, что и сама очередь:
+        # иначе о них спрашивала бы базу каждая карточка по отдельности.
         items = (
             model.objects.filter(status=model.Status.PENDING)
-            .select_related("uploader").order_by("created")
+            .select_related("uploader", *shown).annotate(parts=Count(counted)).order_by("created")
         )
         if items:
             groups.append({"title": title, "template": template, "items": items})
@@ -37,7 +41,4 @@ def pending(user):
 
 
 def pending_count(user):
-    return sum(
-        model.objects.filter(status=model.Status.PENDING).count()
-        for _title, model, _perm, _template in allowed(user)
-    )
+    return sum(group[1].objects.filter(status=group[1].Status.PENDING).count() for group in allowed(user))

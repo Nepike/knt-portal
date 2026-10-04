@@ -1,3 +1,4 @@
+import re
 from base64 import b64decode, b64encode
 from unittest import mock
 
@@ -10,7 +11,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from .bot import get_bot
 from .models import TelegramChat
 from .notify import MODERATION, notify
-from .tasks import CAPTION_LIMIT, send_message, send_photo
+from .tasks import CAPTION_LIMIT, CUT, MESSAGE_LIMIT, fit, send_message, send_photo
 
 # Шаблон держим прямо здесь: настоящие появятся вместе с модерацией.
 TEMPLATES = [{
@@ -148,3 +149,76 @@ class SendPhotoTests(TestCase):
 
         bot.send_message.assert_called_once()
         self.assertIsNone(bot.send_photo.call_args.kwargs["caption"])
+
+
+class FitTests(SimpleTestCase):
+    """Сообщение длиннее предела телеграм не принимает вовсе — такое уведомление терялось
+    бы целиком. А оборванный или незакрытый тег в режиме HTML он не принимает тоже."""
+
+    HEAD = '📁 <b>Новый материал</b>\n<a href="https://knt-mipt.ru/materials/7/">Механика</a>\n'
+
+    def balanced(self, text):
+        return all(
+            len(re.findall(rf"<{tag}[ >]", text)) == text.count(f"</{tag}>") for tag in ("b", "a", "blockquote")
+        )
+
+    def test_a_message_that_fits_is_left_alone(self):
+        self.assertEqual(fit(self.HEAD), self.HEAD)
+        self.assertEqual(fit("а" * MESSAGE_LIMIT), "а" * MESSAGE_LIMIT)
+
+    def test_a_long_one_is_cut_to_the_limit_and_says_so(self):
+        cut = fit(self.HEAD + "строка описания\n" * 500)
+
+        self.assertLessEqual(len(cut), MESSAGE_LIMIT)
+        self.assertGreater(len(cut), MESSAGE_LIMIT - 200)  # режем конец, а не всё подряд
+        self.assertTrue(cut.startswith(self.HEAD))
+        self.assertTrue(cut.endswith("строка описания\n… обрезано"), cut[-60:])
+
+    def test_a_quote_left_open_by_the_cut_is_closed(self):
+        cut = fit(self.HEAD + "<blockquote>" + "строка описания\n" * 500 + "</blockquote>\n<b>Год:</b> 2025")
+
+        self.assertTrue(cut.endswith("</blockquote>\n… обрезано"), cut[-60:])
+        self.assertTrue(self.balanced(cut))
+
+    def test_one_endless_line_is_cut_in_the_middle_and_not_thrown_away(self):
+        """Описание без единого переноса: граница строки тут — начало самого описания."""
+        cut = fit(self.HEAD + "<blockquote>" + "а" * 9000 + "</blockquote>")
+
+        self.assertGreater(cut.count("а"), 3500)
+        self.assertLessEqual(len(cut), MESSAGE_LIMIT)
+        self.assertTrue(self.balanced(cut))
+
+    def test_the_cut_never_lands_inside_a_tag_or_an_escaped_sign(self):
+        link = '<a href="https://knt-mipt.ru/materials/7/">ссылка</a>'
+        for tail in (link, "&amp;", "&#x27;", "<b>жирно</b>"):
+            # Двигаем хвост по одному знаку через место обреза — и ни разу не рвём его.
+            for shift in range(len(tail) + 2):
+                cut = fit("а" * (MESSAGE_LIMIT - len(CUT) - 32 - shift) + tail + "я" * 600)
+                body = cut.removesuffix(CUT)
+                with self.subTest(tail=tail, shift=shift):
+                    self.assertNotRegex(body, r"<[^>]*$")
+                    self.assertNotRegex(body, r"&[#\w]*$")
+                    self.assertTrue(self.balanced(cut))
+
+
+@override_settings(TELEGRAM_CONSOLE=False)
+class LongMessageTests(TestCase):
+    def setUp(self):
+        TelegramChat.objects.create(name=MODERATION, chat_id=-1001234567890)
+        self.bot = mock.MagicMock()
+        patch = mock.patch("telegram.tasks.get_bot", return_value=self.bot)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_message_over_the_limit_still_goes_out(self):
+        send_message(MODERATION, "<blockquote>" + "описание " * 1000 + "</blockquote>")
+
+        sent = self.bot.send_message.call_args.kwargs["text"]
+        self.assertLessEqual(len(sent), MESSAGE_LIMIT)
+        self.assertTrue(sent.endswith("</blockquote>\n… обрезано"))
+
+    def test_a_long_report_with_a_picture_is_cut_the_same_way(self):
+        send_photo(MODERATION, "обращение " * 1000, b64encode(b"png-bytes").decode(), "доска.png")
+
+        self.assertLessEqual(len(self.bot.send_message.call_args.kwargs["text"]), MESSAGE_LIMIT)
+        self.bot.send_photo.assert_called_once()

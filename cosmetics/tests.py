@@ -605,7 +605,26 @@ class ImportTests(TestCase):
 
 class AdminFormTests(TestCase):
     """Админка — единственная дверь для анимированных вещей: витрину и профиль они
-    получают уже принятыми. Дверь эта была закрыта — поля `video` в наборе не было."""
+    получают уже принятыми. Дверь эта была закрыта — поля `video` в наборе не было.
+
+    Правки идут через саму страницу админки: она сохраняет форму с commit=False, и тесты,
+    звавшие form.save() напрямую, были зелёными при неработающей уборке файлов.
+    """
+
+    def setUp(self):
+        self.client.force_login(User.objects.create_superuser(
+            email="boss@t.local", name="Иван", surname="Иванов", password="pass12345",
+        ))
+
+    def edit(self, item, **changed):
+        fields = {"name": item.name, "kind": item.kind, "rarity": item.rarity, "note": "", "sold": "on", "price": ""}
+        # Уборка прежних файлов ждёт коммита, а тест весь живёт в одной транзакции.
+        with self.captureOnCommitCallbacks(execute=True):
+            answer = self.client.post(
+                reverse("admin:cosmetics_cosmeticitem_change", args=[item.pk]), {**fields, **changed},
+            )
+        self.assertEqual(answer.status_code, 302, answer.content.decode()[:2000] if answer.status_code == 200 else "")
+        return CosmeticItem.objects.get(pk=item.pk)
 
     def test_the_video_field_is_reachable(self):
         self.assertIn("video", CosmeticItemAdmin(CosmeticItem, site).get_fields(None))
@@ -616,29 +635,19 @@ class AdminFormTests(TestCase):
         item = make_frame("Замена")
         was = item.image.name
 
-        form = CosmeticItemForm(
-            {"name": "Замена", "kind": CosmeticItem.Kind.AVATAR_FRAME, "rarity": R.COMMON, "sold": True},
-            {"image": _png((224, 224))},
-            instance=CosmeticItem.objects.get(pk=item.pk),
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        now = self.edit(item, image=_png((224, 224)))
 
+        self.assertNotEqual(now.image.name, was)
         self.assertFalse(item.image.storage.exists(was))
-        self.assertTrue(CosmeticItem.objects.get(pk=item.pk).image.storage.exists(
-            CosmeticItem.objects.get(pk=item.pk).image.name))
+        self.assertTrue(now.image.storage.exists(now.image.name))
 
     def test_an_untouched_file_survives_an_edit(self):
         item = make_frame("Тихая")
         was = item.image.name
 
-        form = CosmeticItemForm(
-            {"name": "Новое имя", "kind": CosmeticItem.Kind.AVATAR_FRAME, "rarity": R.COMMON, "sold": True},
-            instance=CosmeticItem.objects.get(pk=item.pk),
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        now = self.edit(item, name="Новое имя")
 
+        self.assertEqual((now.name, now.image.name), ("Новое имя", was))
         self.assertTrue(item.image.storage.exists(was))
 
     def test_a_cleared_video_does_not_stay_in_the_bucket(self):
@@ -646,15 +655,36 @@ class AdminFormTests(TestCase):
         item.video.save("fon.mp4", make_mp4(), save=True)
         was = item.video.name
 
-        form = CosmeticItemForm(
-            {"name": "Была живой", "kind": CosmeticItem.Kind.PROFILE_BACKGROUND,
-             "rarity": R.RARE, "sold": True, "video-clear": "on"},
-            instance=CosmeticItem.objects.get(pk=item.pk),
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        now = self.edit(item, **{"video-clear": "on"})
 
+        self.assertFalse(now.video)
         self.assertFalse(item.video.storage.exists(was))
+
+    def test_the_old_file_stays_while_the_edit_is_not_committed(self):
+        # Страница админки — одна транзакция: при откате запись останется со старым файлом.
+        item = make_frame("Замена")
+        was = item.image.name
+
+        self.client.post(reverse("admin:cosmetics_cosmeticitem_change", args=[item.pk]), {
+            "name": item.name, "kind": item.kind, "rarity": item.rarity, "note": "", "sold": "on", "price": "",
+            "image": _png((224, 224)),
+        })
+
+        self.assertTrue(item.image.storage.exists(was))
+
+    def test_the_tick_in_the_list_still_saves(self):
+        # У формы списка своего учёта прежних файлов нет — save_model не должен на него рассчитывать.
+        item = make_frame("Витрина")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            answer = self.client.post(reverse("admin:cosmetics_cosmeticitem_changelist"), {
+                "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1", "form-MIN_NUM_FORMS": "0",
+                "form-MAX_NUM_FORMS": "1000", "form-0-id": str(item.pk), "_save": "Сохранить",
+            })
+
+        self.assertEqual(answer.status_code, 302)
+        self.assertFalse(CosmeticItem.objects.get(pk=item.pk).sold)
+        self.assertTrue(item.image.storage.exists(item.image.name))
 
 
 class UnequipTests(TestCase):

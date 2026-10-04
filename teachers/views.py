@@ -144,6 +144,9 @@ def review_delete(request, pk):
 @require_POST
 def review_vote(request, pk, vote):
     review = get_object_or_404(Review, pk=pk)
+    if not review.is_detailed():
+        # У отзыва из одних оценок кнопок голоса нет: оценивать в нём нечего, а лайки оплачиваются.
+        raise PermissionDenied
     mine, other = (review.liked_users, review.disliked_users) if vote == "like" else (review.disliked_users, review.liked_users)
     if mine.filter(pk=request.user.pk).exists():
         mine.remove(request.user)

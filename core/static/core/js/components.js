@@ -251,9 +251,16 @@ document.addEventListener("alpine:init", () => {
       // Клавиатура телефона НЕ двигает раскладку — она просто закрывает нижнюю часть
       // экрана. Обычные размеры окна об этом ничего не знают, знает только visualViewport.
       if (!window.visualViewport) return;
-      const refit = () => this.open && this.fit();
-      visualViewport.addEventListener("resize", refit);
-      visualViewport.addEventListener("scroll", refit);
+      this.refit = () => this.open && this.fit();
+      visualViewport.addEventListener("resize", this.refit);
+      visualViewport.addEventListener("scroll", this.refit);
+    },
+    // Фильтры списков перерисовываются на каждый выбор — без этого на окне копились бы
+    // слушатели каждого прежнего селекта, и каждый держал бы свой снятый кусок страницы.
+    destroy() {
+      if (!this.refit) return;
+      visualViewport.removeEventListener("resize", this.refit);
+      visualViewport.removeEventListener("scroll", this.refit);
     },
 
     toggle() { this.open ? this.close() : this.openMenu(); },
@@ -1329,15 +1336,6 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Аватар: человек сам решает, каким куском фото станет миниатюра. Снимок с телефона
-  // бывает 4000×3000 и вертикальный, и в квадрате от него оставался бы случайный кусок.
-  // Кадр двигают мышью или пальцем, масштаб — ползунком, щипком или колесом.
-  //
-  // Наружу уходит не файл, а уже вырезанный квадрат data-URL'ом в скрытом поле: сервер
-  // всё равно перерисовывает картинку своим Pillow (users/forms.py), а так не нужен ни
-  // второй запрос, ни разбор исходника на сервере. Значение обновляем после каждого
-  // движения, чтобы не ловить отправку формы посреди асинхронной работы канваса.
-  const AVATAR_PX = 512;
   // Видео вещи в витрине: источник подставляем, только когда плитка попала в экран.
   // Не ради трафика — Safari на телефоне держит считанные видеодекодеры разом, и
   // десяток автоплеев его роняет. До подстановки видно постер, ждать ничего не надо.
@@ -1394,6 +1392,7 @@ document.addEventListener("alpine:init", () => {
     // Видно это только в браузере: тесты и статический разбор такое пропускают.
     let player = null;
     let rescues = 0;
+    let rescuedAt = 0;  // где стояло воспроизведение при последнем спасении, секунды
 
     return {
       problem: "",
@@ -1418,6 +1417,12 @@ document.addEventListener("alpine:init", () => {
           player.on(window.Hls.Events.ERROR, (_, data) => this.rescue(data));
           player.on(window.Hls.Events.MANIFEST_PARSED, () => this.gotLevels());
           player.on(window.Hls.Events.LEVEL_SWITCHED, (_, data) => { this.playing = this.heightOf(data.level); });
+          // Счётчик — про сбои ПОДРЯД: ушли на десять секунд дальше места сбоя, значит, сеть
+          // ожила. Смотрим на само воспроизведение, а не на загрузку кусков: битый кусок
+          // тоже успешно грузится, и по загрузке сбой декодера крутился бы в цикле.
+          video.addEventListener("timeupdate", () => {
+            if (rescues && video.currentTime > rescuedAt + 10) rescues = 0;
+          });
           player.loadSource(src);
           player.attachMedia(video);
           return;
@@ -1469,13 +1474,11 @@ document.addEventListener("alpine:init", () => {
       rescue(data) {
         if (!data.fatal) return;
         const kinds = window.Hls.ErrorTypes;
-        if (rescues < 3 && data.type === kinds.NETWORK_ERROR) {
+        const curable = data.type === kinds.NETWORK_ERROR || data.type === kinds.MEDIA_ERROR;
+        if (rescues < 3 && curable) {
           rescues += 1;
-          return player.startLoad();
-        }
-        if (rescues < 3 && data.type === kinds.MEDIA_ERROR) {
-          rescues += 1;
-          return player.recoverMediaError();
+          rescuedAt = this.$refs.video.currentTime;
+          return data.type === kinds.NETWORK_ERROR ? player.startLoad() : player.recoverMediaError();
         }
         this.problem = "Видео оборвалось. Обнови страницу.";
         player.destroy();
@@ -1489,6 +1492,15 @@ document.addEventListener("alpine:init", () => {
     };
   });
 
+  // Аватар: человек сам решает, каким куском фото станет миниатюра. Снимок с телефона
+  // бывает 4000×3000 и вертикальный, и в квадрате от него оставался бы случайный кусок.
+  // Кадр двигают мышью или пальцем, масштаб — ползунком, щипком или колесом.
+  //
+  // Наружу уходит не файл, а уже вырезанный квадрат data-URL'ом в скрытом поле: сервер
+  // всё равно перерисовывает картинку своим Pillow (users/forms.py), а так не нужен ни
+  // второй запрос, ни разбор исходника на сервере. Значение обновляем после каждого
+  // движения, чтобы не ловить отправку формы посреди асинхронной работы канваса.
+  const AVATAR_PX = 512;
   Alpine.data("avatarPick", (saved = "", limit = 2000000) => {
     // Всё, чего не касается разметка, держим ЗДЕСЬ, а не в данных компонента: Alpine
     // оборачивает свои данные в Proxy, а drawImage подсунутый вместо Image прокси

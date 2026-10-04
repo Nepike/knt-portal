@@ -1,12 +1,16 @@
 import logging
+from smtplib import SMTPServerDisconnected
 
 from celery.exceptions import OperationalError
 from django.conf import settings
+from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.core.mail.backends.base import BaseEmailBackend
 from django.core.mail.backends.console import EmailBackend
 
 logger = logging.getLogger(__name__)
+
+ALERT_EVERY = 3600  # секунд между сообщениями о сбое почты
 
 
 class DevConsoleBackend(EmailBackend):
@@ -45,9 +49,35 @@ def deliver(payload):
     return EmailMultiAlternatives(connection=connection, **payload).send()
 
 
+def report_failure(payload, error):
+    """Письмо не ушло ни с одной попытки — сказать об этом людям.
+
+    В лог идёт каждое: по нему видно, кому писать заново. В телеграм — первое за час:
+    почта ломается вся разом, и регистрация курса ведомостью дала бы сотню одинаковых
+    сообщений. Тела письма в сообщении нет: в нём ссылка, по которой задают пароль.
+    """
+    from telegram.notify import SUPPORT, notify
+
+    to = ", ".join(payload["to"])
+    logger.error("Письмо не ушло: кому %s, тема «%s»: %r", to, payload["subject"], error)
+    try:
+        if cache.add("mail:failed", 1, ALERT_EVERY):
+            notify(SUPPORT, "telegram/mail_failed.html", {
+                "to": to,
+                "subject": payload["subject"],
+                "error": f"{type(error).__name__}: {error}",
+                # Gmail на неверный пароль отвечает 535 и закрывает соединение, а smtplib
+                # пробует второй способ входа по закрытому — и в ошибке остаётся только обрыв.
+                "refused": isinstance(error, SMTPServerDisconnected),
+            })
+    except Exception:
+        # Сообщение о сбое не должно заслонить сам сбой: задача упадёт с ошибкой почты.
+        logger.exception("Не получилось сообщить о сбое почты")
+
+
 class QueuedEmailBackend(BaseEmailBackend):
     """Письма уходят в очередь, а не в SMTP: запрос пользователя не должен ждать
-    чужой сервер (gmail по SSL — это секунды, а воркеров у gunicorn всего три).
+    чужой сервер (gmail по SSL — это секунды, а воркеров у gunicorn всего два).
 
     Сделано именно бекендом, а не задачей во вьюхах: так через очередь идут и
     встроенные письма Django — сброс пароля и приглашение при регистрации.

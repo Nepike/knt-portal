@@ -18,7 +18,7 @@
       <p class="text-xs text-slate-400 mt-1">
         {% if item.uploader %}{{ item.uploader.full_name }}{% else %}аноним{% endif %}
         · {{ item.created|date:"j E, H:i" }}
-        · {{ item.files.count }} {{ item.files.count|plural:"файл,файла,файлов" }}
+        · {{ item.parts }} {{ item.parts|plural:"файл,файла,файлов" }}
       </p>
     </div>
   </div>

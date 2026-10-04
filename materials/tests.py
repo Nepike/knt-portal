@@ -160,6 +160,19 @@ class MaterialListTests(TestCase):
         )
         self.assertNotContains(chunk, "hx-swap-oob")
 
+    def test_there_is_no_search_by_title_here(self):
+        """Поиск по названию есть в лектории и библиотеке; в материалах ищут фильтрами.
+        Чужой `q` из адреса поэтому ничего не отбирает и в ссылки не переносится."""
+        page = self.get(q="физике")
+
+        self.assertNotContains(page, 'name="q"')
+        self.assertContains(page, "Лекции по матану")
+        self.assertContains(page, "Задачи по физике")
+        self.assertNotContains(page, "?q=")
+
+        changed = self.client.get(reverse("material_list"), {"q": "физике"}, headers={"HX-Request": "true"})
+        self.assertEqual(changed["HX-Push-Url"], reverse("material_list"))
+
 
 class YearGroupingTests(TestCase):
     """Заголовок года не должен повторяться на стыке порций."""

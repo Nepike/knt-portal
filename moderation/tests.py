@@ -2,11 +2,16 @@ from unittest import mock
 
 from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from attachments.models import File
+from core.models import Subject
+from lectorium.models import Lecture, Playlist
 from library.models import Book
+from materials.models import Material
 from users.models import User
 
 
@@ -171,3 +176,57 @@ class ModerationTests(TestCase):
             })
 
         notify.assert_not_called()
+
+
+class QueueCardTests(TestCase):
+    """Карточка очереди показывает предмет и число файлов (записей) — и берёт их тем же
+    запросом, что и сама очередь, а не спрашивает базу по разу на каждую карточку."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = make_user("a@t.local")
+        cls.moderator = make_user("m@t.local")
+        cls.moderator.user_permissions.add(*Permission.objects.filter(
+            codename__in=("change_book", "change_material", "change_playlist"),
+        ))
+        cls.subject = Subject.objects.create(name="Физика", dative="физике", accusative="физику")
+
+    def setUp(self):
+        self.client.force_login(self.moderator)
+
+    def wave(self, number):
+        """По одной ждущей записи каждого вида: книга и материал с двумя файлами, курс с тремя записями."""
+        book = Book.objects.create(title=f"Книга {number}", uploader=self.author)
+        material = Material.objects.create(
+            title=f"Материал {number}", subject=self.subject, year=2025, uploader=self.author,
+        )
+        for owner in ({"book": book}, {"material": material}):
+            for name in ("первый.pdf", "второй.pdf"):
+                File.objects.create(name=name, file=SimpleUploadedFile(name, b"x"), **owner)
+        playlist = Playlist.objects.create(
+            title=f"Курс {number}", subject=self.subject, year=2025, uploader=self.author,
+        )
+        for order in range(3):
+            Lecture.objects.create(playlist=playlist, title=f"Запись {order}", order=order)
+
+    def queue(self):
+        with CaptureQueriesContext(connection) as asked:
+            page = self.client.get(reverse("review_queue"))
+        return page, len(asked)
+
+    def test_a_card_says_how_much_there_is_to_check(self):
+        self.wave(1)
+
+        page = self.queue()[0].content.decode()
+
+        self.assertEqual(page.count("· 2 файла"), 2)  # книга и материал
+        self.assertIn("· 3 лекции", page)
+        self.assertEqual(page.count("Физика · 2025"), 2)  # материал и курс
+
+    def test_more_cards_do_not_mean_more_questions_to_the_base(self):
+        self.wave(1)
+        one = self.queue()[1]
+        self.wave(2)
+        self.wave(3)
+
+        self.assertEqual(self.queue()[1], one)

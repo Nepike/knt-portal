@@ -1,8 +1,21 @@
 {% extends "core/base.html" %}
-{% load text_extras %}
+{% load static text_extras %}
 
 {% block title %}{{ playlist.title }}{% endblock %}
 {% block main_width %}max-w-6xl{% endblock %}
+
+{% comment %}
+  KaTeX — ради обсуждения под записью: в комментариях формулы пишут так же, как в материалах.
+  Без записи обсуждения нет, и полмегабайта тянуть незачем. Порядок скриптов важен, см. материал.
+  Условие стоит внутри блоков: снаружи блока в дочернем шаблоне оно ничего не решает.
+{% endcomment %}
+{% block js %}{% if lecture %}
+<script defer src="{% static 'core/vendor/katex/katex.min.js' %}"></script>
+<script defer src="{% static 'core/vendor/katex/auto-render.min.js' %}"></script>
+<script defer src="{% static 'core/js/math.js' %}"></script>
+{% endif %}{% endblock %}
+
+{% block css %}{% if lecture %}<link href="{% static 'core/vendor/katex/katex.min.css' %}" rel="stylesheet">{% endif %}{% endblock %}
 
 {% block content %}
 {# Не в начало списка, а туда, откуда пришли: подбор приезжает в адресе карточки. #}

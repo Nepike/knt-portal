@@ -12,6 +12,7 @@ from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -35,6 +36,12 @@ def make_user(email="u@t.local", **extra):
         email=email, name="Иван", surname="Иванов", password="pass12345",
         must_change_password=False, **extra,
     )
+
+
+def keep_capitals(user, email):
+    """Адрес с заглавными буквами, как у заведённых до октября 2026: save() таких
+    уже не оставляет, а в базе они лежат."""
+    User.objects.filter(pk=user.pk).update(email=email)
 
 
 def make_image(name="avatar.png"):
@@ -536,6 +543,9 @@ class SessionForCommandTests(TestCase):
     def test_it_takes_an_id_as_well_as_an_email(self):
         self.assertIn(self.person.email, self.run_command(str(self.person.pk)))
 
+    def test_the_person_is_named_surname_first_as_on_the_site(self):
+        self.assertIn("Иванов Иван <", self.run_command(self.person.email))
+
     def test_end_closes_what_was_handed_out(self):
         self.run_command(self.person.email)
         self.run_command(self.person.email)
@@ -811,6 +821,52 @@ class RegisterOneTests(TestCase):
 
         self.assertEqual(self.client.get(reverse("user_new")).status_code, 403)
 
+    def test_an_address_known_in_another_case_is_refused_with_a_reason(self):
+        keep_capitals(make_user("egor@t.local"), "Egor@T.local")
+
+        answer = self.client.post(reverse("user_new"), {
+            "surname": "Сёмин", "name": "Георгий", "email": "egor@t.local", "team": self.team.pk,
+        })
+
+        self.assertContains(answer, "уже зарегистрирован")
+        self.assertEqual(User.objects.filter(email__iexact="egor@t.local").count(), 1)
+        self.assertFalse(mail.outbox)
+
+
+class EmailCaseTests(TestCase):
+    """Адрес — логин, и регистр букв в нём никто не помнит."""
+
+    def enter(self, email):
+        return self.client.post(reverse("login"), {"username": email, "password": "pass12345"})
+
+    def test_the_address_is_kept_in_lower_case(self):
+        self.assertEqual(make_user("Ivanov@Phystech.EDU").email, "ivanov@phystech.edu")
+
+    def test_one_gets_in_whatever_the_case(self):
+        make_user("ivanov@t.local")
+
+        self.assertEqual(self.enter("Ivanov@T.Local").status_code, 302)
+
+    def test_a_person_kept_with_capitals_gets_in_too(self):
+        keep_capitals(make_user("ivanov@t.local"), "Ivanov@t.local")
+
+        self.assertEqual(self.enter("ivanov@t.local").status_code, 302)
+
+    def test_a_wrong_password_is_still_wrong(self):
+        make_user("ivanov@t.local")
+
+        answer = self.client.post(reverse("login"), {"username": "Ivanov@t.local", "password": "не тот"})
+
+        self.assertEqual(answer.status_code, 200)
+
+    def test_the_base_refuses_an_address_that_differs_only_in_case(self):
+        # Мимо save() ходят update() и bulk_create — их держит только ограничение.
+        make_user("ivanov@t.local")
+        twin = make_user("petrov@t.local")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            keep_capitals(twin, "Ivanov@t.local")
+
 
 class RosterTests(TestCase):
     """Регистрация курса ведомостью — выгрузкой ответов гугл-формы."""
@@ -897,11 +953,17 @@ class RosterTests(TestCase):
         Заглавные буквы именно у ЗАВЕДЁННОГО: сравнение приводит к нижнему регистру
         обе стороны, и проверять надо ту, что лежит в базе, — вторая приведена всегда.
         """
-        make_user("BerezhOl@mail.ru")
+        keep_capitals(make_user("berezhol@mail.ru"), "BerezhOl@mail.ru")
 
         self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601")])
 
         self.assertEqual(self.students().count(), 1)
+
+    def test_the_address_from_the_file_is_kept_in_lower_case(self):
+        self.load([line("Бережная Ольга Михайловна", "BerezhOl@Mail.ru", "M07-601")])
+
+        self.assertEqual(self.students().get().email, "berezhol@mail.ru")
+        self.assertEqual(mail.outbox[0].to, ["berezhol@mail.ru"])
 
     def test_a_missing_column_is_named(self):
         header = ("Отметка времени", "ФИО", "Удобная почта", "ДР", "Интересный факт о Вас")

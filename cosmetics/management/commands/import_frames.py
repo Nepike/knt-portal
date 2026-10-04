@@ -1,17 +1,14 @@
-"""Перенос рамок аватара: со старого сайта и из папки с неразобранными.
+"""Рамки аватара из папки с файлами.
 
-    manage.py import_frames --db D:\\knt-legacy\\db.sqlite3 --media D:\\knt-legacy\\media
     manage.py import_frames --more "C:\\...\\more frames" --apply
 
-У старых рамок есть имя и редкость — берём из базы. У новых нет ничего, имена файлов
-это хеши, поэтому им ставится «Рамка N» и «обычная»: переименовать удобнее в админке,
-где видно саму картинку.
+Имён и редкости у файлов нет — названия у них хеши, — поэтому вещам ставится «Рамка N»
+и «обычная»: переименовать удобнее в админке, где видно саму картинку.
 
 Файл кладётся КАК ЕСТЬ, в исходном формате: пережатие в анимированный WebP экономит
 38%, но оно лоссИ, и на пиксельных рамках это видно.
 """
 
-import sqlite3
 from pathlib import Path
 
 from django.core.files.base import ContentFile
@@ -23,51 +20,21 @@ from cosmetics.models import CosmeticItem
 
 
 class Command(BaseCommand):
-    help = "Перенести рамки аватара: из базы старого сайта и/или из папки с файлами"
+    help = "Завести рамки аватара из папки с файлами"
 
     def add_arguments(self, parser):
-        parser.add_argument("--db", help="db.sqlite3 старого сайта")
-        parser.add_argument("--media", help="каталог media старого сайта (рядом с --db)")
-        parser.add_argument("--more", help="папка с рамками без имён")
+        parser.add_argument("--more", required=True, help="папка с рамками без имён")
         parser.add_argument("--refresh", action="store_true", help="перезаписать файлы у уже перенесённых")
         parser.add_argument("--apply", action="store_true", help="без него только показывает, что перенёс бы")
 
     def handle(self, *args, **options):
         self.apply = options["apply"]
         self.refresh = options["refresh"]
-        if not options["db"] and not options["more"]:
-            raise CommandError("нечего переносить: укажи --db или --more")
-
-        done = 0
-        if options["db"]:
-            if not options["media"]:
-                raise CommandError("с --db нужен и --media: в базе лежат пути, а не файлы")
-            done += self.from_legacy(Path(options["db"]), Path(options["media"]))
-        if options["more"]:
-            done += self.from_folder(Path(options["more"]))
+        done = self.from_folder(Path(options["more"]))
 
         self.stdout.write(f"\nПеренесено: {done}")
         if not self.apply:
             self.stdout.write(self.style.WARNING("Пробный прогон. Записать: --apply"))
-
-    def from_legacy(self, db, media):
-        """Старый сайт: имя и редкость известны, поэтому переносим как есть."""
-        if not db.exists():
-            raise CommandError(f"нет файла базы: {db}")
-        con = sqlite3.connect(db)
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "select id, name, rarity, image from activity_cosmeticitem where item_type = 'avatar_frame'"
-        ).fetchall()
-
-        done = 0
-        for row in rows:
-            source = media / row["image"]
-            if not source.exists():
-                self.stdout.write(self.style.WARNING(f"  нет файла: {row['image']}"))
-                continue
-            done += self.take(source, row["name"], row["rarity"], f"legacy:{row['id']}")
-        return done
 
     def from_folder(self, folder):
         """Папка с хешами вместо имён: редкость и название расставит человек в админке."""

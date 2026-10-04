@@ -28,25 +28,17 @@ class CosmeticItemForm(forms.ModelForm):
 
         # Прежние блобы: `clean` идёт ДО того, как форма перепишет поля у instance,
         # поэтому здесь ещё видно, что лежало в них раньше. Ссылку на них после замены
-        # взять будет негде, а в бакете они останутся сиротами — снимаем в save().
+        # взять будет негде, а в бакете они останутся сиротами. Снимает их админка после
+        # записи (CosmeticItemAdmin.save_model): форму она сохраняет с commit=False.
         # `data[name] is False` — это снятая галочка «очистить» у файлового поля.
-        self._stale = []
+        self.stale = []
         for name in FILES:
             old = getattr(self.instance, name, None)
             if old and (self.files.get(name) or data.get(name) is False):
-                self._stale.append((old.storage, old.name))
+                self.stale.append((old.storage, old.name))
 
         if self.files.get("image") and data.get("image"):
             validate(kind, data["image"])
         if self.files.get("video") and data.get("video"):
             validate_video(kind, data["video"])
         return data
-
-    def save(self, commit=True):
-        item = super().save(commit=commit)
-        # Только при commit: без него запись ещё не сохранена, и старый файл может
-        # оказаться единственным.
-        if commit:
-            for storage, name in getattr(self, "_stale", ()):
-                storage.delete(name)
-        return item

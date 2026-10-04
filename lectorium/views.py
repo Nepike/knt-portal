@@ -2,7 +2,7 @@ import posixpath
 
 from django.contrib import messages
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -84,7 +84,7 @@ def _may_edit(user, playlist):
 
 def _list_url(params):
     """Адрес списка с выбранным подбором — со страницы курса есть куда вернуться."""
-    query = filters.query(params)
+    query = filters.query(params, search=True)
     return f"{reverse('playlist_list')}?{query}" if query else reverse("playlist_list")
 
 
@@ -194,6 +194,11 @@ def _source_problem(user, key):
     return None
 
 
+def _job_of(source):
+    """Задание, которому это сырьё уже отдано, или None."""
+    return MediaJob.objects.filter(source=source).select_related("lecture").first()
+
+
 @require_POST
 def lecture_add(request, pk):
     """Сдать ОДНУ запись: файл уже в хранилище, здесь заводится лекция и задание.
@@ -225,16 +230,29 @@ def lecture_add(request, pk):
     if not form.is_valid() or not source:
         return refuse("Нужны название и файл записи.")
 
-    if problem := _source_problem(request.user, source):
-        return refuse(problem)
-
-    with transaction.atomic():
-        lecture = form.save(commit=False)
-        lecture.playlist = playlist
-        lecture.order = playlist.lectures.count()
-        lecture.prefix = ""  # появится, когда пекарня отчитается
-        lecture.save()
-        MediaJob.objects.create(recipe=LECTURE_RECIPE, source=source, lecture=lecture)
+    # Тот же файл сдают второй раз, когда ответ на первую сдачу потерялся по дороге, и
+    # форма повторила запрос. Второй лекции на то же сырьё быть не должно: оно снимается,
+    # как только испечётся первая. Смотрим до вопроса хранилищу — к повтору сырья может уже не быть.
+    job = _job_of(source)
+    if job is None:
+        if problem := _source_problem(request.user, source):
+            return refuse(problem)
+        try:
+            with transaction.atomic():
+                lecture = form.save(commit=False)
+                lecture.playlist = playlist
+                lecture.order = playlist.lectures.count()
+                lecture.prefix = ""  # появится, когда пекарня отчитается
+                lecture.save()
+                MediaJob.objects.create(recipe=LECTURE_RECIPE, source=source, lecture=lecture)
+        except IntegrityError:
+            job = _job_of(source)  # два запроса с одним файлом пришли разом — победил другой
+            if job is None:
+                raise
+    if job is not None:
+        if job.lecture is None or job.lecture.playlist_id != playlist.pk:
+            return refuse("Эта запись уже сдана в другой курс.")
+        lecture = job.lecture
 
     if as_json:
         return JsonResponse({"title": lecture.title})
@@ -244,9 +262,12 @@ def lecture_add(request, pk):
 
 def playlist_list(request):
     form = filters.FilterForm(request.GET or None)
+    q = filters.asked(request.GET)
 
+    # Найденное по названию — основа и для списка, и для вариантов в селектах.
+    found = filters.search(visible_playlists(request.user), q)
     playlists = (
-        visible_playlists(request.user)
+        found
         .select_related("subject", "uploader")
         .prefetch_related("terms", "teachers", "lectures")
         # distinct обязателен: подбор по преподавателю или семестру — это join
@@ -256,7 +277,7 @@ def playlist_list(request):
     )
     chosen = filters.chosen(form)
     playlists = filters.apply(playlists, chosen)
-    filters.narrow(form, visible_playlists(request.user), chosen)
+    filters.narrow(form, found, chosen)
 
     # Год здесь — год, когда курс читали, поэтому свежие сверху; id последним, иначе
     # на границе порций курсы с одинаковым ключом перескакивают. Тем же порядком
@@ -265,9 +286,9 @@ def playlist_list(request):
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
 
     context = {
-        "page": page, "playlists": page.object_list, "form": form,
+        "page": page, "playlists": page.object_list, "form": form, "q": q,
         # Подбор едет в ссылку каждой карточки — со страницы курса есть куда вернуться.
-        "filters": filters.query(request.GET),
+        "filters": filters.query(request.GET, search=True),
         "may_add": _may_add(request.user),
         # Заголовок года не должен повториться на стыке порций: сравниваем с годом
         # курса, стоящего прямо перед первым на этой странице.
@@ -282,7 +303,7 @@ def playlist_list(request):
     # Сменили фильтр — вместе со списком возвращаем и сам блок фильтров: наборы вариантов
     # в остальных селектах после этого другие.
     response = render(request, "lectorium/_playlist_list.html", {**context, "refresh_filters": True})
-    response["HX-Push-Url"] = filters.url(request)
+    response["HX-Push-Url"] = filters.url(request, search=True)
     return response
 
 
@@ -322,7 +343,7 @@ def playlist_detail(request, pk):
         # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
         "bookmark": bookmark_button(request.user, playlist),
         "back_url": _list_url(request.GET),
-        "filters": filters.query(request.GET),
+        "filters": filters.query(request.GET, search=True),
         "may_moderate": _may_moderate(request.user),
         "may_edit": _may_edit(request.user, playlist),
         "upload_limits": upload_limits(request.user),

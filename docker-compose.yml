@@ -26,9 +26,12 @@ services:
     logging: *logging
     # Шина чата (0), очередь задач и ответы (1, 2), кэш (3) — см. settings/prod.py.
     # Ничего из этого не хранилище: терять при перезапуске нечего, запись на диск выключена.
-    # Вытеснение НЕ включаем (по умолчанию noeviction): под нехваткой памяти allkeys-lru
-    # выкинул бы вместе с кэшем и невыполненные задачи Celery, а они лежат тут же.
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # Потолок памяти — чтобы кэш не мог занять всю машину; сейчас занято около 10 МБ.
+    # Вытесняются только ключи со сроком жизни (volatile-lru): это кэш и ответы задач.
+    # У очереди Celery срока нет, и её вытеснение не трогает — allkeys-lru выкинул бы
+    # вместе с кэшем и невыполненные задачи, а они лежат тут же.
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -36,14 +39,34 @@ services:
       retries: 10
     restart: unless-stopped
 
-  web:
+  # Миграции — отдельным шагом, который отрабатывает и выходит. Сайт, воркер, расписание
+  # и бот ждут его конца: иначе новый код стартует раньше новой схемы, и задача, читающая
+  # только что добавленную колонку, в это окно падает. Упала сама миграция — остальные
+  # сервисы не пересоздаются, и сайт остаётся на прежнем коде, а не в цикле перезапусков.
+  #
+  # Здесь же собирается образ — единственный раз: остальные сервисы берут его по имени.
+  migrate:
+    image: knt-app
     logging: *logging
     build:
       context: .
       args:
         PROXY: ${PROXY:-}   # из .env; пусто = качать напрямую
+    entrypoint: ["python", "manage.py", "migrate", "--noinput"]
     env_file: .env
     depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    image: knt-app
+    pull_policy: never   # образ свой, в реестре его нет — собирает migrate
+    logging: *logging
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -55,14 +78,12 @@ services:
     restart: unless-stopped
 
   # Фоновые задачи: почта, телеграм — всё, чего запрос пользователя ждать не должен.
-  # entrypoint переопределён, значит migrate/collectstatic из него не выполняются — и
-  # правильно: миграции накатывает web, двое одновременно только подрались бы.
+  # entrypoint переопределён, значит collectstatic из него не выполняется: статику
+  # раздаёт только web.
   worker:
+    image: knt-app
+    pull_policy: never
     logging: *logging
-    build:
-      context: .
-      args:
-        PROXY: ${PROXY:-}
     # Одного процесса хватает: задачи редкие и ждут чужую сеть, а не считают.
     # prefork при concurrency=2 держит три процесса — на 1.8 ГБ это заметные ~60 МБ впустую.
     entrypoint: ["celery", "-A", "knt", "worker", "-l", "info", "--concurrency", "1"]
@@ -70,6 +91,8 @@ services:
     volumes:
       - ./media:/app/media   # задачам с файлами нужен тот же диск, что и сайту
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -84,27 +107,27 @@ services:
   # каталог контейнера намеренно: единственное, что даёт его переживание перезапуска, —
   # догоняющий запуск пропущенного, а уборке хранилища догонять нечего.
   beat:
+    image: knt-app
+    pull_policy: never
     logging: *logging
-    build:
-      context: .
-      args:
-        PROXY: ${PROXY:-}
     entrypoint: ["celery", "-A", "knt", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     env_file: .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
 
   bot:
+    image: knt-app
+    pull_policy: never
     logging: *logging
-    build:
-      context: .
-      args:
-        PROXY: ${PROXY:-}
     entrypoint: ["python", "manage.py", "bot"]
     env_file: .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     restart: unless-stopped

@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from attachments.models import File
 from attachments.storage import drop_prefix, file_storage
-from attachments.uploads import under
+from attachments.uploads import listed, under
 from intake.models import MediaJob
 from lectorium.models import Lecture
 
@@ -26,22 +26,17 @@ class Command(BaseCommand):
         cutoff = timezone.now() - timedelta(days=options["days"])
         known = self.needed()
 
-        try:
-            folders, _ = storage.listdir(PREFIX)
-        except FileNotFoundError:
-            folders = []  # локальный диск: каталога ещё нет, значит и сирот нет
-
         found = size = 0
-        for folder in folders:
-            for name in storage.listdir(f"{PREFIX}/{folder}")[1]:
-                key = f"{PREFIX}/{folder}/{name}"
-                if key in known or storage.get_modified_time(key) > cutoff:
-                    continue
-                found += 1
-                size += storage.size(key)
-                self.stdout.write(key)
-                if options["apply"]:
-                    storage.delete(key)
+        # Одним списком с датой и весом: папок под uploads/ столько, сколько прямых
+        # загрузок было за всё время, и обход по папке с вопросом о каждом файле не кончался бы.
+        for key, (modified, weight) in sorted(listed(PREFIX).items()):
+            if key in known or modified > cutoff:
+                continue
+            found += 1
+            size += weight
+            self.stdout.write(key)
+            if options["apply"]:
+                storage.delete(key)
 
         # Окно печатаем всегда: без него «удалено: 0» выглядит поломкой, хотя сироты
         # просто моложе --days (свежую загрузку ещё может подобрать открытая форма).
@@ -124,9 +119,12 @@ class Command(BaseCommand):
             return 0  # локальный диск: многочастных загрузок там не бывает
 
         client = client.client
+        # Только свой префикс: бакет у разработки и прода один, и уборка из разработки
+        # иначе оборвала бы загрузки, которые прямо сейчас идут на проде.
+        own = {"Prefix": f"{storage.location}/"} if getattr(storage, "location", "") else {}
         found, marker = 0, {}
         while True:
-            answer = client.list_multipart_uploads(Bucket=storage.bucket_name, **marker)
+            answer = client.list_multipart_uploads(Bucket=storage.bucket_name, **own, **marker)
             for upload in answer.get("Uploads", []):
                 if upload["Initiated"] > cutoff:
                     continue

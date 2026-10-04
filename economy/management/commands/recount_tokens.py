@@ -52,7 +52,7 @@ class Command(BaseCommand):
                 for award, gap in rewards.pending(person):
                     added[award.reason] = added.get(award.reason, 0) + gap
             if added:
-                rich.append((sum(added.values()), f"{person.name} {person.surname}"))
+                rich.append((sum(added.values()), person.full_name))
             for reason, amount in added.items():
                 totals[reason] = totals.get(reason, 0) + amount
         rich.sort(reverse=True)

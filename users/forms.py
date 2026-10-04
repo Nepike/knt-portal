@@ -66,6 +66,14 @@ class RegisterUserForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["groups"].queryset = grantable_groups(creator) if creator else Group.objects.none()
 
+    def clean_email(self):
+        # Сверяем сами: штатная проверка различает регистр, а отказ ограничения базы —
+        # ошибка формы, а не поля, и на этой странице её не видно.
+        email = self.cleaned_data["email"]
+        if User.objects.filter(email__iexact=email).exists():
+            raise ValidationError("Человек с такой почтой уже зарегистрирован")
+        return email
+
 
 def _thumbnail(raw):
     """Квадрат AVATAR_PX из присланных байтов.
