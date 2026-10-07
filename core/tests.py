@@ -1,15 +1,18 @@
 import copy
 import re
+import subprocess
 import tempfile
+from datetime import date, timedelta
 from io import BytesIO, StringIO
+from pathlib import Path
 from smtplib import SMTPServerDisconnected
-
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.conf import settings
 from django.core import mail
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from django.core.management import call_command
@@ -17,10 +20,13 @@ from django.core.management.base import CommandError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import ResolverMatch, get_resolver, reverse
+from django.utils import timezone
 
 import yaml
 from PIL import Image as PilImage
 
+from attachments.storage import file_storage
+from attachments.uploads import under
 from knt.celery import app as celery_app
 from core.models import Team
 from teachers.models import Review, Teacher
@@ -28,12 +34,12 @@ from users.models import User
 
 from chats.models import Chat
 
-from . import nav
+from . import backup, nav
 from .search import by_name
 from .throttle import client_ip, throttled
 from .markup import render
 from .mail import pack
-from .tasks import MAIL_RETRIES, ping, send_email
+from .tasks import MAIL_RETRIES, backup_database, ping, send_email
 
 
 class CeleryTests(SimpleTestCase):
@@ -217,6 +223,15 @@ class DeployTests(SimpleTestCase):
                 # Образ свой, в реестре его нет: без этого compose пошёл бы его скачивать.
                 self.assertEqual(self.services[name]["pull_policy"], "never")
 
+    def test_the_image_carries_a_postgres_client_of_the_servers_version(self):
+        """Им ночью снимается бэкап (core/backup.py). Клиент младше сервера дамп снять
+        откажется, и узнать об этом было бы не от кого."""
+        server = self.services["db"]["image"].partition(":")[2].partition(".")[0]
+        dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertTrue(server.isdigit(), server)
+        self.assertIn(f" postgresql-client-{server} ", dockerfile)
+
     def test_redis_has_a_ceiling_and_keeps_the_task_queue_out_of_eviction(self):
         """У очереди Celery срока жизни нет — вытеснять можно только то, у чего он есть."""
         command = self.services["redis"]["command"]
@@ -232,6 +247,218 @@ class DeployTests(SimpleTestCase):
         self.assertTrue(used)
         for action in used:
             self.assertRegex(action, r"@[0-9a-f]{40}$")
+
+
+class BackupTests(TestCase):
+    """Ночной бэкап базы: дамп в хранилище под `backups/` и уборка старых."""
+
+    TODAY = date(2026, 10, 7)  # среда
+
+    def setUp(self):
+        self.storage = file_storage()
+        self.wipe()
+        self.addCleanup(self.wipe)  # каталог хранилища один на весь прогон
+
+    def wipe(self):
+        for key in under("backups"):
+            self.storage.delete(key)
+
+    def dumping(self, body=b"PGDMP-dump", code=0, stderr="", **database):
+        """Подменить pg_dump: настоящий в тестах звать не на чем. Что ему передали — в self.asked."""
+        def run(command, env, **kwargs):
+            self.asked = SimpleNamespace(command=command, env=env)
+            if not code:
+                target = next(arg for arg in command if arg.startswith("--file="))
+                Path(target.removeprefix("--file=")).write_bytes(body)
+            return subprocess.CompletedProcess(command, code, "", stderr)
+
+        told = {"NAME": "knt", "USER": "site", "PASSWORD": "s3cret", "HOST": "db", "PORT": "", **database}
+        base = patch("core.backup.connection", SimpleNamespace(vendor="postgresql", settings_dict=told))
+        tool = patch("core.backup.subprocess.run", side_effect=run)
+        self.addCleanup(base.stop)
+        self.addCleanup(tool.stop)
+        base.start()
+        return tool.start()
+
+    def put(self, *days):
+        for day in days:
+            self.storage.save(backup.key_for(day), ContentFile(b"old"))
+
+    def days_back(self, count):
+        return [self.TODAY - timedelta(days=n) for n in range(count)]
+
+    def test_the_dump_lands_in_the_storage_under_todays_date(self):
+        self.dumping(b"PGDMP-today")
+
+        key, size = backup.make()
+
+        self.assertEqual(key, f"backups/knt-{timezone.localdate():%Y-%m-%d}.dump")
+        self.assertEqual(size, len(b"PGDMP-today"))
+        with self.storage.open(key) as stored:
+            self.assertEqual(stored.read(), b"PGDMP-today")
+
+    def test_the_whole_database_is_asked_for_in_the_format_one_can_restore_from(self):
+        self.dumping()
+
+        backup.make()
+
+        command = self.asked.command
+        self.assertEqual((command[0], command[-1]), ("pg_dump", "knt"))
+        for part in ("--format=custom", "--username=site", "--host=db", "--port=5432"):
+            self.assertIn(part, command)
+
+    def test_the_password_goes_by_the_environment_and_not_by_the_arguments(self):
+        # Аргументы процесса видны всякому, кто смотрит список процессов.
+        self.dumping()
+
+        backup.make()
+
+        self.assertEqual(self.asked.env["PGPASSWORD"], "s3cret")
+        self.assertNotIn("s3cret", " ".join(self.asked.command))
+
+    def test_a_local_socket_gets_no_host_argument(self):
+        self.dumping(HOST="", PORT="5433")
+
+        backup.make()
+
+        self.assertFalse([part for part in self.asked.command if part.startswith("--host")])
+        self.assertIn("--port=5433", self.asked.command)
+
+    def test_a_second_run_the_same_day_replaces_the_first(self):
+        self.dumping(b"first")
+        backup.make()
+        self.dumping(b"second, longer")
+
+        key, _ = backup.make()
+
+        self.assertEqual(list(under("backups")), [key])
+        with self.storage.open(key) as stored:
+            self.assertEqual(stored.read(), b"second, longer")
+
+    def test_a_failed_dump_stores_nothing_and_says_why(self):
+        self.dumping(code=1, stderr="pg_dump: error: connection to server failed")
+
+        with self.assertRaisesMessage(backup.BackupError, "connection to server failed"):
+            backup.make()
+
+        self.assertEqual(list(under("backups")), [])
+
+    def test_only_postgres_is_backed_up(self):
+        tool = self.dumping()
+
+        with patch("core.backup.connection", SimpleNamespace(vendor="sqlite", settings_dict={})), \
+             self.assertRaisesMessage(backup.BackupError, "только с Postgres"):
+            backup.make()
+
+        tool.assert_not_called()
+
+    def test_two_weeks_of_days_and_two_months_of_sundays_are_kept(self):
+        days = self.days_back(120)
+        self.put(*days)
+
+        gone = backup.prune()
+
+        sundays = [day for day in days if day.isoweekday() == 7]
+        kept = set(days[:backup.KEEP_DAILY]) | set(sundays[:backup.KEEP_WEEKLY])
+        self.assertEqual(set(backup.stored()), kept)
+        self.assertEqual(len(kept), backup.KEEP_DAILY + backup.KEEP_WEEKLY - 2)  # два воскресенья уже среди дневных
+        self.assertEqual(len(gone), 120 - len(kept))
+
+    def test_a_missed_night_does_not_eat_an_older_backup(self):
+        """Считаем по тому, что лежит, а не по календарю: пять дампов за полгода — все пять на месте."""
+        rare = [self.TODAY - timedelta(days=n) for n in (1, 30, 60, 100, 170)]
+        self.put(*rare)
+
+        self.assertEqual(backup.prune(), [])
+        self.assertEqual(set(backup.stored()), set(rare))
+
+    def test_nothing_but_our_own_dumps_is_touched(self):
+        self.put(*self.days_back(40))
+        foreign = ["backups/заметка.txt", "backups/knt-2020-01-01.dump.part", "backups/2020/knt-2020-01-01.dump",
+                   "books/knt-2020-01-01.dump"]
+        for key in foreign:
+            self.storage.save(key, ContentFile(b"not ours"))
+        self.addCleanup(self.storage.delete, "books/knt-2020-01-01.dump")
+
+        backup.prune()
+
+        for key in foreign:
+            self.assertTrue(self.storage.exists(key), key)
+        self.assertNotIn(date(2020, 1, 1), backup.stored())
+
+    def test_the_nightly_task_makes_a_dump_and_drops_the_old_ones(self):
+        self.put(*[timezone.localdate() - timedelta(days=n) for n in range(1, 40)])
+        self.dumping(b"PGDMP-night")
+
+        answer = backup_database()
+
+        today = backup.key_for(timezone.localdate())
+        self.assertIn(f"{today}: {len(b'PGDMP-night')} байт", answer)
+        self.assertNotIn("старых снято: 0", answer)
+        self.assertTrue(self.storage.exists(today))
+        self.assertLessEqual(len(backup.stored()), backup.KEEP_DAILY + backup.KEEP_WEEKLY)
+
+    def test_the_schedule_runs_it_every_night(self):
+        entry = settings.CELERY_BEAT_SCHEDULE["backup-database"]
+
+        self.assertEqual(entry["task"], backup_database.name)
+        self.assertIn(entry["task"], celery_app.tasks)
+        self.assertEqual((entry["schedule"].hour, entry["schedule"].minute), ({3}, {40}))
+        self.assertEqual(len(entry["schedule"].day_of_week), 7)
+
+    def run_command(self, *args):
+        out = StringIO()
+        call_command("backup", *args, stdout=out)
+        return out.getvalue()
+
+    def test_the_command_lists_what_is_stored_without_making_a_new_one(self):
+        self.put(self.TODAY, self.TODAY - timedelta(days=1))
+        tool = self.dumping()
+
+        listing = self.run_command("--list")
+
+        tool.assert_not_called()
+        self.assertLess(listing.index("2026-10-07"), listing.index("2026-10-06"))  # свежие сверху
+        self.assertIn("всего: 2", listing)
+
+    def test_the_command_makes_a_backup_by_hand(self):
+        self.dumping(b"PGDMP-hand")
+
+        answer = self.run_command()
+
+        self.assertIn(f"снято: {backup.key_for(timezone.localdate())}", answer)
+        self.assertIn("всего: 1", answer)
+
+    def test_the_command_reports_a_failed_dump_as_its_own_error(self):
+        self.dumping(code=1, stderr="pg_dump: error: server version mismatch")
+
+        with self.assertRaisesMessage(CommandError, "server version mismatch"):
+            self.run_command()
+
+    def fetch(self, which):
+        screen = SimpleNamespace(buffer=BytesIO())
+        with patch("core.management.commands.backup.sys.stdout", screen):
+            call_command("backup", "--fetch", which, stdout=StringIO())
+        return screen.buffer.getvalue()
+
+    def test_the_command_hands_out_a_dump_byte_for_byte(self):
+        """Ради восстановления: дамп двоичный, и текстовый вывод команды его бы испортил."""
+        raw = b"PGDMP\x00\x01\xff\r\n\x80 binary"
+        self.put(self.TODAY - timedelta(days=3))
+        self.storage.save(backup.key_for(self.TODAY), ContentFile(raw))
+
+        self.assertEqual(self.fetch("latest"), raw)
+        self.assertEqual(self.fetch("2026-10-07"), raw)
+        self.assertEqual(self.fetch("2026-10-04"), b"old")
+
+    def test_asking_for_a_backup_that_is_not_there_names_what_is(self):
+        self.put(self.TODAY)
+
+        with self.assertRaisesMessage(CommandError, "Есть: 2026-10-07"):
+            self.fetch("2026-01-01")
+        self.wipe()
+        with self.assertRaisesMessage(CommandError, "ни одного"):
+            self.fetch("latest")
 
 
 class DevCommandTests(TestCase):

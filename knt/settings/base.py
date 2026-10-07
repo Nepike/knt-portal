@@ -175,6 +175,11 @@ CELERY_TIMEZONE = TIME_ZONE  # расписания beat считаются по
 # Ночью, потому что воркер один: уборка обходит весь бакет и на это время займёт его
 # целиком, а письма и телеграм подождут в очереди. В четыре часа их и так нет.
 CELERY_BEAT_SCHEDULE = {
+    # Бэкап базы — раньше уборки: он секундный, а уборка занимает воркер надолго.
+    "backup-database": {
+        "task": "core.tasks.backup_database",
+        "schedule": crontab(hour=3, minute=40),
+    },
     "sweep-storage": {
         "task": "attachments.tasks.sweep_storage",
         "schedule": crontab(hour=4, minute=20),

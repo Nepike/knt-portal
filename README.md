@@ -61,10 +61,25 @@ delivery backend for one that prints to the console — the message still travel
 through the queue.
 
 **A `beat` container is the alarm clock.** It runs no work of its own, it only drops scheduled
-tasks into the same queue (`CELERY_BEAT_SCHEDULE`). Today that is one job: a nightly
-`clean_uploads --apply` that sweeps abandoned uploads and lecture folders nothing points at.
-Its state file lives in the container's `/tmp` on purpose — the only thing persisting it would
-buy is a catch-up run after a restart, and a storage sweep has nothing to catch up on.
+tasks into the same queue (`CELERY_BEAT_SCHEDULE`). Today that is two jobs: a nightly database
+backup, and a nightly `clean_uploads --apply` that sweeps abandoned uploads and lecture folders
+nothing points at. Its state file lives in the container's `/tmp` on purpose — the only thing
+persisting it would buy is a catch-up run after a restart; a missed sweep has nothing to catch up
+on, and a missed backup is made by hand with `manage.py backup`.
+
+**The database is dumped every night.** At 03:40 the worker runs `pg_dump` (the client is installed
+in the image and must match the server's major version) and stores the dump in the bucket as
+`backups/knt-YYYY-MM-DD.dump`, then drops what is no longer needed: the last 14 dumps and the last
+8 Sunday ones stay. Nothing announces a failure — it is in the worker log, and
+`manage.py backup --list` shows what is actually there. Uploaded files are not part of the backup.
+To restore, on the server:
+
+```bash
+docker exec knt-worker-1 python manage.py backup --fetch latest > knt.dump   # or a date instead of latest
+docker compose stop web worker beat bot
+docker exec -i knt-db-1 pg_restore --clean --if-exists --no-owner -U knt -d knt < knt.dump
+docker compose up -d
+```
 
 **Files can live in two places.** With R2 credentials set they go to the bucket, and large uploads
 go straight from the browser to it; with the variables empty they land in `media/` on disk, which
@@ -82,7 +97,7 @@ would silently undo a debit that happened a moment earlier.
 
 ## Tests
 
-1229 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1247 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails

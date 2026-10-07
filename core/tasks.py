@@ -3,6 +3,9 @@ from celery import shared_task
 from .mail import deliver, report_failure
 
 MAIL_RETRIES = 3
+# Дамп сегодняшней базы — секунда, но база растёт, а общий потолок задач — минута.
+BACKUP_SOFT_LIMIT = 15 * 60
+BACKUP_LIMIT = BACKUP_SOFT_LIMIT + 5 * 60
 
 
 @shared_task(ignore_result=False)
@@ -27,3 +30,18 @@ def send_email(self, payload):
         if not isinstance(error, OSError) or self.request.retries >= MAIL_RETRIES:
             report_failure(payload, error)
         raise
+
+
+@shared_task(soft_time_limit=BACKUP_SOFT_LIMIT, time_limit=BACKUP_LIMIT)
+def backup_database():
+    """Ночной бэкап базы (core/backup.py): снять дамп, положить в хранилище, убрать лишние.
+
+    Ответ задачи уходит в лог воркера — по нему видно, что бэкап был и сколько он весит.
+    Не вышло — задача падает, и в том же логе остаётся ошибка pg_dump или хранилища.
+    """
+    # Импорт здесь: модуль тянет хранилище вложений, а задачи читаются при старте раньше моделей.
+    from . import backup
+
+    key, size = backup.make()
+    gone = backup.prune()
+    return f"{key}: {size} байт, старых снято: {len(gone)}"

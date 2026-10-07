@@ -11,9 +11,15 @@ COPY . .
 RUN tailwindcss -i theme/input.css -o core/static/core/css/base.css --minify
 
 # Главный контейнер с Django
-FROM python:3.12-slim
+# trixie назван явно: клиент Postgres 17 ниже берётся из его штатных пакетов, и молчаливая
+# смена выпуска Debian под тем же тегом однажды оставила бы сборку без этого пакета.
+FROM python:3.12-slim-trixie
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
+
+# pg_dump для ночного бэкапа базы (core/backup.py). Версия — та же, что у сервера
+# в docker-compose.yml: клиент младше сервера снять дамп откажется.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client-17 && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
