@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 2 32 42" width="32" height="42">
+<!-- Цвета одни на обе темы: светлое тело с обводкой видно и на белом, и на тёмном. -->
+<path d="M20 4C11 4 6 11 6 20v22l5-4 4.5 4 4.5-4 4.5 4 4.5-4 5 4V20C34 11 29 4 20 4z" fill="#f1ecf9" stroke="#cfc5e2" stroke-width="1.5" stroke-linejoin="round"/>
+<g fill="#2a1f40">
+<ellipse cx="15.5" cy="19" rx="2.2" ry="3.2"/>
+<ellipse cx="24.5" cy="19" rx="2.2" ry="3.2"/>
+<ellipse cx="20" cy="27" rx="2.6" ry="3.4"/>
+</g>
+</svg>

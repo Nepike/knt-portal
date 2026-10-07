@@ -26,7 +26,9 @@ class MediaIsolatedRunner(DiscoverRunner):
         celery_app.conf.task_eager_propagates = True
 
         self._media = tempfile.TemporaryDirectory()
-        self._override = override_settings(MEDIA_ROOT=self._media.name)
+        # SITE_THEME — обычный вид сайта, какой бы месяц ни стоял на календаре: скин тест
+        # включает явно. Иначе один и тот же набор в октябре и в ноябре проверял бы разное.
+        self._override = override_settings(MEDIA_ROOT=self._media.name, SITE_THEME="default")
         self._override.enable()
 
         storage = FileSystemStorage(location=self._media.name)

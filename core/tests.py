@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.conf import settings
+from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.base import ContentFile
@@ -33,8 +34,10 @@ from teachers.models import Review, Teacher
 from users.models import User
 
 from chats.models import Chat
+from wall.models import Board
 
 from . import backup, nav
+from .context_processors import theme_for
 from .search import by_name
 from .throttle import client_ip, throttled
 from .markup import render
@@ -774,6 +777,50 @@ class ContactsPageTests(TestCase):
         self.assertIn("Попов Алексей Васильевич", page)         # глава студсовета
         self.assertIn("mailto:knt.student.council@gmail.com", page)
 
+    # Деканат — как на странице дирекции на mipt.ru: человек, должность, телефон, почта.
+    DEANERY = [
+        ("Акимова Екатерина Александровна", "Заместитель директора по учебной работе", "+74991968970", "akimova.ea@mipt.ru"),
+        ("Правоторова Яна Витальевна", "Заместитель директора", "+74991968970", "pravotorova@mipt.ru"),
+        ("Давтян Александр Георгиевич", "Руководитель направления (учебный блок)", "+74991965311", None),
+        ("Михалева Ольга Владимировна", "Руководитель направления", "+74991964974", "mikhaleva.ov@mipt.ru"),
+        ("Гагиева Ирина Евгеньевна", "Специалист по методической работе", "+74991965311", "gagieva_2013@mail.ru"),
+    ]
+
+    def deanery(self):
+        """Карточки деканата по порядку: каждая — кусок разметки одного человека."""
+        section = self.page().content.decode().split("Деканат</h2>")[1].split("Студсовет</h2>")[0]
+        return re.findall(r'(?s)<div class="panel p-6.*?</div>', section)
+
+    def test_the_deans_office_is_listed_as_on_the_university_page(self):
+        """У каждого своя должность, свой телефон и своя почта — и стоят они в том же порядке."""
+        cards = self.deanery()
+
+        self.assertEqual(len(cards), len(self.DEANERY))
+        for card, (name, title, phone, email) in zip(cards, self.DEANERY):
+            with self.subTest(person=name):
+                self.assertIn(f">{name}<", card)
+                self.assertIn(f">{title}<", card)
+                self.assertIn(f'href="tel:{phone}"', card)
+                self.assertEqual(re.findall(r'href="mailto:([^"]+)"', card), [email] if email else [])
+
+    def test_the_old_titles_are_gone(self):
+        page = self.page().content.decode()
+
+        self.assertNotIn("Руководитель учебного блока", page)
+        self.assertNotIn("Руководитель административного блока", page)
+
+    def test_everyone_has_a_photo_that_is_really_there_but_the_one_without(self):
+        """У кого фотографии нет, тому инициалы — а не битая картинка и не чужое лицо."""
+        *with_photo, without = self.deanery()
+
+        for card in with_photo:
+            name, = re.findall(r'src="/static/(core/img/[\w-]+\.jpg)"', card)
+            with self.subTest(photo=name):
+                self.assertIsNotNone(finders.find(name))
+        self.assertEqual(len({re.search(r'src="([^"]+)"', card).group(1) for card in with_photo}), len(with_photo))
+        self.assertNotIn("<img", without)
+        self.assertIn(">ГИ<", without)
+
     def test_the_section_lights_up(self):
         self.assertEqual(self.page().context["section"], "contacts")
 
@@ -1098,3 +1145,168 @@ class FooterTests(TestCase):
         self.client.logout()
 
         self.assertContains(self.client.get(reverse("applicants")), "<footer")
+
+
+class SkinTests(TestCase):
+    """Событийный скин: класс `theme-<имя>` на <html> и блок правил в theme/input.css.
+
+    Весь набор гоняется с закреплённым обычным видом (core/test_runner.py) — иначе
+    в октябре он проверял бы одно, а в ноябре другое. Скин каждый тест включает сам.
+    """
+
+    CSS = settings.BASE_DIR / "theme" / "input.css"
+    GHOST = 'x-data="ghost"'
+
+    def setUp(self):
+        self.client.force_login(make_user("skin@t.local"))
+
+    def page(self, name="material_list"):
+        return self.client.get(reverse(name)).content.decode()
+
+    def test_halloween_lasts_all_of_october_and_not_a_day_more(self):
+        for day, skin in [
+            (date(2026, 9, 30), "default"), (date(2026, 10, 1), "halloween"),
+            (date(2026, 10, 31), "halloween"), (date(2026, 11, 1), "default"),
+        ]:
+            with self.subTest(day=day):
+                self.assertEqual(theme_for(day), skin)
+
+    def test_the_test_run_itself_is_pinned_to_the_plain_look(self):
+        self.assertEqual(settings.SITE_THEME, "default")
+        self.assertIn('class="theme-default"', self.page())
+
+    @override_settings(SITE_THEME=None)
+    def test_left_to_itself_the_site_asks_the_calendar(self):
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 10, 15)):
+            self.assertIn('class="theme-halloween"', self.page())
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 11, 15)):
+            self.assertIn('class="theme-default"', self.page())
+
+    @override_settings(SITE_THEME="halloween")
+    def test_a_forced_skin_is_shown_whatever_the_date(self):
+        """Так скин смотрят до его дат: ставят имя в настройках разработки."""
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 7, 1)):
+            self.assertIn('class="theme-halloween"', self.page())
+
+    def test_the_plain_logo_is_whitened_in_the_dark(self):
+        page = self.page()
+
+        self.assertIn("core/img/logo.svg", page)
+        self.assertNotIn("skin-logo", page)
+        self.assertIn("dark:invert", page)
+
+    @override_settings(SITE_THEME="halloween")
+    def test_the_halloween_logo_is_drawn_by_the_skin_and_stays_red_in_the_dark(self):
+        """Логотип скина — маска в цвет акцента (.skin-logo), а не картинка. Обычный в тёмной
+        теме белят фильтром; красный побелел бы тоже — и от скина в шапке не осталось бы ничего."""
+        page = self.page()
+
+        self.assertIn("skin-logo", page)
+        self.assertNotIn("core/img/logo.svg", page)
+        self.assertNotIn("dark:invert", page)
+
+    @override_settings(SITE_THEME="halloween")
+    def test_a_guest_gets_the_halloween_logo_too(self):
+        self.client.logout()
+
+        self.assertIn("skin-logo", self.page("login"))
+
+    @override_settings(SITE_THEME="halloween")
+    def test_the_ghost_sits_in_the_corner_of_an_ordinary_page(self):
+        for name in ("material_list", "bookmark_list", "shop"):
+            with self.subTest(page=name):
+                self.assertIn(self.GHOST, self.page(name))
+
+    @override_settings(SITE_THEME="halloween")
+    def test_the_ghost_keeps_out_of_the_chat_and_the_wall(self):
+        """В обоих разделах правый нижний угол окна занят: кнопка отправки и палитра."""
+        Board.objects.create(title="Стена", width=8, height=4)
+
+        for name in ("chat_list", "wall"):
+            with self.subTest(page=name):
+                page = self.page(name)
+
+                self.assertIn('class="theme-halloween"', page)
+                self.assertNotIn(self.GHOST, page)
+
+    @override_settings(SITE_THEME="halloween")
+    def test_a_guest_sees_no_ghost(self):
+        self.client.logout()
+
+        page = self.page("applicants")
+
+        self.assertIn('class="theme-halloween"', page)
+        self.assertNotIn(self.GHOST, page)
+
+    def test_there_is_no_ghost_without_the_skin(self):
+        self.assertNotIn(self.GHOST, self.page())
+
+    def test_the_ornament_of_the_shell_is_for_those_who_are_in(self):
+        """Паутина, луна с мышами и паук держатся за панель, шапку и колонку вошедшего.
+        У гостя шапка другая, и крючков на ней нет: на витринных страницах орнамент свой."""
+        inside = self.page()
+        self.client.logout()
+        outside = self.page("applicants")
+
+        for hook in ("site-aside", "site-header", "site-body"):
+            with self.subTest(hook=hook):
+                self.assertIn(hook, inside)
+                self.assertNotIn(hook, outside)
+
+    def test_every_hook_the_skins_hang_on_is_there_in_the_markup(self):
+        """Скин держится за классы-крючки. Переименуй такой в шаблоне — и оформление
+        отвалится молча: ни ошибки, ни упавшей страницы."""
+        hooks = set(re.findall(r"\.((?:skin|site)-[a-z-]+|page-title|brand-name)\b", self.CSS.read_text(encoding="utf-8")))
+        markup = "\n".join(path.read_text(encoding="utf-8") for path in settings.BASE_DIR.glob("*/templates/**/*.html"))
+        # Без комментариев: крючок, который остался только в пояснении к шаблону, — потерян.
+        markup = re.sub(r"(?s){% comment %}.*?{% endcomment %}|{#.*?#}", "", markup)
+
+        self.assertGreaterEqual(len(hooks), 12)
+        for hook in sorted(hooks):
+            with self.subTest(hook=hook):
+                self.assertRegex(markup, rf"(?<![\w-]){re.escape(hook)}(?![\w-])")
+
+    def test_every_file_the_stylesheet_points_to_is_in_place(self):
+        """Ссылка в никуда роняет сборку статики на бою (StaticBuildTests), но тот тест
+        видит только собранный css — а его в репозитории нет. Здесь смотрим в исходник."""
+        static = settings.BASE_DIR / "core" / "static" / "core"
+        urls = re.findall(r"url\('\.\./([^')]+)'\)", self.CSS.read_text(encoding="utf-8"))
+
+        self.assertGreaterEqual(len(urls), 10)
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertTrue((static / url).is_file())
+
+    def test_every_picture_the_skin_markup_names_is_in_place(self):
+        """На бою `{% static %}` на файл, которого нет, — это ошибка 500 на каждой странице."""
+        for template in ("core/_logo.html", "core/halloween/_ghost.html"):
+            source = (settings.BASE_DIR / "core" / "templates" / template).read_text(encoding="utf-8")
+            names = re.findall(r"{% static '([^']+)' %}", source)
+
+            self.assertTrue(names, template)
+            for name in names:
+                with self.subTest(file=name):
+                    self.assertIsNotNone(finders.find(name))
+
+
+class UnreadBadgeTests(SimpleTestCase):
+    """Пустой счётчик непрочитанного не виден.
+
+    Прячет его класс hidden, а раскладку даёт inline-flex — оба про display, и в собранном
+    css побеждает тот, что ниже. Ниже оказался inline-flex, и у всех, кому никто не писал,
+    рядом с «Сообщениями» стоял «0». Чинит это отдельное правило в theme/input.css; проверить
+    его действие без браузера нельзя, поэтому сторожим хотя бы само правило.
+    """
+
+    def test_the_stylesheet_hides_the_empty_badge_by_a_rule_of_its_own(self):
+        css = (settings.BASE_DIR / "theme" / "input.css").read_text(encoding="utf-8")
+
+        self.assertRegex(css, r"(?m)^#unread-badge\.hidden \{\s*display: none;\s*\}")
+
+    def test_the_badge_still_carries_both_classes_the_rule_is_there_for(self):
+        """Уберут из разметки hidden или inline-flex — правило станет не нужно, и этот
+        тест напомнит убрать и его."""
+        badge = (settings.BASE_DIR / "chats" / "templates" / "chats" / "_unread_badge.html").read_text(encoding="utf-8")
+
+        self.assertIn("inline-flex", badge)
+        self.assertIn("{% if not unread_total %}hidden{% endif %}", badge)

@@ -1,0 +1,12 @@
+{% load static %}
+{% comment %}
+  Логотип в шапке — и у вошедшего, и у гостя. Отдельным файлом из-за скинов: у хэллоуина
+  он свой, с подтёками, и рисуется не картинкой, а маской (.skin-logo в theme/input.css) —
+  так он красится ровно в акцент скина, свой у светлой и у тёмной темы. Маска выше обычного
+  логотипа на подтёки; лишнее снимает отрицательный отступ, и строка шапки не подрастает.
+{% endcomment %}
+{% if site_theme == "halloween" %}
+<span role="img" aria-label="Логотип" class="skin-logo block {{ width }} -mb-2 shrink-0"></span>
+{% else %}
+<img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="{{ width }} aspect-square shrink-0 dark:brightness-0 dark:invert">
+{% endif %}

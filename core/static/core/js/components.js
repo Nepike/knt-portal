@@ -1696,4 +1696,22 @@ document.addEventListener("alpine:init", () => {
     pick(o) { this.selected.push(o.value); this.query = ""; this.activeIndex = 0; this.changed(); this.focusSearch(); },
     remove(v) { this.selected = this.selected.filter((x) => x !== v); this.changed(); },
   }));
+
+  // Привидение хэллоуинского скина (core/halloween/_ghost.html): нажали — пугает и прячется
+  // до завтра. Помним день, а не срок: «до завтра» — это до смены даты у человека, а не
+  // через сутки. Шведская запись даты — ГГГГ-ММ-ДД, и по местным часам, в отличие от ISO.
+  const today = () => new Date().toLocaleDateString("sv");
+  Alpine.data("ghost", () => ({
+    away: false, scared: false,
+    init() {
+      try { this.away = localStorage.getItem("ghost-away") === today(); } catch { /* приватный режим */ }
+    },
+    scare() {
+      if (this.scared) return;
+      this.scared = true;
+      try { localStorage.setItem("ghost-away", today()); } catch { /* приватный режим */ }
+      // 900 мс — длина skin-vanish и skin-pop в theme/input.css: даём им доиграть.
+      setTimeout(() => { this.away = true; }, 900);
+    },
+  }));
 });

@@ -12,7 +12,7 @@
      class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
     <i class="fa-solid fa-arrow-left"></i>{% if book %}К книге{% else %}Библиотека{% endif %}
   </a>
-  <h1 class="text-2xl font-bold mt-4 mb-6">{% if book %}Редактирование книги{% else %}Новая книга{% endif %}</h1>
+  <h1 class="page-title text-2xl font-bold mt-4 mb-6">{% if book %}Редактирование книги{% else %}Новая книга{% endif %}</h1>
 
   {% include "library/_book_form.html" %}
 

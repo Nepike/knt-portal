@@ -61,14 +61,14 @@
     оставляет на виду блок аккаунта, он прижат к низу через mt-auto.
   {% endcomment %}
   {% if request.user.is_authenticated %}
-  <aside class="fixed top-0 left-0 z-40 h-lvh w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 transition-transform duration-200 -translate-x-full lg:translate-x-0"
+  <aside class="site-aside fixed top-0 left-0 z-40 h-lvh w-64 bg-white dark:bg-slate-900 border-r-2 border-slate-200 dark:border-slate-800 transition-transform duration-200 -translate-x-full lg:translate-x-0"
          :class="sidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
     <div class="h-dvh overflow-y-auto p-4 flex flex-col">
 
          <a href="{% url 'home' %}" class="flex items-center gap-2.5 px-2 pb-4">
-          <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-11 h-11 shrink-0 dark:brightness-0 dark:invert">
+          {% include "core/_logo.html" with width="w-11" %}
           <span>
-            <span class="block font-bold text-2xl leading-none">КНТ</span>
+            <span class="brand-name block font-bold text-2xl leading-none">КНТ</span>
             <span class="block text-[12px] font-medium text-slate-400 leading-none">Студенческий сайт</span>
           </span>
         </a>
@@ -176,10 +176,10 @@
   {% block page_background %}{% endblock %}
 
   {# h-dvh вместо min-h-dvh (чат, стена) — flex-1 распределяет только ОПРЕДЕЛЁННУЮ высоту #}
-  <div class="{% if request.user.is_authenticated %}lg:pl-64 {% endif %}flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
+  <div class="{% if request.user.is_authenticated %}site-body lg:pl-64 {% endif %}flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
     {# Заливка своя, а не с body: под ней проходит косметический фон профиля #}
     {% if request.user.is_authenticated %}
-    <header class="sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+    <header class="site-header sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
         {% comment %}
@@ -207,9 +207,9 @@
     <header class="sticky top-0 z-20 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <div class="w-full max-w-5xl mx-auto px-4 sm:px-6 flex flex-wrap items-center gap-x-2 max-sm:py-2 sm:h-14">
         <a href="{% url 'applicants' %}" class="flex items-center gap-2.5 mr-auto">
-          <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-10 h-10 shrink-0 dark:brightness-0 dark:invert">
+          {% include "core/_logo.html" with width="w-10" %}
           <span>
-            <span class="block font-bold text-xl leading-none">КНТ</span>
+            <span class="brand-name block font-bold text-xl leading-none">КНТ</span>
             <span class="block text-[11px] font-medium text-slate-400 leading-none mt-0.5">Студенческий сайт</span>
           </span>
         </a>
@@ -240,6 +240,11 @@
     </footer>
     {% endblock %}
   </div>
+
+  {% if site_theme == "halloween" and request.user.is_authenticated %}
+  {# В чате и на Стене в этом углу своё: кнопка отправки и палитра. #}
+  {% if section != "chats" and section != "wall" %}{% include "core/halloween/_ghost.html" %}{% endif %}
+  {% endif %}
 
   {# Тосты: Django messages + событие $dispatch('toast', {type, text}) из любого места #}
   <div class="fixed top-16 right-4 z-50 flex flex-col gap-2 items-end"

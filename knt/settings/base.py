@@ -90,6 +90,11 @@ TIME_ZONE = "Europe/Moscow"
 USE_I18N = True
 USE_TZ = True
 
+# Событийный скин (core/context_processors.py): None — по календарю, имя — принудительно.
+# Принудительно ставят в dev.py, чтобы посмотреть скин до его дат. Тесты так закрепляют
+# обычный вид: иначе набор проверял бы разное в зависимости от месяца (core/test_runner.py).
+SITE_THEME = None
+
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"

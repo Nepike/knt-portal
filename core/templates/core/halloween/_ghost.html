@@ -1,0 +1,15 @@
+{% load static %}
+{% comment %}
+  Привидение в углу окна — только на широком экране: на узком этот угол занят контентом,
+  и там оно выглядывает из-за первой карточки ленты (.skin-peek-* в theme/input.css).
+
+  Кнопка, а не картинка: нажал — «Бу!» — и до завтра его нет (ghost в components.js).
+  Кого привидение отвлекает, тому это заодно способ его убрать.
+{% endcomment %}
+<div x-data="ghost" x-show="!away" x-cloak class="hidden lg:block fixed bottom-4 right-5 z-10">
+  <span x-show="scared" x-cloak class="skin-boo" aria-hidden="true">Бу!</span>
+  <button type="button" @click="scare()" class="skin-ghost block" :class="scared && 'skin-ghost-off'"
+          aria-label="Спрятать привидение до завтра">
+    <img src="{% static 'core/img/halloween/ghost.svg' %}" alt="" class="w-13 h-auto">
+  </button>
+</div>

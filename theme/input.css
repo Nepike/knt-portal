@@ -29,6 +29,15 @@
   font-weight: 900;
   src: url('../fonts/rubik-v31-cyrillic_latin-900.woff2') format('woff2');
 }
+/* Потёкший Rubik — заголовки хэллоуинского скина. Браузер качает шрифт, только когда им
+   что-то набрано, так что остальные одиннадцать месяцев эти 105 КБ никому не едут. */
+@font-face {
+  font-display: swap;
+  font-family: 'Rubik Wet Paint';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../fonts/rubik-wet-paint-v2-cyrillic_latin-regular.woff2') format('woff2');
+}
 
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -413,4 +422,330 @@ html { color-scheme: light; }
 
 [x-cloak] {
   display: none !important;
+}
+
+
+/* Счётчик непрочитанного прячется классом hidden, а раскладку ему даёт inline-flex. Оба
+   про display, и в собранном css побеждает тот, что ниже, — inline-flex: пустой счётчик
+   показывал «0». Правило вне слоёв, чтобы порядок утилит тут ничего не решал. */
+#unread-badge.hidden {
+  display: none;
+}
+
+
+/* ───────── Событийные скины ─────────
+   Скин — это класс `theme-<имя>` на <html> (ставит core/context_processors.py) и блок
+   правил ниже. Правила стоят ВНЕ слоёв и потому перебивают и компоненты, и утилиты:
+   шаблоны ради скина почти не ветвятся, в разметке у него только крючки —
+     .page-title       название страницы         .brand-name    «КНТ» у логотипа
+     .site-aside       боковая панель            .site-header   шапка вошедшего
+     .site-body        колонка справа от панели  .skin-logo     логотип скина
+     .skin-peek-card,  лента карточек            .skin-empty    «ничего не нашлось»
+     .skin-peek-head
+   Всё, что крючок рисует, — псевдоэлементы и файлы из core/static/core/img/<имя>/.
+   Что крючки не разошлись с разметкой, а файлы лежат на месте, следит core.tests.SkinTests. */
+
+/* Хэллоуин — весь октябрь.
+   Серая шкала целиком уходит в сливовый: утилиты Tailwind берут цвет из этих переменных,
+   и перекрашивается разом весь сайт. Шкала одна на обе темы, как и сам slate: светлая
+   тема берёт её светлый конец, тёмная — тёмный. */
+.theme-halloween {
+  --color-slate-50: #f4f1fa;
+  --color-slate-100: #ece6f7;
+  --color-slate-200: #e3dcf0;
+  --color-slate-300: #cfc5e2;
+  --color-slate-400: #a596c2;
+  --color-slate-500: #6b5f84;
+  --color-slate-600: #4c4063;
+  --color-slate-700: #3b2d57;
+  --color-slate-800: #2a1f40;
+  --color-slate-900: #171026;
+  --color-slate-950: #0d0816;
+
+  /* Кровавый — один на акцент, заголовки и логотип. Отдельный тыквенный акцент рядом
+     с красными заголовками спорил с ними. По нему идёт белый текст кнопок (контраст 6.3). */
+  --color-accent: #be123c;
+  --slime: #4d7c0f;
+  --on-slime: #ffffff;
+}
+.theme-halloween.dark {
+  --color-accent: #fb4d6d;
+  --slime: #b4f04a;
+  --on-slime: #14210a;
+}
+
+/* Счётчик непрочитанного — единственное зелёное пятно: красный значок среди красного же
+   акцента терялся. */
+.theme-halloween #unread-badge {
+  background-color: var(--slime);
+  color: var(--on-slime);
+}
+
+/* Акцент стал красным и совпал с «опасной» кнопкой: «Сохранить» и «Удалить» рядом вышли
+   одного цвета. На время скина опасная — контурная: их различает форма, а не оттенок. */
+.theme-halloween .btn-danger {
+  background-color: transparent;
+  color: var(--color-accent);
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+.theme-halloween .btn-danger:hover {
+  background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+/* Потёкшим шрифтом — только названия страниц и «КНТ». Названия материалов, имена людей
+   и всё, что мельче, остаётся обычным: длинную строку таким шрифтом не прочесть. */
+.theme-halloween .page-title,
+.theme-halloween .brand-name,
+.theme-halloween .skin-boo {
+  font-family: "Rubik Wet Paint", var(--font-sans);
+  /* Начертание у шрифта одно. Жирное браузер дорисовал бы сам, и потёки слиплись бы. */
+  font-weight: 400;
+}
+.theme-halloween .page-title {
+  color: var(--color-accent);
+  /* Крупнее обычного заголовка: мелким кеглем потёки превращаются в грязь. */
+  font-size: 1.875rem;
+  line-height: 2.25rem;
+}
+@media (width >= 40rem) {
+  .theme-halloween .page-title {
+    font-size: 2.125rem;
+    line-height: 2.5rem;
+  }
+}
+
+/* Логотип скина — маска, а не картинка: так он красится ровно в акцент, свой у светлой
+   и у тёмной темы. Картинке в <img> цвет из css не передать, а фильтром в нужный оттенок
+   не попасть. Файл выше обычного логотипа на подтёки — отсюда и пропорция. */
+.theme-halloween .skin-logo {
+  aspect-ratio: 963.61 / 1117.5;
+  background-color: var(--color-accent);
+  mask: url('../img/halloween/logo.svg') center / contain no-repeat;
+}
+
+/* Значок валюты на месяц — конфета. Одним правилом на все места разом: значок везде
+   один и тот же, .fa-cent-sign. Маска красит конфету в цвет соседнего текста, как
+   красился и сам значок, — на красной кнопке «Купить» красная конфета пропала бы. */
+.theme-halloween .fa-cent-sign::before {
+  content: "";
+  display: inline-block;
+  width: 1.5em;
+  height: 0.82em;
+  background-color: currentColor;
+  mask: url('../img/halloween/candy.svg') center / contain no-repeat;
+}
+
+/* Паутина в углу боковой панели. z-index: -1 кладёт её под содержимое панели, но над
+   заливкой: панель сама себе стопка (fixed и z-40). */
+.theme-halloween .site-aside::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: -1;
+  width: 5.25rem;
+  height: 5.25rem;
+  pointer-events: none;
+  background-color: color-mix(in srgb, var(--color-slate-600) 30%, transparent);
+  mask: url('../img/halloween/web.svg') center / contain no-repeat;
+}
+.theme-halloween.dark .site-aside::before {
+  background-color: color-mix(in srgb, var(--color-slate-300) 26%, transparent);
+}
+
+/* Луна с летучими мышами — в пустой левой части шапки, сразу за кнопкой меню.
+   Картинка одна; на узком экране от неё видно луну и две мыши: третья упёрлась бы
+   в кнопки справа. */
+.theme-halloween .site-header::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4.75rem;
+  width: 7.125rem;
+  height: 2.25rem;
+  transform: translateY(-50%);
+  pointer-events: none;
+  background: url('../img/halloween/sky.svg') left center / auto 100% no-repeat;
+}
+@media (width >= 64rem) {
+  /* Панель открыта, кнопки меню нет — картинка встаёт к краю и помещается целиком. */
+  .theme-halloween .site-header::before {
+    left: 1.75rem;
+    width: 11.25rem;
+    height: 2.625rem;
+  }
+}
+
+/* Паук висит под шапкой, под кнопками уведомлений и темы. Нитка короткая не от скупости:
+   от шапки до содержимого страницы 24 пикселя (py-6 у main), и на длинной паук лёг бы
+   на кнопку «Добавить…» в строке заголовка. Держится он за колонку, а не за шапку: та —
+   своя стопка поверх страницы, а ему с z-index: -1 место ПОД содержимым, так что и там,
+   где поля сверху нет (чат, Стена), он уходит под панели, а не ложится на них. */
+.theme-halloween .site-body {
+  position: relative;
+}
+.theme-halloween .site-body::before {
+  content: "";
+  position: absolute;
+  top: 3.5rem;
+  right: 3.8125rem;
+  z-index: -1;
+  width: 1.125rem;
+  height: 1.4375rem;
+  pointer-events: none;
+  background-color: var(--color-slate-600);
+  mask: url('../img/halloween/spider.svg') center / contain no-repeat;
+  transform-origin: 50% 0;
+  animation: skin-sway 5s ease-in-out infinite;
+}
+.theme-halloween.dark .site-body::before {
+  background-color: var(--color-slate-300);
+}
+
+/* Шапки витринных страниц («Абитуриентам», «Контакты»). Фирменная фиолетовая заливка
+   рядом с кровавым акцентом выглядела чужой. Рисунок заливки прежний — прозрачный угол
+   над снимком, плотный под текстом, — гамма скина: от кровавого к почти чёрному.
+   Правило одно на обе темы: белый текст держится на тёмном конце в любой. */
+.theme-halloween .hero-veil {
+  background-image: linear-gradient(135deg,
+    color-mix(in srgb, #fb4d6d 22%, transparent) 0%,
+    color-mix(in srgb, #9f1239 78%, transparent) 28%,
+    color-mix(in srgb, #1c0812 97%, transparent) 100%);
+}
+.theme-halloween .hero-veil-map {
+  background-image: linear-gradient(280deg,
+    color-mix(in srgb, #fb4d6d 12%, transparent) 0%,
+    color-mix(in srgb, #9f1239 84%, transparent) 45%,
+    #9f1239 100%);
+}
+/* Снимки под заливкой свои цвета тоже несут: плазма синяя, карта пёстрая. Плазму
+   доворачиваем в красный, карту обесцвечиваем — иначе сквозь заливку лезет чужая гамма. */
+.theme-halloween .hero-photo {
+  filter: grayscale(1) contrast(1.05);
+}
+.theme-halloween .hero-photo-plasma {
+  filter: hue-rotate(85deg) saturate(1.25) brightness(0.95);
+}
+/* Паутина в углу шапки и три мыши рядом (мыши — только с ширины планшета: на телефоне
+   на их месте логотип). */
+.theme-halloween :is(.hero-veil, .hero-veil-map)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6rem;
+  height: 6rem;
+  background-color: rgb(255 255 255 / 0.32);
+  mask: url('../img/halloween/web.svg') center / contain no-repeat;
+}
+@media (width >= 40rem) {
+  .theme-halloween :is(.hero-veil, .hero-veil-map)::before {
+    width: 8rem;
+    height: 8rem;
+  }
+  .theme-halloween :is(.hero-veil, .hero-veil-map)::after {
+    content: "";
+    position: absolute;
+    top: 1.25rem;
+    right: 8.5rem;
+    width: 7.5rem;
+    height: 2.875rem;
+    background-color: rgb(255 255 255 / 0.3);
+    mask: url('../img/halloween/bats.svg') center / contain no-repeat;
+  }
+}
+
+/* Привидение. На широком экране это кнопка в углу окна (core/halloween/_ghost.html).
+   На узком угол занят контентом, и оно выглядывает из-за первой карточки ленты:
+   z-index: -1 уводит его ПОД карточку, так что закрыть оно не может ничего. */
+.theme-halloween .skin-ghost {
+  animation: skin-bob 4s ease-in-out infinite;
+}
+.theme-halloween .skin-ghost-off {
+  animation: skin-vanish 0.9s ease-in forwards;
+}
+.theme-halloween .skin-boo {
+  position: absolute;
+  right: 3.75rem;
+  bottom: 4.25rem;
+  font-size: 2rem;
+  line-height: 1;
+  color: var(--color-accent);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: skin-pop 0.9s ease-out forwards;
+}
+.theme-halloween .skin-empty::before {
+  content: "";
+  display: block;
+  width: 2.875rem;
+  height: 3.75rem;
+  margin: 0 auto 0.75rem;
+  background: url('../img/halloween/ghost.svg') center / contain no-repeat;
+  animation: skin-peek 4s ease-in-out infinite;
+}
+@media (width < 64rem) {
+  .theme-halloween .skin-peek-card > article:first-of-type::before,
+  .theme-halloween .skin-peek-head > div:first-of-type:has(> h2)::after {
+    content: "";
+    position: absolute;
+    right: 1.125rem;
+    z-index: -1;
+    width: 2.8125rem;
+    height: 3.6875rem;
+    pointer-events: none;
+    background: url('../img/halloween/ghost.svg') center / contain no-repeat;
+    animation: skin-peek 4s ease-in-out infinite;
+  }
+  .theme-halloween .skin-peek-card > article:first-of-type::before {
+    top: -2.375rem;
+  }
+  /* Карточка курса обрезает всё, что из неё торчит (overflow-hidden ради обложки),
+     поэтому в лектории привидение держится за заголовок года над ней. */
+  .theme-halloween .skin-peek-head > div:first-of-type:has(> h2) {
+    position: relative;
+  }
+  .theme-halloween .skin-peek-head > div:first-of-type:has(> h2)::after {
+    top: calc(100% - 1.375rem);
+  }
+  /* Линия у года иначе прошла бы привидению по макушке. */
+  .theme-halloween :is(.skin-peek-card, .skin-peek-head) > div:first-of-type:has(> h2) {
+    padding-right: 4.75rem;
+  }
+}
+
+@keyframes skin-sway {
+  0%, 100% { transform: rotate(-5deg); }
+  50% { transform: rotate(5deg); }
+}
+@keyframes skin-bob {
+  0%, 100% { transform: translateY(0) rotate(8deg); }
+  50% { transform: translateY(-8px) rotate(5deg); }
+}
+@keyframes skin-peek {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+/* Длина этих двух — 0.9 с — записана и в ghost (components.js): по ней он прячет кнопку. */
+@keyframes skin-vanish {
+  0% { opacity: 1; transform: translateY(0) rotate(8deg) scale(1); }
+  30% { opacity: 1; transform: translateY(-6px) rotate(-6deg) scale(1.15); }
+  100% { opacity: 0; transform: translateY(-28px) rotate(8deg) scale(0.7); }
+}
+@keyframes skin-pop {
+  0% { opacity: 0; transform: scale(0.4) rotate(-12deg); }
+  25% { opacity: 1; transform: scale(1.15) rotate(-8deg); }
+  70% { opacity: 1; transform: scale(1) rotate(-8deg); }
+  100% { opacity: 0; transform: scale(1) rotate(-8deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-halloween .site-body::before,
+  .theme-halloween .skin-ghost,
+  .theme-halloween .skin-ghost-off,
+  .theme-halloween .skin-boo,
+  .theme-halloween .skin-empty::before,
+  .theme-halloween .skin-peek-card > article:first-of-type::before,
+  .theme-halloween .skin-peek-head > div:first-of-type::after {
+    animation: none;
+  }
 }

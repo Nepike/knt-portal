@@ -95,11 +95,21 @@ partial unique constraint guarantees at most one active board; with none the pag
 `user.save()`, which writes every field at once; had the balance been a user field, such a save
 would silently undo a debit that happened a moment earlier.
 
+**A seasonal skin is a class on `<html>`.** `core/context_processors.py` picks it by date —
+`halloween` for the whole of October, `default` otherwise — and the page gets `theme-<name>` on its
+root element. Everything a skin changes is one block in `theme/input.css`, kept outside the
+cascade layers so that it wins over utilities: it overrides the slate scale and the accent, which
+Tailwind utilities read from variables, so the whole site is recoloured without touching a
+template, and it draws its decorations as pseudo-elements on a few hook classes (`page-title`,
+`site-header`, `skin-…`). Pictures live in `core/static/core/img/<name>/`. `SITE_THEME` in the
+settings forces a skin whatever the date — that is how one is looked at before its month.
+
 ## Tests
 
-1247 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1267 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
-by accident; it also makes Celery eager. One test builds the static files
+by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
+suite checks the same thing in October as in any other month. One test builds the static files
 the way the production container does, because a dangling reference inside a vendored `.js` fails
 `collectstatic` and stops the container from starting at all.
 

@@ -8,8 +8,7 @@
   и форма. Порядок тот же и не случаен — сначала способы спросить живого человека,
   форма последней: ответ на неё приходит не мгновенно.
 
-  TODO (контент): состав деканата поменяется, и контактов станет больше. Каждый человек
-  здесь — один блок в сетке, добавить нового значит скопировать шесть строк.
+  Деканат сверен со страницей дирекции на mipt.ru 8 окт 2026: оттуда и состав, и должности.
 {% endcomment %}
 {% block meta %}
 <meta name="description" content="Как добраться до КНТ: Москва, улица Максимова, 4. Телефоны деканата, состав студсовета и форма обратной связи.">
@@ -59,22 +58,53 @@
   </section>
 
   {# ===== Деканат ===== #}
+  {% comment %}
+    Люди, должности и порядок — как на странице дирекции на mipt.ru (сверено 8 окт 2026).
+    Ряд — flex с переносом, а не сетка: неполная последняя строка встаёт по центру, и
+    добавить человека значит скопировать блок, ничего не пересчитывая.
+  {% endcomment %}
   <section>
     <h2 class="text-2xl font-bold mb-4">Деканат</h2>
-    <div class="grid gap-4 sm:grid-cols-2">
+    <div class="flex flex-wrap justify-center gap-4">
 
-      <div class="panel p-6 flex flex-col items-center text-center">
+      <div class="panel p-6 flex flex-col items-center text-center w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc((100%-2rem)/3)]">
+        <img src="{% static 'core/img/akimova.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
+        <p class="mt-4 font-bold">Акимова Екатерина Александровна</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Заместитель директора по учебной работе</p>
+        <a href="tel:+74991968970" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑89‑70</a>
+        <a href="mailto:akimova.ea@mipt.ru" class="mt-1 text-sm text-accent hover:underline">akimova.ea@mipt.ru</a>
+      </div>
+
+      <div class="panel p-6 flex flex-col items-center text-center w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc((100%-2rem)/3)]">
+        <img src="{% static 'core/img/pravotorova.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
+        <p class="mt-4 font-bold">Правоторова Яна Витальевна</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Заместитель директора</p>
+        <a href="tel:+74991968970" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑89‑70</a>
+        <a href="mailto:pravotorova@mipt.ru" class="mt-1 text-sm text-accent hover:underline">pravotorova@mipt.ru</a>
+      </div>
+
+      <div class="panel p-6 flex flex-col items-center text-center w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc((100%-2rem)/3)]">
         <img src="{% static 'core/img/davtjan.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
         <p class="mt-4 font-bold">Давтян Александр Георгиевич</p>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель учебного блока</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель направления (учебный блок)</p>
         <a href="tel:+74991965311" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑53‑11</a>
       </div>
 
-      <div class="panel p-6 flex flex-col items-center text-center">
+      <div class="panel p-6 flex flex-col items-center text-center w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc((100%-2rem)/3)]">
         <img src="{% static 'core/img/mih.jpg' %}" alt="" class="w-32 h-32 rounded-full object-cover">
         <p class="mt-4 font-bold">Михалева Ольга Владимировна</p>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель административного блока</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Руководитель направления</p>
         <a href="tel:+74991964974" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑49‑74</a>
+        <a href="mailto:mikhaleva.ov@mipt.ru" class="mt-1 text-sm text-accent hover:underline">mikhaleva.ov@mipt.ru</a>
+      </div>
+
+      <div class="panel p-6 flex flex-col items-center text-center w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc((100%-2rem)/3)]">
+        {# Фотографии пока нет — инициалы на подложке, как у аватара без фото #}
+        <span class="w-32 h-32 rounded-full flex items-center justify-center bg-slate-200 dark:bg-slate-700 text-3xl font-medium text-slate-500 dark:text-slate-300">ГИ</span>
+        <p class="mt-4 font-bold">Гагиева Ирина Евгеньевна</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Специалист по методической работе</p>
+        <a href="tel:+74991965311" class="mt-3 font-medium text-accent hover:underline">+7&nbsp;(499)&nbsp;196‑53‑11</a>
+        <a href="mailto:gagieva_2013@mail.ru" class="mt-1 text-sm text-accent hover:underline">gagieva_2013@mail.ru</a>
       </div>
 
     </div>
