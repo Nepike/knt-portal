@@ -13,6 +13,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "knt.settings.dev")
 django_asgi_app = get_asgi_application()
 
 from chats.routing import websocket_urlpatterns as chat_sockets  # noqa: E402
+from core.lockdown import SocketGate  # noqa: E402
 from wall.routing import websocket_urlpatterns as wall_sockets  # noqa: E402
 
 application = ProtocolTypeRouter({
@@ -20,6 +21,6 @@ application = ProtocolTypeRouter({
     # CSRF для сокетов: same-origin на WebSocket не распространяется, и без проверки
     # Origin чужая страница открыла бы соединение с cookie пользователя.
     "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(URLRouter(chat_sockets + wall_sockets))
+        AuthMiddlewareStack(SocketGate(URLRouter(chat_sockets + wall_sockets)))
     ),
 })

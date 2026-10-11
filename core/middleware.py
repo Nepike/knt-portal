@@ -1,6 +1,8 @@
 from django.http import HttpResponse
 from django.utils.cache import patch_vary_headers
 
+from . import lockdown
+
 
 class HtmxMiddleware:
     """Две поправки на то, что по одному адресу у нас два разных ответа.
@@ -25,3 +27,27 @@ class HtmxMiddleware:
         if request.headers.get("HX-Request") and 300 <= response.status_code < 400:
             return HttpResponse(headers={"HX-Redirect": response["Location"], "Vary": "HX-Request"})
         return response
+
+
+class LockdownMiddleware:
+    """Заслон: пока сайт закрыт, любой адрес отвечает страницей закрытия (core/lockdown.py).
+
+    Стоит за аутентификацией: ему нужен уже узнанный человек. Отвечает сам, ещё до
+    разбора адреса, — поэтому гость получает объяснение, а не форму входа:
+    LoginRequiredMiddleware спрашивает вход позже, в process_view.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # Сначала адрес, потом база: раздача файлов — самый горячий путь на сайте,
+        # и платить запросом за каждый сегмент видео ей незачем.
+        if lockdown.always_open(request.path_info):
+            return self.get_response(request)
+        lock = lockdown.current()
+        # Для base.html: прошедшему по белому списку шапка напоминает, что сайт закрыт.
+        request.lockdown = lock
+        if lock is None or lockdown.lets_in(request.user):
+            return self.get_response(request)
+        return lockdown.refusal(request, lock)

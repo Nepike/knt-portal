@@ -1,11 +1,13 @@
 from django.contrib import messages
-from django.contrib.auth.decorators import login_not_required
+from django.contrib.auth.decorators import login_not_required, permission_required
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
 from telegram.notify import FEEDBACK, SUPPORT, notify
 
+from . import lockdown
 from .forms import DemoForm, FeedbackForm, SupportForm
+from .models import Lockdown
 from .throttle import client_ip, throttled
 
 
@@ -88,6 +90,16 @@ def support(request):
         return redirect("support")
 
     return render(request, "core/support.html", {"form": form})
+
+
+@permission_required(lockdown.PASS, raise_exception=True)
+def closed(request):
+    """Страница закрытия, какой её видят остальные, — вычитать текст до включения.
+
+    Только белому списку: пока сайт открыт, это черновик, а когда закрыт — всем
+    прочим её и так показывает заслон, по любому адресу.
+    """
+    return lockdown.page(request, Lockdown.load())
 
 
 def demo(request):

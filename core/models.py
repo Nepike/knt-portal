@@ -75,6 +75,57 @@ class Moderated(models.Model):
             self.approve(editor)
 
 
+class Lockdown(models.Model):
+    """Заслон: пока включён, любой адрес сайта отвечает одной страницей (core/lockdown.py).
+
+    Строкой в базе, а не настройкой: закрывают и открывают без деплоя, и текст
+    на странице правят так же. Запись одна на весь сайт — отсюда закреплённый ключ.
+    """
+
+    class Due(models.TextChoices):
+        HOSTING = "hosting", "хостинг"
+        STORAGE = "storage", "файловое хранилище"
+        DOMAINS = "domains", "домены"
+
+    active = models.BooleanField("сайт закрыт", default=False)
+    text = models.TextField("текст на странице", blank=True, help_text="Markdown. Пусто — стоит дежурная фраза.")
+    # Текст перечисляет всё, от чего зависит сайт, и от срока к сроку не меняется:
+    # какой платёж подошёл сейчас, говорят эти два поля.
+    due = models.CharField(
+        "что не оплачено", max_length=10, choices=Due.choices, blank=True,
+        help_text="Подпись к сроку. Пусто — срок стоит без неё.",
+    )
+    deadline = models.DateField(
+        "крайний срок оплаты", null=True, blank=True, help_text="Пусто — плашки со сроком на странице нет.",
+    )
+    contact = models.CharField(
+        "кому писать", max_length=200, blank=True,
+        help_text="Например: Иванов Иван, ivanov@phystech.edu. Почта станет ссылкой. Пусто — строки нет.",
+    )
+
+    class Meta:
+        verbose_name = "закрытие сайта"
+        verbose_name_plural = "закрытие сайта"
+        permissions = [("pass_lockdown", "Проходит на закрытый сайт")]
+
+    def __str__(self):
+        return "Сайт закрыт" if self.active else "Сайт открыт"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        """Единственная запись; пока её не сохраняли — пустая, с сайтом открытым."""
+        return cls.objects.filter(pk=1).first() or cls(pk=1)
+
+    @property
+    def days_left(self):
+        """Дней до срока: ноль — сегодня последний, меньше нуля — срок прошёл."""
+        return (self.deadline - timezone.localdate()).days if self.deadline else None
+
+
 class Subject(models.Model):
     name = models.CharField("название", max_length=50)
     dative = models.CharField("название (дательный падеж)", max_length=50)

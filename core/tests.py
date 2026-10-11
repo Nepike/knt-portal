@@ -1,4 +1,5 @@
 import copy
+import importlib
 import re
 import subprocess
 import tempfile
@@ -9,7 +10,11 @@ from smtplib import SMTPServerDisconnected
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from channels.db import database_sync_to_async
+from channels.testing import WebsocketCommunicator
+from django.apps import apps as django_apps
 from django.conf import settings
+from django.contrib.auth.models import Group, Permission
 from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
@@ -19,7 +24,7 @@ from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
-from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import ResolverMatch, get_resolver, reverse
 from django.utils import timezone
 
@@ -29,14 +34,16 @@ from PIL import Image as PilImage
 from attachments.storage import file_storage
 from attachments.uploads import under
 from knt.celery import app as celery_app
-from core.models import Team
+from core.models import Lockdown, Team
+from intake import urls as intake_urls
 from teachers.models import Review, Teacher
 from users.models import User
 
+from chats.consumers import ChatConsumer
 from chats.models import Chat
 from wall.models import Board
 
-from . import backup, nav
+from . import backup, lockdown, nav
 from .context_processors import theme_for
 from .search import by_name
 from .throttle import client_ip, throttled
@@ -1310,3 +1317,405 @@ class UnreadBadgeTests(SimpleTestCase):
 
         self.assertIn("inline-flex", badge)
         self.assertIn("{% if not unread_total %}hidden{% endif %}", badge)
+
+
+def close_site(**fields):
+    Lockdown(active=True, **fields).save()
+
+
+def put_on_the_list(user):
+    """В группу белого списка. Группу заводит миграция, но на тестовой базе, оставленной
+    от прошлого прогона (--keepdb), её смывает очистка после TransactionTestCase."""
+    group, _ = Group.objects.get_or_create(name=lockdown.GROUP)
+    group.permissions.add(Permission.objects.get(content_type__app_label="core", codename="pass_lockdown"))
+    user.groups.add(group)
+
+
+class LockdownTests(TestCase):
+    """Заслон: закрытый сайт отвечает одной страницей всем, кроме белого списка (core/lockdown.py)."""
+
+    PAGE = "core/lockdown.html"
+    LOGIN = {"username": "student@t.local", "password": "pass12345"}
+
+    def setUp(self):
+        self.student = make_user("student@t.local", name="Пётр", surname="Студентов")
+
+    def assertShut(self, response):
+        self.assertEqual(response.status_code, 503)
+        self.assertTemplateUsed(response, self.PAGE)
+
+    def assertInside(self, response):
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateNotUsed(response, self.PAGE)
+
+    # --- кого не пускает ---
+
+    def test_an_open_site_does_not_notice_the_gate(self):
+        self.assertInside(self.client.get(reverse("applicants")))
+
+        # Запись есть, текст заготовлен, но галочка не стоит — это ещё не закрытие.
+        Lockdown(active=False, text="черновик").save()
+
+        self.assertInside(self.client.get(reverse("applicants")))
+
+    def test_a_guest_gets_the_closed_page_at_every_address(self):
+        """И на открытых всему интернету страницах, и там, где раньше ждала форма входа,
+        и по адресу, которого нет вовсе."""
+        close_site()
+
+        for path in ("/", reverse("applicants"), reverse("contacts"), reverse("support"),
+                     reverse("material_list"), reverse("admin:index"), "/no/such/page/"):
+            with self.subTest(path=path):
+                self.assertShut(self.client.get(path))
+
+    def test_a_student_who_is_logged_in_gets_it_too(self):
+        close_site()
+        self.client.force_login(self.student)
+
+        self.assertShut(self.client.get(reverse("material_list")))
+
+    def test_a_moderator_is_not_let_in_for_being_one(self):
+        close_site()
+        self.client.force_login(make_user("mod@t.local", is_staff=True))
+
+        self.assertShut(self.client.get(reverse("material_list")))
+
+    def test_a_form_sent_to_a_closed_site_goes_nowhere(self):
+        close_site()
+
+        with patch("core.views.notify") as notify:
+            self.assertShut(self.client.post(reverse("contacts"), {"text": "Когда откроетесь?", "contact": "@me"}))
+        notify.assert_not_called()
+
+    def test_htmx_is_told_to_reload_the_page(self):
+        """Кусок страницы закрытия посреди списка материалов был бы хуже, чем ничего."""
+        close_site()
+
+        response = self.client.get(reverse("material_list"), headers={"HX-Request": "true"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["HX-Refresh"], "true")
+        self.assertEqual(response.content, b"")
+
+    # --- кого пускает ---
+
+    def test_the_group_of_the_white_list_lets_a_person_in(self):
+        close_site()
+        put_on_the_list(self.student)
+        self.client.force_login(self.student)
+
+        self.assertInside(self.client.get(reverse("material_list")))
+
+    def test_the_right_given_to_a_person_directly_lets_in_too(self):
+        close_site()
+        self.student.user_permissions.add(Permission.objects.get(codename="pass_lockdown"))
+        self.client.force_login(self.student)
+
+        self.assertInside(self.client.get(reverse("material_list")))
+
+    def test_a_superuser_needs_no_list(self):
+        close_site()
+        self.client.force_login(User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345"))
+
+        self.assertInside(self.client.get(reverse("material_list")))
+
+    # --- дверь ---
+
+    def test_the_way_in_stays_open(self):
+        close_site()
+
+        for path in (reverse("login"), reverse("password_reset"), reverse("password_reset_done"),
+                     reverse("password_reset_confirm", args=["x", "y"]), reverse("password_reset_complete")):
+            with self.subTest(path=path):
+                self.assertInside(self.client.get(path))
+
+    def test_the_first_password_can_still_be_changed(self):
+        close_site()
+        self.client.force_login(self.student)
+
+        self.assertInside(self.client.get(reverse("password_change")))
+
+    def test_every_open_name_is_a_real_address(self):
+        """Переименуют урл — имя в списке перестанет совпадать, и раздача файлов или вход
+        молча закроются вместе с сайтом."""
+        known = get_resolver().reverse_dict
+
+        for name in lockdown.OPEN:
+            self.assertIn(name, known)
+
+    def test_a_listed_person_logs_in_and_gets_the_site(self):
+        close_site()
+        put_on_the_list(self.student)
+
+        self.assertInside(self.client.post(reverse("login"), self.LOGIN, follow=True))
+
+    def test_an_unlisted_person_logs_in_stays_outside_and_can_leave(self):
+        close_site()
+
+        response = self.client.post(reverse("login"), self.LOGIN, follow=True)
+
+        self.assertShut(response)
+        page = response.content.decode()
+        self.assertIn("Вы вошли как Студентов Пётр", page)
+        self.assertIn(f'action="{reverse("logout")}"', page)
+
+        self.assertRedirects(self.client.post(reverse("logout")), reverse("login"))
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_a_guest_is_not_shown_the_door_for_the_team(self):
+        """Ссылка на вход смущала бы всех, кому входить незачем; команда набирает адрес сама."""
+        close_site()
+
+        page = self.client.get("/").content.decode()
+
+        self.assertNotIn(reverse("login"), page)
+        self.assertNotIn(reverse("logout"), page)
+        self.assertNotIn("<footer", page)
+
+    # --- что идёт мимо ---
+
+    def test_files_go_past_the_gate_and_do_not_ask_the_database(self):
+        """Подпись кривая, поэтому 404 — но это ответ самой раздачи, а не заслона."""
+        close_site()
+
+        for path in (reverse("file_download", args=["x", "book.pdf"]), reverse("media_image", args=["x"]),
+                     reverse("hls_piece", args=["x", "index.m3u8"])):
+            with self.subTest(path=path), self.assertNumQueries(0):
+                self.assertEqual(self.client.get(path).status_code, 404)
+
+    @override_settings(INTAKE_TOKEN="token")
+    def test_the_bakery_is_not_turned_away(self):
+        close_site()
+
+        response = self.client.get(reverse("intake_spec"), headers={"Authorization": "Bearer token"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/json")
+        for pattern in intake_urls.urlpatterns:
+            self.assertTrue(lockdown.always_open(reverse(pattern.name)), pattern.name)
+
+    # --- сама страница ---
+
+    def test_the_answer_says_it_is_temporary_and_must_not_be_kept(self):
+        close_site()
+
+        response = self.client.get(reverse("applicants"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["Retry-After"], "3600")
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        self.assertIn('<meta name="robots" content="noindex">', response.content.decode())
+
+    def test_the_page_carries_the_text(self):
+        close_site(text="Хостинг **не оплачен**.<script>alert(1)</script>")
+
+        page = self.client.get("/").content.decode()
+
+        self.assertIn("Хостинг <strong>не оплачен</strong>.", page)
+        self.assertNotIn("alert(1)", page)
+        self.assertNotIn("Подробности появятся", page)
+
+    def test_an_empty_record_leaves_a_stock_phrase_and_nothing_else(self):
+        close_site()
+
+        page = self.client.get("/").content.decode()
+
+        self.assertIn("Подробности появятся", page)
+        self.assertNotIn("Крайний срок", page)
+        self.assertNotIn("По всем вопросам", page)
+        self.assertIsNone(Lockdown.load().days_left)
+
+    def test_the_deadline_is_written_out_and_counts_the_days_down(self):
+        close_site(deadline=date(2026, 10, 29))
+
+        self.assertIn(">29 октября 2026 года<", self.client.get("/").content.decode())
+
+        today, after = timezone.localdate(), ". После этого срока сайт перестанет открываться."
+        for days, words in ((21, "Остался 21 день" + after), (5, "Осталось 5 дней" + after),
+                            (2, "Осталось 2 дня" + after), (1, "Остался 1 день" + after),
+                            (0, "Сегодня последний день" + after), (-1, "Срок истёк")):
+            with self.subTest(days=days):
+                close_site(deadline=today + timedelta(days=days))
+
+                self.assertIn(f">{words}<", self.client.get("/").content.decode())
+
+    def test_the_deadline_can_say_what_is_due(self):
+        close_site(deadline=date(2026, 10, 29))
+
+        self.assertIn(">Крайний срок оплаты<", self.client.get("/").content.decode())
+
+        close_site(deadline=date(2026, 10, 29), due=Lockdown.Due.STORAGE)
+
+        self.assertIn(">Крайний срок оплаты · файловое хранилище<", self.client.get("/").content.decode())
+
+    def test_the_contact_line_makes_a_link_of_the_address_only(self):
+        close_site(contact="Иванов <b>Иван</b>, ivanov@phystech.edu")
+
+        page = self.client.get("/").content.decode()
+
+        self.assertIn("По всем вопросам: Иванов &lt;b&gt;Иван&lt;/b&gt;, ", page)
+        self.assertIn('<a href="mailto:ivanov@phystech.edu">ivanov@phystech.edu</a>', page)
+
+    @override_settings(SITE_THEME="halloween")
+    def test_the_page_wears_no_skin_and_shows_no_menu(self):
+        close_site()
+
+        page = self.client.get(reverse("material_list")).content.decode()
+
+        self.assertNotIn("theme-", page)
+        self.assertNotIn("skin-", page)
+        for name in ("material_list", "contacts", "support"):
+            self.assertNotIn(f'href="{reverse(name)}"', page)
+
+    # --- для белого списка ---
+
+    def test_a_listed_person_is_reminded_that_the_site_is_closed(self):
+        put_on_the_list(self.student)
+        self.client.force_login(self.student)
+        reminder = f'href="{reverse("lockdown")}"'
+
+        self.assertNotIn(reminder, self.client.get(reverse("material_list")).content.decode())
+
+        close_site()
+
+        self.assertIn(reminder, self.client.get(reverse("material_list")).content.decode())
+        # И по ссылке — страница, какой её видят остальные, но без отказа в ответе.
+        response = self.client.get(reverse("lockdown"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, self.PAGE)
+        self.assertContains(response, f'href="{reverse("home")}"')
+        self.assertNotContains(response, f'action="{reverse("logout")}"')
+
+    def test_the_draft_of_the_page_is_shown_to_the_list_only(self):
+        Lockdown(text="Черновик объявления").save()
+        target = reverse("lockdown")
+
+        self.assertRedirects(self.client.get(target), f"{reverse('login')}?next={target}")
+
+        self.client.force_login(self.student)
+        self.assertEqual(self.client.get(target).status_code, 403)
+
+        put_on_the_list(self.student)
+        self.assertContains(self.client.get(target), "Черновик объявления")
+
+    # --- выключатель ---
+
+    def test_there_is_one_record_however_many_times_it_is_saved(self):
+        self.assertFalse(Lockdown.load().active)
+        self.assertEqual(Lockdown.objects.count(), 0)
+
+        Lockdown(active=True).save()
+        Lockdown(active=False, text="второй раз").save()
+
+        self.assertEqual(Lockdown.objects.count(), 1)
+        self.assertEqual(Lockdown.load().text, "второй раз")
+        self.assertFalse(Lockdown.load().active)
+
+    def test_the_admin_has_one_page_for_it_and_shows_who_gets_in(self):
+        put_on_the_list(self.student)
+        self.client.force_login(User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345"))
+        change = reverse("admin:core_lockdown_change", args=[1])
+
+        self.assertRedirects(self.client.get(reverse("admin:core_lockdown_changelist")), change)
+        page = self.client.get(change).content.decode()
+        self.assertIn("Главная Анна", page)
+        self.assertIn("Студентов Пётр", page)
+        self.assertIn(lockdown.GROUP, page)
+
+        self.assertEqual(self.client.get(reverse("admin:core_lockdown_add")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("admin:core_lockdown_delete", args=[1])).status_code, 403)
+
+    def test_the_tick_in_the_admin_closes_the_site(self):
+        self.client.force_login(User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345"))
+        change = reverse("admin:core_lockdown_change", args=[1])
+        self.client.get(reverse("admin:core_lockdown_changelist"))
+
+        self.client.post(change, {"active": "on", "text": "Закрыто.", "due": "hosting", "deadline": "2026-10-29",
+                                  "contact": "Иванов Иван, ivanov@phystech.edu"})
+
+        self.assertShut(Client().get("/"))
+        lock = Lockdown.load()
+        self.assertEqual((lock.due, lock.deadline, lock.contact),
+                         ("hosting", date(2026, 10, 29), "Иванов Иван, ivanov@phystech.edu"))
+
+        self.client.post(change, {"text": "Закрыто.", "due": "", "deadline": "", "contact": ""})
+
+        self.assertInside(Client().get(reverse("applicants")))
+
+    def test_a_moderator_without_the_right_cannot_reach_the_switch(self):
+        self.client.force_login(make_user("mod@t.local", is_staff=True))
+
+        self.assertEqual(self.client.get(reverse("admin:core_lockdown_changelist")).status_code, 403)
+        self.assertEqual(Lockdown.objects.count(), 0)
+
+    def test_the_command_is_a_spare_switch(self):
+        """Админка сама стоит за заслоном — на случай, если в неё не попасть."""
+        put_on_the_list(self.student)
+        out = StringIO()
+
+        call_command("lockdown", "--on", stdout=out)
+        call_command("lockdown", stdout=out)  # без ключей только рассказывает
+
+        self.assertShut(self.client.get("/"))
+        self.assertIn("Сайт закрыт", out.getvalue())
+        self.assertIn("Студентов Пётр <student@t.local>", out.getvalue())
+
+        call_command("lockdown", "--off", stdout=out)
+
+        self.assertInside(self.client.get(reverse("applicants")))
+
+    def test_the_migration_makes_the_group_with_the_one_right(self):
+        migration = importlib.import_module("core.migrations.0002_lockdown")
+        Group.objects.filter(name=lockdown.GROUP).delete()
+
+        migration.add_group(django_apps, None)
+        migration.add_group(django_apps, None)  # второй раз ничего не двоит
+
+        group = Group.objects.get(name=migration.GROUP)
+        rights = [f"{right.content_type.app_label}.{right.codename}" for right in group.permissions.all()]
+        self.assertEqual(rights, [lockdown.PASS])
+        self.assertEqual(migration.GROUP, lockdown.GROUP)
+
+    def test_the_gate_stands_between_the_login_and_the_sockets(self):
+        """Снаружи AuthMiddleware человек ещё не узнан, а мимо роутера — нечего закрывать."""
+        from knt.asgi import application
+
+        node = application.application_mapping["websocket"].application
+        chain = []
+        while hasattr(node, "inner"):
+            chain.append(type(node).__name__)
+            node = node.inner
+
+        self.assertEqual(chain[-2:], ["AuthMiddleware", "SocketGate"])
+        self.assertEqual(type(node).__name__, "URLRouter")
+
+
+class LockdownSocketTests(TransactionTestCase):
+    """Заслон на сокетах. TransactionTestCase — по той же причине, что и у сокета чата:
+    в базу ходят из другого потока, и незакоммиченного теста он бы не увидел."""
+
+    def setUp(self):
+        self.student = make_user("student@t.local")
+
+    async def knock(self, user):
+        socket = WebsocketCommunicator(lockdown.SocketGate(ChatConsumer.as_asgi()), "/ws/chats/")
+        # Человека читаем заново, как AuthMiddlewareStack на каждое соединение: права
+        # кешируются на объекте, а у созданного в тесте кеш уже прогрет сигналом чатов.
+        socket.scope["user"] = await database_sync_to_async(User.objects.get)(pk=user.pk)
+        connected, _ = await socket.connect()
+        await socket.disconnect()
+        return connected
+
+    async def test_an_open_site_lets_the_socket_through(self):
+        self.assertTrue(await self.knock(self.student))
+
+    async def test_a_closed_site_refuses_it(self):
+        await database_sync_to_async(close_site)()
+
+        self.assertFalse(await self.knock(self.student))
+
+    async def test_but_not_to_a_listed_person(self):
+        await database_sync_to_async(close_site)()
+        await database_sync_to_async(put_on_the_list)(self.student)
+
+        self.assertTrue(await self.knock(self.student))

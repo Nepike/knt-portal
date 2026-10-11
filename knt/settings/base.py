@@ -46,6 +46,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "core.middleware.LockdownMiddleware",
     # Сайт закрытый: всё требует логина, кроме auth-страниц и явных @login_not_required.
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
     "users.middleware.MustChangePasswordMiddleware",

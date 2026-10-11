@@ -348,10 +348,11 @@ class PollingTests(TestCase):
         self.assertEqual(self.client.get(reverse("chat_list_fragment"), {"active": "нет"}).status_code, 200)
 
     def test_poll_stays_cheap(self):
-        """Опрос идёт каждые 3 секунды у каждой вкладки — лишним запросам тут не место."""
+        """Опрос идёт каждые 3 секунды у каждой вкладки — лишним запросам тут не место.
+        Шестой из них — заслон (core/lockdown.py): закрыт ли сайт, он спрашивает на каждый запрос."""
         with CaptureQueriesContext(connection) as ctx:
             self.client.get(self.url, {"after": self.message.pk}, headers={"HX-Request": "true"})
-        self.assertLessEqual(len(ctx), 5, [q["sql"][:120] for q in ctx.captured_queries])
+        self.assertLessEqual(len(ctx), 6, [q["sql"][:120] for q in ctx.captured_queries])
 
 
 class EditDeleteTests(TestCase):

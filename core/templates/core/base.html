@@ -189,6 +189,14 @@
           сама страница — `bookmarks.views.button`.
         {% endcomment %}
         {% if bookmark %}{% include "bookmarks/_button.html" with kind=bookmark.kind item=bookmark.item saved=bookmark.saved only %}{% endif %}
+        {% comment %}
+          Сайт закрыт, а этот человек прошёл по белому списку (core/lockdown.py): для него
+          всё выглядит как обычно, и без напоминания легко забыть, что остальные видят
+          страницу закрытия. Ссылка ведёт на неё же.
+        {% endcomment %}
+        {% if request.lockdown %}
+        <a href="{% url 'lockdown' %}" title="Сайт закрыт для всех, кроме белого списка" class="inline-flex items-center gap-1.5 mr-1 rounded-full px-3 py-1 text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"><i class="fa-solid fa-lock"></i><span class="max-sm:hidden">Сайт закрыт</span></a>
+        {% endif %}
         {# TODO (notifications) #}
         <button type="button" class="btn btn-ghost" aria-label="Уведомления"><i class="fa-solid fa-bell text-xl"></i></button>
         {% include "core/_theme_toggle.html" %}

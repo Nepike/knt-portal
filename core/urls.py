@@ -10,6 +10,7 @@ urlpatterns = [
     path('applicants/', RedirectView.as_view(pattern_name='applicants', permanent=True)),
     path("contacts/", views.contacts, name="contacts"),
     path("support/", views.support, name="support"),
+    path("closed/", views.closed, name="lockdown"),
 ]
 
 # Витрина полей и кнопок — она же стенд, на котором их и проверяют. Наружу не выставляем:

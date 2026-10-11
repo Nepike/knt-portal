@@ -104,9 +104,27 @@ template, and it draws its decorations as pseudo-elements on a few hook classes 
 `site-header`, `skin-…`). Pictures live in `core/static/core/img/<name>/`. `SITE_THEME` in the
 settings forces a skin whatever the date — that is how one is looked at before its month.
 
+**The whole site can be closed with one switch.** `core.Lockdown` is a single row edited in the
+admin; `manage.py lockdown --on / --off` flips it from the server, because the admin sits behind
+the gate too. While it is on, `LockdownMiddleware` answers every address with one standalone page
+(`core/lockdown.html`: 503 with `Retry-After`, never cached, no site menu and no seasonal skin) —
+to guests and to logged-in students alike; an htmx request is told to reload the page instead.
+People holding `core.pass_lockdown` see the site as usual, with a reminder in the header: the
+right comes with the «Доступ при закрытии» group, and a superuser needs neither. Three things are
+left open on purpose (`OPEN` in `core/lockdown.py`): login, logout and the password pages, or the
+listed people could not get in; the bakery intake, a machine with its own token; and file
+delivery. The files domain carries no session, so the listed cannot be told from the rest there —
+the signature in the address is the permission, and it does not expire: a link saved earlier
+keeps working while the pages are closed. WebSockets are refused by `SocketGate` in
+`knt/asgi.py`; a socket opened before the switch lives until it reconnects. `/closed/` shows the
+page to the listed while the site is still open, to proofread the text before turning it on.
+What the page says lives in the same row: a Markdown text, an optional payment deadline shown
+with a countdown of days and a label for what is due (hosting, storage or domains), and a line
+saying whom to write to — an e-mail address in it becomes a link.
+
 ## Tests
 
-1267 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1303 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files
