@@ -1,5 +1,6 @@
 from django.contrib import messages
-from django.contrib.auth.decorators import login_not_required, permission_required
+from django.contrib.auth.decorators import login_not_required
+from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
@@ -92,14 +93,18 @@ def support(request):
     return render(request, "core/support.html", {"form": form})
 
 
-@permission_required(lockdown.PASS, raise_exception=True)
 def closed(request):
-    """Страница закрытия, какой её видят остальные, — вычитать текст до включения.
+    """Страница закрытия, какой её видят остальные.
 
-    Только белому списку: пока сайт открыт, это черновик, а когда закрыт — всем
-    прочим её и так показывает заслон, по любому адресу.
+    Пока сайт открыт, это черновик, и видит его только тот, кто правит запись, —
+    вычитать текст до включения. Остальным 404, а не отказ: объявления, которого
+    ещё нет, для них нет вовсе. Когда сайт закрыт, сюда ведёт напоминание в шапке
+    у белого списка, а всем прочим ту же страницу показывает заслон, по любому адресу.
     """
-    return lockdown.page(request, Lockdown.load())
+    lock = Lockdown.load()
+    if not request.user.has_perm(lockdown.PASS if lock.active else lockdown.EDIT):
+        raise Http404
+    return lockdown.page(request, lock)
 
 
 def demo(request):

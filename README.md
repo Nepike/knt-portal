@@ -116,8 +116,10 @@ listed people could not get in; the bakery intake, a machine with its own token;
 delivery. The files domain carries no session, so the listed cannot be told from the rest there —
 the signature in the address is the permission, and it does not expire: a link saved earlier
 keeps working while the pages are closed. WebSockets are refused by `SocketGate` in
-`knt/asgi.py`; a socket opened before the switch lives until it reconnects. `/closed/` shows the
-page to the listed while the site is still open, to proofread the text before turning it on.
+`knt/asgi.py`; a socket opened before the switch lives until it reconnects. While the site is
+still open, `/closed/` shows the page only to those who may edit the row (`core.change_lockdown`),
+to proofread the text before turning it on — for everyone else the address does not exist; once
+the site is closed, the listed reach the same page from the reminder in the header.
 What the page says lives in the same row: a Markdown text, an optional payment deadline shown
 with a countdown of days and a label for what is due (hosting, storage or domains), and a line
 saying whom to write to — an e-mail address in it becomes a link.

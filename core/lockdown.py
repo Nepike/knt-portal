@@ -19,6 +19,7 @@ from django.utils.cache import add_never_cache_headers
 from .models import Lockdown
 
 PASS = "core.pass_lockdown"
+EDIT = "core.change_lockdown"
 GROUP = "Доступ при закрытии"
 
 # Что работает и при закрытом сайте. Имена урлов, а не пути — как в core/nav.py.

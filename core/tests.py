@@ -1586,16 +1586,32 @@ class LockdownTests(TestCase):
         self.assertContains(response, f'href="{reverse("home")}"')
         self.assertNotContains(response, f'action="{reverse("logout")}"')
 
-    def test_the_draft_of_the_page_is_shown_to_the_list_only(self):
+    def test_the_draft_of_the_page_is_shown_to_its_editors_only(self):
+        """Сайт открыт, а объявление заготовлено: студенту, забредшему на адрес, читать его незачем."""
         Lockdown(text="Черновик объявления").save()
         target = reverse("lockdown")
 
         self.assertRedirects(self.client.get(target), f"{reverse('login')}?next={target}")
 
         self.client.force_login(self.student)
-        self.assertEqual(self.client.get(target).status_code, 403)
+        self.assertEqual(self.client.get(target).status_code, 404)
 
+        # Белый список — про закрытый сайт; черновик он не открывает.
         put_on_the_list(self.student)
+        self.assertEqual(self.client.get(target).status_code, 404)
+
+        self.client.force_login(make_user("mod@t.local", is_staff=True))
+        self.assertEqual(self.client.get(target).status_code, 404)
+
+        editor = make_user("editor@t.local")
+        editor.user_permissions.add(Permission.objects.get(codename="change_lockdown"))
+        self.client.force_login(editor)
+        response = self.client.get(target)
+        self.assertContains(response, "Черновик объявления")
+        self.assertContains(response, f'href="{reverse("home")}"')
+        self.assertNotContains(response, f'action="{reverse("logout")}"')
+
+        self.client.force_login(User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345"))
         self.assertContains(self.client.get(target), "Черновик объявления")
 
     # --- выключатель ---

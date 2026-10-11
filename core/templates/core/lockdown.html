@@ -60,8 +60,8 @@
   {# Гостю ссылки на вход нет намеренно: остальных она только смущает, а команда адрес знает #}
   {% if user.is_authenticated %}
   <footer class="py-5 px-4 text-center text-sm text-slate-500">
-    {% if perms.core.pass_lockdown %}
-    {# Сюда приходят и свои — посмотреть, что видят остальные; им нужна дорога назад #}
+    {% if perms.core.pass_lockdown or not lock.active %}
+    {# Сюда приходят и свои — посмотреть, что видят остальные или черновик; им нужна дорога назад #}
     <a href="{% url 'home' %}" class="hover:text-slate-700 dark:hover:text-slate-300">Вернуться на сайт</a>
     {% else %}
     <form method="post" action="{% url 'logout' %}" class="flex flex-wrap items-center justify-center gap-x-2">
