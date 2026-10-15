@@ -1,8 +1,12 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from django.utils.formats import date_format
+
+from . import donors
 
 
 class Moderated(models.Model):
@@ -124,6 +128,88 @@ class Lockdown(models.Model):
     def days_left(self):
         """Дней до срока: ноль — сегодня последний, меньше нуля — срок прошёл."""
         return (self.deadline - timezone.localdate()).days if self.deadline else None
+
+
+def this_month():
+    """Первое число текущего месяца: сбор считается месяцами, а не днями."""
+    return timezone.localdate().replace(day=1)
+
+
+def next_month(day):
+    return (day.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+class Funding(models.Model):
+    """Сбор: на какие месяцы сайт оплатили люди — страница «О сайте» (core/about.html).
+
+    Факультет оплачивать сайт отказался, платят люди, и страница их благодарит. Срок ставят
+    руками: сумм в базе нет, и на сколько месяцев хватит денег, знает тот, кто платит по
+    счетам. Имена приходят выгрузкой Boosty через админку (core/donors.py).
+    """
+
+    since = models.DateField("с месяца", default=this_month, help_text="Любое число месяца: считается весь месяц.")
+    until = models.DateField("по месяц включительно", help_text="Любое число месяца: считается весь месяц.")
+    skip = models.TextField(
+        "не показывать", blank=True,
+        help_text="Имена как в выгрузке, по одному в строке: тестовые платежи и те, кто просил не упоминать.",
+    )
+    loaded = models.DateField("выгрузка загружена", null=True, blank=True, editable=False)
+
+    class Meta:
+        verbose_name = "сбор"
+        verbose_name_plural = "сборы"
+        ordering = ["-until"]
+
+    def __str__(self):
+        return f"{date_format(self.since, 'b Y')} – {date_format(self.until, 'b Y')}"
+
+    def clean(self):
+        if self.since and self.until and self.until.replace(day=1) < self.since.replace(day=1):
+            raise ValidationError({"until": "Сбор не может кончиться раньше, чем начался."})
+
+    def save(self, *args, **kwargs):
+        self.since, self.until = self.since.replace(day=1), self.until.replace(day=1)
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def shown(cls):
+        """Сбор для страницы: тот, что идёт сейчас, иначе последний прошедший — первого числа
+        страница не пустеет. Внесённый заранее ждёт своего срока, сбор без имён не показывается."""
+        started = cls.objects.filter(since__lte=this_month(), supporters__isnull=False).distinct()
+        return started.order_by("-until", "-since").first()
+
+    @property
+    def current(self):
+        return self.until >= this_month()
+
+    def months(self, ahead=2):
+        """Месяцы сбора и ещё два следом, неоплаченные: что дальше, странице тоже есть что сказать."""
+        now, day, end = this_month(), self.since, self.until
+        for _ in range(ahead):
+            end = next_month(end)
+        months = []
+        while day <= end:
+            months.append({"day": day, "paid": day <= self.until, "now": day == now})
+            day = next_month(day)
+        return months
+
+    def names(self):
+        """Подписи по алфавиту: так порядок не выдаёт, кто дал больше."""
+        return sorted((one.name for one in self.supporters.all()), key=donors.fold)
+
+
+class Supporter(models.Model):
+    """Подпись на странице «О сайте»: ник или «Имя Ф.» (core/donors.py) — страницу видит весь интернет."""
+
+    funding = models.ForeignKey(Funding, verbose_name="сбор", on_delete=models.CASCADE, related_name="supporters")
+    name = models.CharField("подпись", max_length=60, help_text="Настоящее имя полностью — только с согласия человека.")
+
+    class Meta:
+        verbose_name = "спонсор"
+        verbose_name_plural = "спонсоры"
+
+    def __str__(self):
+        return self.name
 
 
 class Subject(models.Model):

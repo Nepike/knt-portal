@@ -10,7 +10,7 @@ push to `main`.
 > by one-off commands that have since been removed (they live in the history up to October 2026).
 
 The site is behind a login: `LoginRequiredMiddleware` is global and pages opt out explicitly. What
-a visitor without an account gets is the applicants' page at `/about/` — the root sends them there
+a visitor without an account gets is the about page at `/about/` — the root sends them there
 instead of to the login form — and the contacts page at `/contacts/`, plus the support form and the
 login pages themselves. They get no sidebar at all: the chrome switches to a three-item bar across
 the top, where the student layout would have put a column of locked doors.
@@ -126,7 +126,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1303 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1319 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

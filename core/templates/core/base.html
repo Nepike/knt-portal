@@ -153,7 +153,7 @@
             {% if request.user.is_staff %}<a href="{% url 'admin:index' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-key w-4 text-center text-slate-400"></i>Админка</a>{% endif %}
 
             <div class="my-1 border-t border-slate-200 dark:border-slate-800"></div>
-            <a href="{% url 'applicants' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-circle-info w-4 text-center text-slate-400"></i>О факультете</a>
+            <a href="{% url 'about' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-circle-info w-4 text-center text-slate-400"></i>О сайте</a>
             <a href="{% url 'contacts' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-envelope w-4 text-center text-slate-400"></i>Контакты</a>
             <a href="{% url 'support' %}" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-life-ring w-4 text-center text-slate-400"></i>Поддержка</a>
             <a href="https://vk.com/knt_mipt" target="_blank" rel="noopener" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-brands fa-vk w-4 text-center text-slate-400"></i>ВКонтакте</a>
@@ -214,7 +214,7 @@
     {% endcomment %}
     <header class="sticky top-0 z-20 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <div class="w-full max-w-5xl mx-auto px-4 sm:px-6 flex flex-wrap items-center gap-x-2 max-sm:py-2 sm:h-14">
-        <a href="{% url 'applicants' %}" class="flex items-center gap-2.5 mr-auto">
+        <a href="{% url 'about' %}" class="flex items-center gap-2.5 mr-auto">
           {% include "core/_logo.html" with width="w-10" %}
           <span>
             <span class="brand-name block font-bold text-xl leading-none">КНТ</span>
@@ -222,7 +222,7 @@
           </span>
         </a>
         <nav class="flex flex-wrap items-center justify-center gap-1 max-sm:order-last max-sm:w-full max-sm:pt-2">
-          <a href="{% url 'applicants' %}" class="top-link {% if section == 'applicants' %}top-link-active{% endif %}">Абитуриентам</a>
+          <a href="{% url 'about' %}" class="top-link {% if section == 'about' %}top-link-active{% endif %}">О сайте</a>
           <a href="{% url 'material_list' %}" class="top-link">Студентам</a>
           <a href="{% url 'contacts' %}" class="top-link {% if section == 'contacts' %}top-link-active{% endif %}">Контакты</a>
         </nav>
@@ -240,7 +240,7 @@
     {# Заливка своя по той же причине, что и у шапки: иначе сквозь подвал видно фон профиля #}
     <footer class="border-t-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 py-5 px-4 text-center text-sm text-slate-500">
       <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
-        <a href="{% url 'applicants' %}" class="hover:text-slate-700 dark:hover:text-slate-300">О факультете</a>
+        <a href="{% url 'about' %}" class="hover:text-slate-700 dark:hover:text-slate-300">О сайте</a>
         <a href="{% url 'contacts' %}" class="hover:text-slate-700 dark:hover:text-slate-300">Контакты</a>
         <a href="{% url 'support' %}" class="hover:text-slate-700 dark:hover:text-slate-300">Поддержка</a>
         <a href="https://vk.com/knt_mipt" target="_blank" rel="noopener" class="hover:text-slate-700 dark:hover:text-slate-300">ВКонтакте</a>

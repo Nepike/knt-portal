@@ -8,31 +8,33 @@ from telegram.notify import FEEDBACK, SUPPORT, notify
 
 from . import lockdown
 from .forms import DemoForm, FeedbackForm, SupportForm
-from .models import Lockdown
+from .models import Funding, Lockdown
 from .throttle import client_ip, throttled
 
 
 @login_not_required
 def home(request):
-    """Корень домена: своим — в материалы, чужим — на страницу для абитуриентов.
+    """Корень домена: своим — в материалы, чужим — на страницу «О сайте».
 
     Без `login_not_required` корень уводил бы незалогиненного на форму входа, а нам
     нужна витрина: на knt-mipt.ru приходят и те, кто сюда только собирается поступать.
     Своей главной по-прежнему нет; материалы — самый нужный раздел для вошедших.
     """
     if not request.user.is_authenticated:
-        return redirect("applicants")
+        return redirect("about")
     return redirect("material_list")
 
 
 @login_not_required
-def applicants(request):
-    """«О нас» — единственная страница, открытая всему интернету целиком.
+def about(request):
+    """«О сайте» — единственная страница, открытая всему интернету целиком.
 
-    Содержимое перенесено со старого сайта как есть: вопросы и ответы вычитаны живыми
-    людьми, и переписывать их по дороге незачем.
+    До 15 окт 2026 по этому адресу была страница для абитуриентов. Факультет отказался
+    оплачивать сайт, её сняли (шаблон core/applicants.html оставлен), и теперь здесь —
+    кто его разрабатывает и оплачивает: месяцы сбора и чек со спонсорами (core.Funding).
     """
-    return render(request, "core/applicants.html")
+    funding = Funding.shown()
+    return render(request, "core/about.html", {"funding": funding, "names": funding.names() if funding else []})
 
 
 @login_not_required

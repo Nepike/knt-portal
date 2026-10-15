@@ -18,6 +18,7 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
@@ -34,7 +35,7 @@ from PIL import Image as PilImage
 from attachments.storage import file_storage
 from attachments.uploads import under
 from knt.celery import app as celery_app
-from core.models import Lockdown, Team
+from core.models import Funding, Lockdown, Supporter, Team
 from intake import urls as intake_urls
 from teachers.models import Review, Teacher
 from users.models import User
@@ -43,7 +44,7 @@ from chats.consumers import ChatConsumer
 from chats.models import Chat
 from wall.models import Board
 
-from . import backup, lockdown, nav
+from . import backup, donors, lockdown, nav
 from .context_processors import theme_for
 from .search import by_name
 from .throttle import client_ip, throttled
@@ -684,16 +685,16 @@ class OpenSectionsTests(TestCase):
         self.assertNotIn("бета", page.lower())
 
 
-class ApplicantsPageTests(TestCase):
-    """Единственная страница, открытая всему интернету, и меню, которое видит гость."""
+class AboutPageTests(TestCase):
+    """«О сайте» — единственная страница, открытая всему интернету, и меню, которое видит гость."""
 
     def page(self):
-        return self.client.get(reverse("applicants"))
+        return self.client.get(reverse("about"))
 
     def test_a_guest_lands_on_it_from_the_root(self):
         """Раньше корень уводил гостя на форму входа. На knt-mipt.ru приходят и те,
-        кто сюда только собирается поступать, — им нужна витрина, а не замок."""
-        self.assertRedirects(self.client.get("/"), reverse("applicants"))
+        у кого аккаунта нет, — им нужна витрина, а не замок."""
+        self.assertRedirects(self.client.get("/"), reverse("about"))
 
     def test_a_student_still_lands_in_materials(self):
         self.client.force_login(make_user("reader@x.ru"))
@@ -703,19 +704,22 @@ class ApplicantsPageTests(TestCase):
     def test_it_opens_without_logging_in(self):
         self.assertEqual(self.page().status_code, 200)
 
-    def test_the_answers_came_over_from_the_old_site(self):
+    def test_it_says_who_keeps_the_site_and_the_applicants_page_is_gone(self):
+        """Страницу для абитуриентов сняли 15 окт 2026, когда факультет отказался оплачивать
+        сайт. Шаблон лежит на случай возврата, но наружу из него не видно ничего."""
         page = self.page().content.decode()
 
-        self.assertIn("Абитуриентам о КНТ", page)
-        self.assertIn("34 бюджетных и 5 платных мест", page)   # Поступление
-        self.assertIn("военной кафедрой", page)                # Обучение
-        self.assertIn("Есть ли у вас столовая?", page)         # Кампус
+        self.assertIn("Сайт разрабатывают, поддерживают и спонсируют студенты", page)
+        self.assertNotIn("Абитуриентам", page)
+        self.assertNotIn("34 бюджетных", page)
+        self.assertRedirects(self.client.get("/applicants/"), reverse("about"), status_code=301)
 
     def test_a_guest_gets_three_menu_items(self):
         page = self.page().content.decode()
         menu = page.split('<nav')[1].split('</nav>')[0]
 
-        self.assertIn(f'href="{reverse("applicants")}"', menu)
+        self.assertIn(f'href="{reverse("about")}"', menu)
+        self.assertIn('class="top-link top-link-active">О сайте<', menu)
         self.assertIn(f'href="{reverse("material_list")}"', menu)
         self.assertIn(f'href="{reverse("contacts")}"', menu)
         # Разделов сайта в меню гостя нет вовсе: за каждым всё равно форма входа.
@@ -723,7 +727,7 @@ class ApplicantsPageTests(TestCase):
             self.assertNotIn(reverse(hidden), menu, hidden)
 
     def test_the_section_lights_up(self):
-        self.assertEqual(self.page().context["section"], "applicants")
+        self.assertEqual(self.page().context["section"], "about")
 
     def test_a_guest_gets_no_sidebar_at_all(self):
         """Три пункта в колонке шириной в 256 пикселей — и целая шапка ради кнопки темы."""
@@ -734,30 +738,229 @@ class ApplicantsPageTests(TestCase):
         self.assertNotIn("<aside", guest)
         self.assertIn("<aside", student)
 
-    def test_the_footer_leads_here(self):
-        """«О факультете» в подвале — эта самая страница; раньше там стояла решётка."""
+    def test_the_footer_and_the_account_menu_lead_here(self):
+        """«О сайте» в подвале — эта самая страница; раньше там стояла решётка."""
         for page in (self.page(), self.client.get(reverse("support"))):
             footer = page.content.decode().split("<footer")[1]
 
-            self.assertIn(f'href="{reverse("applicants")}"', footer)
+            self.assertIn(f'href="{reverse("about")}"', footer)
+            self.assertIn(">О сайте<", footer)
             self.assertNotIn('href="#"', footer)
 
-    def test_a_student_gets_the_usual_menu_and_no_applicants_item(self):
-        """Иначе пункт для абитуриентов болтался бы в меню у тех, кто давно поступил."""
+        self.client.force_login(make_user("reader@x.ru"))
+        self.assertContains(self.client.get(reverse("bookmark_list")), "</i>О сайте</a>")
+
+    def test_a_student_gets_the_usual_menu_and_no_about_item(self):
+        """Верхнее меню у вошедшего — разделы сайта; «О сайте» у него в меню аккаунта."""
         self.client.force_login(make_user("reader@x.ru"))
 
         page = self.client.get(reverse("material_list")).content.decode()
         menu = page.split('<nav')[1].split('</nav>')[0]
 
         self.assertIn(f'href="{reverse("shop")}"', menu)
-        self.assertNotIn(reverse("applicants"), menu)
+        self.assertNotIn(reverse("about"), menu)
 
-    def test_the_address_answer_leads_to_the_contacts_section(self):
-        """Со старого сайта этот ответ и вёл в «Контакты» — там телефоны и схема проезда."""
-        page = self.page().content.decode()
 
-        self.assertIn("улица Максимова, дом 4", page)
-        self.assertIn(f'href="{reverse("contacts")}"', page)
+# Выгрузка донатов Boosty в том виде, в каком её отдаёт сайт. Люди выдуманы.
+EXPORT = (
+    "name;email;type;price;total;date;target_description\n"
+    '"Иван Петров";petrov@example.org;donation;200,00;176,60;2026-10-15;"Хостинг"\n'
+    '"иван  петров";petrov@example.org;donation;100,00;88,30;2026-10-16;"Хостинг"\n'
+    '"Иван Пахомов";;donation;300,00;264,90;2026-10-14;\n'
+    '"Котик";kot@example.org;donation;5000,00;4415,00;2026-10-15;"Хостинг"\n'
+    '"Тест Тестов";test@example.org;donation;4000,00;3532,00;2026-10-13;\n'
+    '"Ёжик Сидоров";;subscription;100,00;88,30;2026-10-13;\n'
+    '"Алёна Сидорова";;donation;100,00;88,30;2026-10-13;\n'
+)
+SIGNED = ["Алёна С.", "Иван Па.", "Иван Пе.", "Котик"]
+
+
+class DonorsTests(SimpleTestCase):
+    """Выгрузка Boosty → подписи для страницы (core/donors.py)."""
+
+    def test_only_donations_are_read_and_the_bom_does_not_stick_to_the_header(self):
+        names = donors.read(EXPORT.encode("utf-8-sig"))
+
+        self.assertEqual(names, ["Иван Петров", "иван  петров", "Иван Пахомов", "Котик", "Тест Тестов", "Алёна Сидорова"])
+
+    def test_a_file_without_names_is_not_an_export(self):
+        with self.assertRaises(ValueError):
+            donors.read("a;b\n1;2\n".encode())
+
+    def test_each_person_once_the_skipped_out_surnames_cut_alphabetical(self):
+        """Повтор узнаётся без учёта регистра и пробелов; «ё» в сортировке — как «е»."""
+        names = donors.read(EXPORT.encode("utf-8-sig"))
+
+        self.assertEqual(donors.signatures(names, ["тест тестов"]), SIGNED)
+        self.assertEqual(donors.signatures(["Яна", "Ёлка"]), ["Ёлка", "Яна"])
+
+    def test_namesakes_get_letters_until_they_differ(self):
+        names = ["Елена Меньшикова", "Елена Михеева", "Елена Михайлова"]
+
+        self.assertEqual(donors.signatures(names), ["Елена Ме.", "Елена Миха.", "Елена Михе."])
+
+    def test_whom_a_letter_cannot_tell_apart_is_written_in_full(self):
+        """Одна фамилия, разные отчества, или одна — начало другой: сокращать нечем.
+        Разошлись только на последней букве — тоже целиком, без точки."""
+        self.assertEqual(donors.signatures(["Анна Петрова", "Анна Мария Петрова"]), ["Анна Мария Петрова", "Анна Петрова"])
+        self.assertEqual(donors.signatures(["Олег Кимов", "Олег Ким"]), ["Олег Ким", "Олег Кимов"])
+        self.assertEqual(donors.signatures(["Ян Лиа", "Ян Либ"]), ["Ян Лиа", "Ян Либ"])
+
+
+class FundingTests(TestCase):
+    """Сбор на странице «О сайте»: месяцы слева, чек со спонсорами справа."""
+
+    TODAY = date(2026, 10, 15)
+
+    def setUp(self):
+        today = patch("django.utils.timezone.localdate", return_value=self.TODAY)
+        today.start()
+        self.addCleanup(today.stop)
+
+    def fund(self, since, until, *names, **fields):
+        funding = Funding.objects.create(since=since, until=until, **fields)
+        for name in names:
+            funding.supporters.create(name=name)
+        return funding
+
+    def page(self):
+        return self.client.get(reverse("about")).content.decode()
+
+    def test_without_names_there_is_neither_receipt_nor_months(self):
+        self.fund(date(2026, 10, 1), date(2027, 1, 1))
+
+        page = self.page()
+
+        self.assertIn("Сайт разрабатывают, поддерживают и спонсируют студенты", page)
+        self.assertNotIn("ЧЕК №", page)
+        self.assertNotIn("Месяцы работы сайта", page)
+
+    def test_the_receipt_has_the_period_the_count_and_the_people_alphabetically(self):
+        funding = self.fund(date(2026, 10, 1), date(2027, 1, 1), "Яромир Т.", "Котик", "Алёна С.", loaded=self.TODAY)
+
+        page = self.page()
+
+        self.assertIn(f"ЧЕК № {funding.pk:04d}", page)
+        self.assertIn("<span>15.10.2026</span>", page)
+        self.assertIn("<span>окт 2026 – янв 2027</span>", page)
+        self.assertRegex(page, r"Спонсоров</span><span[^>]*></span><span>3</span>")
+        self.assertLess(page.index(">Алёна С.<"), page.index(">Котик<"))
+        self.assertLess(page.index(">Котик<"), page.index(">Яромир Т.<"))
+
+    def test_the_names_are_escaped(self):
+        self.fund(date(2026, 10, 1), date(2027, 1, 1), "Котик <b>")
+
+        self.assertIn(">Котик &lt;b&gt;<", self.page())
+
+    def test_the_months_are_the_funding_and_two_more(self):
+        funding = self.fund(date(2026, 10, 1), date(2027, 1, 1), "Котик")
+
+        self.assertEqual([(month["day"], month["paid"], month["now"]) for month in funding.months()], [
+            (date(2026, 10, 1), True, True), (date(2026, 11, 1), True, False), (date(2026, 12, 1), True, False),
+            (date(2027, 1, 1), True, False), (date(2027, 2, 1), False, False), (date(2027, 3, 1), False, False),
+        ])
+        page = self.page()
+        self.assertIn("Сейчас он оплачен по январь 2027 года включительно", page)
+        tiles = page.split('aria-label="Месяцы работы сайта"')[1].split("</ol>")[0]
+        for month in ("Октябрь", "Январь", "Март"):
+            self.assertIn(f">{month}<", tiles)
+        self.assertNotIn("Апрель", tiles)
+        self.assertEqual(tiles.count("пока не оплачен"), 2)
+        self.assertEqual(tiles.count(">сейчас<"), 1)
+
+    def test_a_funding_that_is_over_stays_in_the_past_until_the_next_one(self):
+        """Первого числа страница не пустеет: пока нового сбора нет, висит прошлый."""
+        self.fund(date(2026, 7, 1), date(2026, 9, 1), "Летний")
+
+        page = self.page()
+        self.assertIn("Сайт был оплачен по сентябрь 2026 года", page)
+        self.assertIn(">Летний<", page)
+
+        self.fund(date(2026, 10, 1), date(2027, 1, 1), "Осенний")
+
+        page = self.page()
+        self.assertIn(">Осенний<", page)
+        self.assertNotIn("Летний", page)
+
+    def test_the_last_month_of_a_funding_is_still_now(self):
+        self.fund(date(2026, 8, 1), date(2026, 10, 1), "Котик")
+
+        self.assertIn("Сейчас он оплачен по октябрь 2026 года включительно", self.page())
+
+    def test_a_funding_ahead_waits_for_its_turn(self):
+        self.fund(date(2026, 11, 1), date(2027, 3, 1), "Заранее")
+
+        self.assertNotIn("Заранее", self.page())
+
+    def test_any_day_counts_as_its_month_and_the_end_is_not_before_the_start(self):
+        funding = self.fund(date(2026, 10, 29), date(2027, 1, 31))
+
+        self.assertEqual((funding.since, funding.until), (date(2026, 10, 1), date(2027, 1, 1)))
+        with self.assertRaises(ValidationError):
+            Funding(since=date(2026, 10, 1), until=date(2026, 9, 30)).clean()
+        Funding(since=date(2026, 10, 20), until=date(2026, 10, 5)).clean()  # один и тот же месяц — можно
+
+
+class FundingAdminTests(TestCase):
+    """Выгрузка Boosty — прямо в форме сбора: имена на сайте меняются сами."""
+
+    TODAY = date(2026, 10, 15)
+
+    def setUp(self):
+        today = patch("django.utils.timezone.localdate", return_value=self.TODAY)
+        today.start()
+        self.addCleanup(today.stop)
+        self.client.force_login(User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345"))
+
+    def send(self, url, export=None, **fields):
+        data = {
+            "since": "2026-10-01", "until": "2027-01-01", "skip": "Тест Тестов",
+            "supporters-TOTAL_FORMS": "0", "supporters-INITIAL_FORMS": "0",
+            "supporters-MIN_NUM_FORMS": "0", "supporters-MAX_NUM_FORMS": "1000", **fields,
+        }
+        if export is not None:
+            data["export"] = SimpleUploadedFile("stat-donations.csv", export)
+        return self.client.post(url, data)
+
+    def test_the_export_turns_into_signatures_and_nothing_else(self):
+        self.send(reverse("admin:core_funding_add"), EXPORT.encode("utf-8-sig"))
+
+        funding = Funding.objects.get()
+        self.assertEqual(funding.names(), SIGNED)
+        self.assertEqual(funding.loaded, self.TODAY)
+        # Ни почт, ни сумм: в базе лежат только подписи.
+        self.assertNotIn("@", " ".join(Supporter.objects.values_list("name", flat=True)))
+        self.assertContains(self.client.get(reverse("about")), ">Котик<")
+
+    def test_a_new_export_replaces_the_names(self):
+        self.send(reverse("admin:core_funding_add"), EXPORT.encode("utf-8-sig"))
+        funding = Funding.objects.get()
+
+        later = EXPORT + '"Новый Человек";;donation;100,00;88,30;2026-10-20;\n'
+        self.send(reverse("admin:core_funding_change", args=[funding.pk]), later.encode("utf-8-sig"))
+
+        self.assertEqual(funding.names(), ["Алёна С.", "Иван Па.", "Иван Пе.", "Котик", "Новый Ч."])
+
+    def test_without_a_file_the_names_stay(self):
+        self.send(reverse("admin:core_funding_add"), EXPORT.encode("utf-8-sig"))
+        funding = Funding.objects.get()
+
+        self.send(reverse("admin:core_funding_change", args=[funding.pk]), until="2027-02-01")
+
+        funding.refresh_from_db()
+        self.assertEqual(funding.until, date(2027, 2, 1))
+        self.assertEqual(funding.names(), SIGNED)
+        # Подпись можно поправить и руками — список имён стоит прямо в форме сбора.
+        self.assertContains(self.client.get(reverse("admin:core_funding_change", args=[funding.pk])), 'name="supporters-0-name"')
+
+    def test_a_file_that_is_not_an_export_saves_nothing(self):
+        response = self.send(reverse("admin:core_funding_add"), "просто текст".encode("cp1251"))
+        self.assertContains(response, "Файл не в UTF-8")
+
+        response = self.send(reverse("admin:core_funding_add"), b"a;b\n1;2\n")
+        self.assertContains(response, "это не выгрузка донатов Boosty")
+
+        self.assertFalse(Funding.objects.exists())
 
 
 class ContactsPageTests(TestCase):
@@ -1139,7 +1342,7 @@ class FooterTests(TestCase):
         не догрузив весь каталог."""
         page = self.client.get(reverse("material_list"))
 
-        for name in ["applicants", "contacts", "support"]:
+        for name in ["about", "contacts", "support"]:
             with self.subTest(link=name):
                 self.assertContains(page, f'href="{reverse(name)}"')
         self.assertContains(page, "vk.com/knt_mipt")
@@ -1151,7 +1354,7 @@ class FooterTests(TestCase):
         """Боковой панели у гостя нет, и ссылки ему больше взять неоткуда."""
         self.client.logout()
 
-        self.assertContains(self.client.get(reverse("applicants")), "<footer")
+        self.assertContains(self.client.get(reverse("about")), "<footer")
 
 
 class SkinTests(TestCase):
@@ -1240,7 +1443,7 @@ class SkinTests(TestCase):
     def test_a_guest_sees_no_ghost(self):
         self.client.logout()
 
-        page = self.page("applicants")
+        page = self.page("about")
 
         self.assertIn('class="theme-halloween"', page)
         self.assertNotIn(self.GHOST, page)
@@ -1253,7 +1456,7 @@ class SkinTests(TestCase):
         У гостя шапка другая, и крючков на ней нет: на витринных страницах орнамент свой."""
         inside = self.page()
         self.client.logout()
-        outside = self.page("applicants")
+        outside = self.page("about")
 
         for hook in ("site-aside", "site-header", "site-body"):
             with self.subTest(hook=hook):
@@ -1351,19 +1554,19 @@ class LockdownTests(TestCase):
     # --- кого не пускает ---
 
     def test_an_open_site_does_not_notice_the_gate(self):
-        self.assertInside(self.client.get(reverse("applicants")))
+        self.assertInside(self.client.get(reverse("about")))
 
         # Запись есть, текст заготовлен, но галочка не стоит — это ещё не закрытие.
         Lockdown(active=False, text="черновик").save()
 
-        self.assertInside(self.client.get(reverse("applicants")))
+        self.assertInside(self.client.get(reverse("about")))
 
     def test_a_guest_gets_the_closed_page_at_every_address(self):
         """И на открытых всему интернету страницах, и там, где раньше ждала форма входа,
         и по адресу, которого нет вовсе."""
         close_site()
 
-        for path in ("/", reverse("applicants"), reverse("contacts"), reverse("support"),
+        for path in ("/", reverse("about"), reverse("contacts"), reverse("support"),
                      reverse("material_list"), reverse("admin:index"), "/no/such/page/"):
             with self.subTest(path=path):
                 self.assertShut(self.client.get(path))
@@ -1499,7 +1702,7 @@ class LockdownTests(TestCase):
     def test_the_answer_says_it_is_temporary_and_must_not_be_kept(self):
         close_site()
 
-        response = self.client.get(reverse("applicants"))
+        response = self.client.get(reverse("about"))
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["Retry-After"], "3600")
@@ -1656,7 +1859,7 @@ class LockdownTests(TestCase):
 
         self.client.post(change, {"text": "Закрыто.", "due": "", "deadline": "", "contact": ""})
 
-        self.assertInside(Client().get(reverse("applicants")))
+        self.assertInside(Client().get(reverse("about")))
 
     def test_a_moderator_without_the_right_cannot_reach_the_switch(self):
         self.client.force_login(make_user("mod@t.local", is_staff=True))
@@ -1678,7 +1881,7 @@ class LockdownTests(TestCase):
 
         call_command("lockdown", "--off", stdout=out)
 
-        self.assertInside(self.client.get(reverse("applicants")))
+        self.assertInside(self.client.get(reverse("about")))
 
     def test_the_migration_makes_the_group_with_the_one_right(self):
         migration = importlib.import_module("core.migrations.0002_lockdown")

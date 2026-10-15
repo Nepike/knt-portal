@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth.decorators import login_not_required
 from django.urls import path
 from django.views.generic import RedirectView
 
@@ -6,8 +7,9 @@ from . import views
 
 urlpatterns = [
     path("", views.home, name="home"),
-    path("about/", views.applicants, name="applicants"),
-    path('applicants/', RedirectView.as_view(pattern_name='applicants', permanent=True)),
+    path("about/", views.about, name="about"),
+    # Старый адрес из чужих ссылок. Без login_not_required гостя отсюда уводило на вход.
+    path('applicants/', login_not_required(RedirectView.as_view(pattern_name='about', permanent=True))),
     path("contacts/", views.contacts, name="contacts"),
     path("support/", views.support, name="support"),
     path("closed/", views.closed, name="lockdown"),
