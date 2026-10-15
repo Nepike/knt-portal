@@ -714,6 +714,14 @@ class AboutPageTests(TestCase):
         self.assertNotIn("34 бюджетных", page)
         self.assertRedirects(self.client.get("/applicants/"), reverse("about"), status_code=301)
 
+    @override_settings(SITE_THEME="halloween")
+    def test_the_title_keeps_plain_letters_under_a_skin(self):
+        """Потёки хэллоуина на странице благодарностей не к месту: у заголовка нет крючка скина."""
+        page = self.page().content.decode()
+
+        self.assertIn('class="theme-halloween"', page)
+        self.assertRegex(page, r'<h1 class="(?![^"]*page-title)[^"]*">Сайт разрабатывают')
+
     def test_a_guest_gets_three_menu_items(self):
         page = self.page().content.decode()
         menu = page.split('<nav')[1].split('</nav>')[0]

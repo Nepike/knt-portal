@@ -21,7 +21,8 @@
 <div class="flex flex-wrap items-start justify-center gap-x-14 gap-y-12 py-4">
   <div class="min-w-0 flex-[1_1_440px] flex flex-col gap-7 pt-3">
     <div>
-      <h1 class="page-title text-3xl sm:text-4xl font-extrabold leading-tight tracking-tight">Сайт разрабатывают, поддерживают и спонсируют студенты</h1>
+      {# Без page-title: потёки событийного скина благодарности не к лицу #}
+      <h1 class="text-3xl sm:text-4xl font-extrabold leading-tight tracking-tight">Сайт разрабатывают, поддерживают и спонсируют студенты</h1>
       {% if funding %}
       <p class="mt-4 text-lg leading-relaxed text-slate-600 dark:text-slate-400">
         {% if funding.current %}Каждый месяц сайта кто-то оплатил. Сейчас он оплачен по {{ funding.until|date:"F Y"|lower }} года включительно — спасибо людям из чека.{% else %}Сайт был оплачен по {{ funding.until|date:"F Y"|lower }} года — спасибо людям из чека.{% endif %}
@@ -53,7 +54,7 @@
   </div>
 
   {% if funding %}
-  <div class="w-full max-w-[370px] -rotate-2 drop-shadow-xl">
+  <div class="w-full max-w-[370px] drop-shadow-xl">
     <div class="bg-white px-6 pt-7 pb-5 font-mono text-sm leading-7 text-slate-800">
       <p class="text-center font-bold">КНТ · СТУДЕНЧЕСКИЙ САЙТ</p>
       <p class="text-center text-slate-500">knt-mipt.ru</p>
