@@ -231,6 +231,72 @@ html { color-scheme: light; }
   .slot-profile_background { @apply grid-cols-2 sm:grid-cols-3; }
   .slot-profile_background :is(img, video) { @apply aspect-video object-cover rounded-md; }
 
+  /* Полка магазина — лента, которая листается целыми плитками (shelf в components.js).
+     Ширина плитки — доля ленты: на компьютере видно 6 рамок, 3 фона, 2 шапки, а на
+     телефоне следующая выглядывает с края — так понятно, что ленту можно листать.
+     Поля внутри ленты съедены отрицательными снаружи: иначе лента обрезала бы ореол
+     эпических плиток и подъём плитки при наведении. */
+  .shelf {
+    @apply grid grid-flow-col gap-3.5 overflow-x-auto snap-x snap-mandatory overscroll-x-contain;
+    padding: 0.75rem 0.5rem;
+    margin: -0.75rem -0.5rem;
+    scroll-padding-inline: 0.5rem;
+    scrollbar-width: none;
+  }
+  .shelf::-webkit-scrollbar { display: none; }
+  .shelf-avatar_frame { grid-auto-columns: 40%; }
+  .shelf-profile_background { grid-auto-columns: 85%; }
+  .shelf-profile_header { grid-auto-columns: 100%; }
+  @media (width >= 40rem) {
+    .shelf-avatar_frame { grid-auto-columns: calc((100% - 3 * 0.875rem) / 4); }
+    .shelf-profile_background { grid-auto-columns: calc((100% - 0.875rem) / 2); }
+    .shelf-profile_header { grid-auto-columns: calc((100% - 0.875rem) / 2); }
+  }
+  @media (width >= 64rem) {
+    .shelf-avatar_frame { grid-auto-columns: calc((100% - 5 * 0.875rem) / 6); }
+    .shelf-profile_background { grid-auto-columns: calc((100% - 2 * 0.875rem) / 3); }
+  }
+  .shelf-avatar_frame :is(img, video) { @apply aspect-square; }
+  .shelf-profile_header :is(img, video) { @apply aspect-[6/1] object-cover rounded-md; }
+  .shelf-profile_background :is(img, video) { @apply aspect-video object-cover rounded-md; }
+  .shelf-arrow {
+    @apply inline-flex items-center justify-center w-9 h-9 rounded-full border border-slate-200 dark:border-slate-700;
+    @apply text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent;
+  }
+
+  /* Обложка кейса без своей картинки — веер из трёх самых редких вещей набора: самая
+     редкая спереди посередине, две за ней наклонены в стороны. */
+  .case-fan { @apply relative isolate block w-24 h-24 sm:w-28 sm:h-28 shrink-0; }
+  /* Карточка кейса нажимается целиком: поверх неё растянута кнопка «что внутри», а над
+     той — только кнопка открытия. isolate у веера держит его наклонённые плитки под ней. */
+  .case-card { @apply relative transition hover:border-accent/50 hover:-translate-y-0.5; }
+  .case-card-link { @apply absolute inset-0 z-[5] rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50; }
+  .case-fan-card { position: absolute; top: 1rem; left: 50%; width: 4.5rem; margin-left: -2.25rem; }
+  .case-fan-card:nth-child(1) { z-index: 2; }
+  .case-fan-card:nth-child(2) { z-index: 1; transform: translateX(-1.4rem) rotate(-12deg); }
+  .case-fan-card:nth-child(3) { transform: translateX(1.4rem) rotate(12deg); }
+  /* Шансы ступеней полоской: класс ступени объявляет цвет, отрезок им заливается. */
+  .case-odds { background: var(--rarity); }
+  .case-grid { @apply grid grid-cols-3 sm:grid-cols-5 gap-3; }
+  /* В кейсе вещи разных видов вперемешку — плитки одной формы, иначе сетка рвётся. */
+  :is(.case-fan, .case-grid, .roulette) :is(img, video) { @apply aspect-square object-cover; }
+
+  /* Рулетка кейса: лента плиток едет под стрелкой и встаёт на выигрыше (roulette в
+     components.js). Края гаснут маской — видно, что лента длиннее окна. */
+  .roulette {
+    @apply relative overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-950 py-4;
+    mask-image: linear-gradient(90deg, transparent, black 15%, black 85%, transparent);
+  }
+  .roulette::after {
+    content: "";
+    @apply absolute inset-y-1 left-1/2 w-0.5 -ml-px rounded-full bg-accent z-10;
+  }
+  .roulette-track { @apply relative flex gap-2 w-max px-2; will-change: transform; }
+  .roulette-cell { @apply block w-24 sm:w-28 shrink-0 transition duration-300; }
+  /* Лента встала: выигрыш подрастает, остальное гаснет — чтобы глаз сразу нашёл, что выпало. */
+  .roulette-done .roulette-cell:not([data-prize]) { @apply opacity-40; }
+  .roulette-done [data-prize] { @apply scale-110; }
+
   /* Карточка страницы профиля. Отдельным классом, потому что под косметическим фоном
      она становится полупрозрачной: иначе на телефоне фона не видно вовсе — колонка
      занимает всю ширину, и полей по бокам, где он проглядывал бы, там нет. */
@@ -525,7 +591,10 @@ html { color-scheme: light; }
 
 /* Значок валюты на месяц — конфета. Одним правилом на все места разом: значок везде
    один и тот же, .fa-cent-sign. Маска красит конфету в цвет соседнего текста, как
-   красился и сам значок, — на красной кнопке «Купить» красная конфета пропала бы. */
+   красился и сам значок, — на красной кнопке «Купить» красная конфета пропала бы.
+   Ширину значка Font Awesome задаёт сам (1.25em), а конфета шире — без своей ширины она
+   вылезала за значок и съедала пробел после него: «150 🍬остались». */
+.theme-halloween .fa-cent-sign { --fa-width: 1.5em; }
 .theme-halloween .fa-cent-sign::before {
   content: "";
   display: inline-block;

@@ -2,7 +2,8 @@
   Плитка вещи — картинка на плашке своей редкости. Общая для инвентаря и магазина,
   поэтому кнопка и подпись остаются снаружи: нажатие у них разное.
 
-  Ждёт item; on — надето: галочка в углу и ярлык, выходящий из нижнего края плашки.
+  Ждёт item; on — надето: галочка в углу и ярлык, выходящий из нижнего края плашки;
+  lazy — как подгружать картинку (см. cosmetics/_art.html), по умолчанию как в инвентаре.
   Оба цветом своей ступени — это два знака одного состояния, разные цвета были бы шумом.
 
   Обёртка не лишняя: плашка обрезает всё, что вылезает за её края (иначе блик мифической
@@ -16,7 +17,7 @@
 {% endcomment %}
 <span class="rarity-slot rarity-{{ item.rarity }}">
   <span class="rarity rarity-{{ item.rarity }}">
-    {% include "cosmetics/_art.html" with item=item lazy=True css="w-full transition-transform duration-200 group-hover:scale-105" only %}
+    {% include "cosmetics/_art.html" with item=item lazy=lazy|default:True css="w-full transition-transform duration-200 group-hover:scale-105" only %}
     {% if on %}<span class="rarity-check" aria-hidden="true"><i class="fa-solid fa-check"></i></span>{% endif %}
   </span>
   {% if on %}<span class="rarity-tag">надето</span>{% endif %}

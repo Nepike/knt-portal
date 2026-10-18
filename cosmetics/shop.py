@@ -12,8 +12,8 @@ from django.db import transaction
 from economy.models import BalanceLog
 from economy.services import lock, spend
 
-from .models import CosmeticItem, UserItem
-from .services import grant, rarity_rank
+from .models import CosmeticItem, UserItem, slot_heading
+from .services import grant
 
 
 class AlreadyOwned(Exception):
@@ -25,12 +25,55 @@ class NotForSale(Exception):
 
 
 def on_sale():
-    """Витрина: тем же порядком, что и инвентарь, — блоками по видам, внутри от дешёвой
-    к дорогой. Одинаковый порядок в двух списках позволяет искать вещь глазами одинаково."""
-    return (
-        CosmeticItem.objects.filter(sold=True)
-        .annotate(rank=rarity_rank()).order_by("kind", "rank", "name")
+    """Всё, что продаётся. Порядок на полках задаёт arrange — его выбирает человек."""
+    return CosmeticItem.objects.filter(sold=True)
+
+
+# Полки витрины по порядку. Вид, которого здесь нет, встаёт в конец: новый вид вещи
+# не должен пропасть из магазина только потому, что сюда его забыли дописать.
+SHELVES = (CosmeticItem.Kind.AVATAR_FRAME, CosmeticItem.Kind.PROFILE_BACKGROUND, CosmeticItem.Kind.PROFILE_HEADER)
+
+_RANK = {rarity: step for step, rarity in enumerate(CosmeticItem.RARITY_ORDER)}
+
+# Порядок внутри полки. По умолчанию — от редкой: витрина открывается тем, на что хочется
+# смотреть, а дешёвое находит галочка «мне по карману». Неизвестная ступень — самая редкая,
+# как и в цене (CosmeticItem.cost).
+ORDERS = {
+    "rare": lambda item: (-_RANK.get(item.rarity, len(_RANK)), item.name.casefold()),
+    "cheap": lambda item: (item.cost, item.name.casefold()),
+}
+DEFAULT_ORDER = "rare"
+
+
+def marked(user, coins):
+    """Вещи в продаже с пометками для витрины: `owned` — уже есть, `short` — сколько не хватает."""
+    owned = set(UserItem.objects.filter(user=user).values_list("item_id", flat=True))
+    items = list(on_sale())
+    for item in items:
+        item.owned = item.pk in owned
+        item.short = max(item.cost - coins, 0)
+    return items
+
+
+def arrange(items, order=DEFAULT_ORDER, affordable=False):
+    """Одна полка: отбор и порядок. «По карману» — то, что можно купить прямо сейчас:
+    денег хватает и вещи ещё нет."""
+    if affordable:
+        items = [item for item in items if not item.owned and not item.short]
+    return sorted(items, key=ORDERS[order])
+
+
+def showcase(items, order=DEFAULT_ORDER, affordable=False):
+    """Витрина полками: [(вид, подпись, вещи)]. Полка остаётся и пустой после отбора —
+    человек должен видеть, что фоны в магазине есть, просто пока не по карману."""
+    kinds = sorted(
+        {item.kind for item in items},
+        key=lambda kind: (SHELVES.index(kind) if kind in SHELVES else len(SHELVES), kind),
     )
+    return [
+        (kind, slot_heading(kind), arrange([item for item in items if item.kind == kind], order, affordable))
+        for kind in kinds
+    ]
 
 
 @transaction.atomic

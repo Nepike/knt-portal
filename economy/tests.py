@@ -563,14 +563,38 @@ class RewardTests(TestCase):
             title=title, subject=self.subject, uploader=uploader or self.user, status=status,
         )
 
-    def test_an_approved_course_is_worth_ten_materials(self):
+    def test_an_approved_course_is_worth_five_materials(self):
         """Снять пару, дотащить гигабайты до сайта и дождаться выпечки — работа другого
-        порядка, чем выложить конспект."""
+        порядка, чем выложить конспект. Было вдесятеро, но курсы сделали самые толстые
+        кошельки на сайте, и 18 окт 2026 пользователь снизил награду вдвое."""
         self.course()
         rewards.sync(self.user)
 
         self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), rewards.PLAYLIST)
-        self.assertEqual(rewards.PLAYLIST, rewards.MATERIAL * 10)
+        self.assertEqual(rewards.PLAYLIST, rewards.MATERIAL * 5)
+
+    def test_a_lowered_rate_takes_nothing_back_by_itself(self):
+        """sync только дописывает: курс, оплаченный по старой цене, он не трогает.
+        Срезать старые выплаты — отдельное решение и разовый пересчёт."""
+        with mock.patch.object(rewards, "PLAYLIST", 500):
+            self.course()
+            rewards.sync(self.user)
+
+        self.assertEqual(rewards.sync(User.objects.get(pk=self.user.pk)), {})
+        self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), 500)
+
+    def test_a_course_cut_down_to_the_new_rate_gives_back_only_the_rest(self):
+        """Так пересчитаны курсы, оплаченные по 500: строка «−250» с ключом того же курса.
+        Доплачивать её назад sync не станет, а автор, удаливший такой курс сам, отдаёт
+        оставшиеся 250, а не все 500."""
+        with mock.patch.object(rewards, "PLAYLIST", 500):
+            course = self.course()
+            rewards.sync(self.user)
+        reclaim(self.user, 250, BalanceLog.Reason.PLAYLIST, key=str(course.pk))
+
+        self.assertEqual(rewards.sync(User.objects.get(pk=self.user.pk)), {})
+        self.assertEqual(rewards.remove(course, by=self.user), 250)
+        self.assertEqual(wallet_of(self.user).balance, rewards.WELCOME)
 
     def test_a_course_on_review_is_not_paid_for_yet(self):
         self.course(status=Playlist.Status.PENDING)

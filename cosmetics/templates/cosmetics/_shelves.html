@@ -1,0 +1,53 @@
+{% comment %}
+  Полки витрины — кусок, его же отдаёт htmx, когда меняют порядок или галочку
+  (cosmetics.views.shop). Полка — лента, которая листается целыми плитками: стрелками
+  на компьютере, пальцем на телефоне (shelf в components.js, ширины в theme/input.css).
+
+  Картинки ждут, пока плитку станет видно (lazy="shelf"): анимаций в витрине на десятки
+  мегабайт, а за краем ленты их никто не видит.
+
+  Пустая после отбора полка остаётся с подписью: человек должен видеть, что фоны в магазине
+  есть, просто пока не по карману.
+{% endcomment %}
+{% for kind, title, items in shelves %}
+<section x-data="shelf" @resize.window.debounce.200ms="measure()" class="flex flex-col gap-2">
+  <div class="flex items-center gap-2">
+    <h2 class="text-lg font-bold">{{ title }}</h2>
+    <span class="text-sm text-slate-400 tabular-nums">{{ items|length }}</span>
+    {% if items %}
+    <span class="ml-auto text-xs text-slate-400 tabular-nums" x-text="label"></span>
+    {# !hidden: shelf-arrow сам ставит inline-flex, и простой hidden ему проиграл бы. Влезло всё — стрелок нет #}
+    <button type="button" x-show="shown < total" class="shelf-arrow max-sm:!hidden" @click="step(-1)" :disabled="atStart" aria-label="Назад"><i class="fa-solid fa-chevron-left"></i></button>
+    <button type="button" x-show="shown < total" class="shelf-arrow max-sm:!hidden" @click="step(1)" :disabled="atEnd" aria-label="Дальше"><i class="fa-solid fa-chevron-right"></i></button>
+    {% endif %}
+  </div>
+
+  {% if items %}
+  <div x-ref="track" @scroll.debounce.100ms="measure()" class="shelf shelf-{{ kind }}">
+    {% for item in items %}
+    {% comment %}
+      Нажатие открывает карточку товара — там примерка, цена и сама кнопка покупки.
+      Купить в один клик с полки нельзя намеренно: трата необратима, а плитка мелкая.
+    {% endcomment %}
+    <button type="button" class="group block text-left snap-start" title="{{ item.name }}"
+            hx-get="{% url 'item_card' item.pk %}{% if query %}?{{ query }}{% endif %}" hx-target="#offer" @click="open = true">
+      {% include "cosmetics/_tile.html" with item=item lazy="shelf" only %}
+      <span class="block mt-2 text-xs leading-tight truncate text-slate-600 dark:text-slate-300">{{ item.name }}</span>
+      {% if item.owned %}
+      <span class="block text-xs leading-tight font-medium text-emerald-500"><i class="fa-solid fa-check"></i> в инвентаре</span>
+      {% else %}
+      <span class="block text-xs leading-tight font-medium tabular-nums {% if item.short %}text-slate-400{% else %}text-accent{% endif %}"
+            {% if item.short %}title="Не хватает {{ item.short }}"{% endif %}>
+        {{ item.cost }} <i class="fa-solid fa-cent-sign text-[10px]"></i>
+      </span>
+      {% endif %}
+    </button>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-sm text-slate-400">
+    {% if affordable %}Пока ничего не по карману — токены капают за материалы, книги, отзывы и клетки на Стене.{% else %}Пока пусто.{% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endfor %}

@@ -1358,6 +1358,157 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  // Картинка вещи на полке магазина: источник подставляется, когда плитку видно.
+  // Браузерный loading=lazy не годится — он качает с запасом в полтора-два экрана, и
+  // витрина тянула все анимации разом (26 МБ рамок). Что ушло за край ленты, наблюдатель
+  // видимым не считает: лента обрезает его так же, как экран. У видео здесь подставляем
+  // только постер — включает и останавливает его полка (shelf ниже).
+  Alpine.data("lazyMedia", () => ({
+    watcher: null,
+
+    init() {
+      const media = this.$el;
+      this.watcher = new IntersectionObserver(([entry]) => {
+        if (!entry.isIntersecting) return;
+        if (media.tagName === "VIDEO") media.poster = media.dataset.poster;
+        else media.src = media.dataset.src;
+        this.watcher.disconnect();
+      }, { rootMargin: "200px 0px" });
+      this.watcher.observe(media);
+    },
+
+    destroy() {
+      this.watcher?.disconnect();
+    },
+  }));
+
+  // Полка магазина: лента листается стрелками и пальцем, подпись «1–6 из 29» следит за
+  // прокруткой. Видео играют все, что видно на полке: листается она по три фона, пусть
+  // и оживают по три (решение пользователя). На телефоне фон один во всю ширину — там и
+  // играет одно, Safari больше пары декодеров разом не держит. Ушедшее за край встаёт на
+  // паузу, а файл видео до первого показа не качается вовсе.
+  Alpine.data("shelf", () => ({
+    first: 0,
+    shown: 1,
+    total: 0,
+    seen: false,
+    watcher: null,
+
+    init() {
+      const track = this.$refs.track;
+      if (!track) return; // полка пустая после отбора — листать нечего
+      this.total = track.children.length;
+      this.watcher = new IntersectionObserver(([entry]) => {
+        this.seen = entry.isIntersecting;
+        this.play();
+      });
+      this.watcher.observe(track);
+      this.measure();
+    },
+
+    destroy() {
+      this.watcher?.disconnect();
+    },
+
+    get label() {
+      if (this.shown >= this.total) return "";
+      const last = Math.min(this.first + this.shown, this.total);
+      return `${last > this.first + 1 ? `${this.first + 1}–${last}` : last} из ${this.total}`;
+    },
+
+    get atStart() {
+      return this.first <= 0;
+    },
+
+    get atEnd() {
+      return this.first + this.shown >= this.total;
+    },
+
+    // Шаг ленты — плитка вместе с промежутком, то есть расстояние между соседями.
+    pitch() {
+      const [one, two] = this.$refs.track.children;
+      return two ? two.offsetLeft - one.offsetLeft : one?.offsetWidth || 1;
+    },
+
+    measure() {
+      const track = this.$refs.track;
+      if (!track) return;
+      const pitch = this.pitch();
+      this.first = Math.round(track.scrollLeft / pitch);
+      this.shown = Math.max(1, Math.round(track.clientWidth / pitch));
+      this.play();
+    },
+
+    step(direction) {
+      this.$refs.track.scrollBy({ left: direction * this.shown * this.pitch(), behavior: "smooth" });
+    },
+
+    play() {
+      [...this.$refs.track.children].forEach((tile, index) => {
+        const video = tile.querySelector("video");
+        if (!video) return;
+        if (this.seen && index >= this.first && index < this.first + this.shown) {
+          if (!video.src) video.src = video.dataset.src;
+          video.play().catch(() => {}); // автоплей могли запретить — останется постер
+        } else {
+          video.pause();
+        }
+      });
+    },
+  }));
+
+  // Рулетка кейса: лента едет и встаёт на выигрыше. Исход решён сервером ДО анимации, она
+  // его только показывает. Ждём картинку выигрыша (рамка весит до трёх мегабайт), но не
+  // дольше полутора секунд. Стрелка встаёт не ровно в середину плитки, а куда-то в неё:
+  // ровная середина каждый раз выглядит подстроенной.
+  Alpine.data("roulette", () => ({
+    done: false,
+    track: null,
+    target: 0,
+
+    init() {
+      this.track = this.$refs.track;
+      const prize = this.track?.querySelector("[data-prize]");
+      if (!prize) return this.finish();
+      const jitter = (Math.random() - 0.5) * prize.offsetWidth * 0.7;
+      this.target = prize.offsetLeft + prize.offsetWidth / 2 + jitter - this.track.parentElement.clientWidth / 2;
+      const picture = prize.querySelector("img");
+      const loaded = !picture || picture.complete
+        ? Promise.resolve()
+        : new Promise((go) => {
+          picture.addEventListener("load", go, { once: true });
+          picture.addEventListener("error", go, { once: true });
+          setTimeout(go, 1500);
+        });
+      loaded.then(() => requestAnimationFrame(() => this.spin()));
+    },
+
+    spin() {
+      if (this.done) return;
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) return this.skip();
+      this.track.style.transition = "transform 4.6s cubic-bezier(0.1, 0.75, 0.15, 1)";
+      this.track.style.transform = `translateX(${-this.target}px)`;
+      this.track.addEventListener("transitionend", () => this.finish(), { once: true });
+    },
+
+    // Докрутить сразу: человек закрывает окно или жмёт на ленту, не дождавшись. Иначе он
+    // закрыл бы окно и не узнал, что выпало, — вещь уже в инвентаре, а какая, не видно.
+    skip() {
+      if (this.done) return;
+      this.track.style.transition = "none";
+      this.track.style.transform = `translateX(${-this.target}px)`;
+      this.finish();
+    },
+
+    finish() {
+      if (this.done) return;
+      this.done = true;
+      this.$el.classList.add("roulette-done");
+      const coins = document.getElementById("coins");
+      if (coins && this.$el.dataset.coins) coins.textContent = this.$el.dataset.coins;
+    },
+  }));
+
   // Библиотека HLS общая на страницу и грузится один раз: обещание запоминаем, иначе
   // два плеера на одной странице потянули бы её дважды.
   let hlsLibrary = null;

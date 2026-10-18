@@ -1,0 +1,32 @@
+{% comment %}
+  Кнопка открытия кейса — на витрине, в окне «что внутри» и под рулеткой («ещё раз»).
+  Ждёт case с пометками cosmetics.cases.on_show; ghost — вторая кнопка рядом с главной;
+  ask — сперва переспросить (на витрине: кейс там открывают мимоходом, а трата необратима).
+  hx-disabled-elt: второе нажатие, пока первый ответ в пути, открыло бы второй кейс.
+{% endcomment %}
+{% if case.collected %}
+<button type="button" disabled class="btn {% if ghost %}btn-ghost{% else %}btn-primary{% endif %} self-start whitespace-nowrap">Всё собрано</button>
+{% elif case.short %}
+<button type="button" disabled class="btn {% if ghost %}btn-ghost{% else %}btn-primary{% endif %} self-start whitespace-nowrap">Не хватает {{ case.short }} <i class="fa-solid fa-cent-sign text-xs"></i></button>
+{% elif ask %}
+<div x-data="{ sure: false }" class="flex flex-col gap-2">
+  <button type="button" x-show="!sure" @click="sure = true" class="btn btn-primary self-start whitespace-nowrap">
+    {% if case.cost %}<i class="fa-solid fa-box-open"></i>Открыть за {{ case.cost }} <i class="fa-solid fa-cent-sign text-xs"></i>{% else %}<i class="fa-solid fa-gift"></i>Открыть бесплатно{% endif %}
+  </button>
+  <div x-show="sure" x-cloak class="flex flex-col gap-2">
+    <span class="text-xs text-slate-500 dark:text-slate-400">
+      {% if case.cost %}Спишется {{ case.cost }} <i class="fa-solid fa-cent-sign text-[10px]"></i> — открыть?{% else %}Подарочный кейс один — открыть этот?{% endif %}
+    </span>
+    <span class="flex gap-2">
+      <button type="button" class="btn btn-primary whitespace-nowrap"
+              hx-post="{% url 'case_open' case.pk %}" hx-target="#offer" hx-disabled-elt="this" @click="open = true; sure = false">Открыть</button>
+      <button type="button" class="btn btn-ghost" @click="sure = false">Отмена</button>
+    </span>
+  </div>
+</div>
+{% else %}
+<button type="button" class="btn {% if ghost %}btn-ghost{% else %}btn-primary{% endif %} self-start whitespace-nowrap"
+        hx-post="{% url 'case_open' case.pk %}" hx-target="#offer" hx-disabled-elt="this" @click="open = true">
+  {% if case.cost %}<i class="fa-solid fa-box-open"></i>{% if ghost %}Ещё раз за{% else %}Открыть за{% endif %} {{ case.cost }} <i class="fa-solid fa-cent-sign text-xs"></i>{% else %}<i class="fa-solid fa-gift"></i>Открыть бесплатно{% endif %}
+</button>
+{% endif %}

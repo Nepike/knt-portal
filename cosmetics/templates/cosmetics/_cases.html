@@ -1,0 +1,46 @@
+{% load attachment_extras text_extras %}
+{% comment %}
+  Кейсы под полками витрины (пометки — cosmetics.cases.on_show). Отдельным куском, потому
+  что его перерисовывает и окно рулетки (hx-swap-oob в cosmetics/_roulette.html): после
+  первого открытия «бесплатно» должно смениться ценой.
+
+  Обложка — картинка из админки, без неё веер из трёх самых редких вещей набора. Картинки
+  ждут, пока их станет видно (lazy="shelf"): раздел в самом низу страницы.
+  Полоска под названием — шансы ступеней, длина отрезка и есть шанс.
+
+  Карточка нажимается целиком и открывает «что внутри». Кнопка открытия на ней спрашивает
+  «точно?» (ask): с витрины кейс открывают мимоходом, а трата необратима. В окне «что внутри»
+  и под рулеткой переспрашивать незачем — человек уже смотрит на кейс.
+{% endcomment %}
+{% if cases %}
+<section class="flex flex-col gap-3">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <h2 class="text-lg font-bold">Кейсы</h2>
+    {% if cases.0.gift %}<span class="text-sm font-medium text-accent"><i class="fa-solid fa-gift"></i> первый — любой — в подарок</span>{% endif %}
+  </div>
+  <div class="grid gap-4 md:grid-cols-2">
+    {% for case in cases %}
+    <article class="case-card panel p-4 flex items-center gap-4">
+      <button type="button" class="case-card-link" aria-label="Что внутри кейса «{{ case.name }}»"
+              hx-get="{% url 'case_card' case.pk %}" hx-target="#offer" @click="open = true"></button>
+      {% if case.cover %}
+      <img x-data="lazyMedia" data-src="{{ case.cover|media }}" alt="" decoding="async" class="w-24 h-24 sm:w-28 sm:h-28 shrink-0 rounded-xl object-cover">
+      {% else %}
+      <span class="case-fan" aria-hidden="true">
+        {% for item in case.fan %}<span class="case-fan-card">{% include "cosmetics/_tile.html" with item=item lazy="shelf" only %}</span>{% endfor %}
+      </span>
+      {% endif %}
+      <div class="min-w-0 flex-1 flex flex-col gap-2">
+        <h3 class="font-bold leading-tight">{{ case.name }}</h3>
+        <div class="flex h-1.5 rounded-full overflow-hidden"
+             title="{% for rarity, label, width, share in case.chances %}{{ label }} {{ share }} %{% if not forloop.last %} · {% endif %}{% endfor %}">
+          {% for rarity, label, width, share in case.chances %}<span class="case-odds rarity-{{ rarity }}" style="width: {{ width }}%"></span>{% endfor %}
+        </div>
+        <span class="text-xs text-accent">Что внутри · {{ case.size }} {{ case.size|plural:"вещь,вещи,вещей" }}</span>
+        <div class="relative z-10 self-start">{% include "cosmetics/_case_button.html" with case=case ask=True only %}</div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}

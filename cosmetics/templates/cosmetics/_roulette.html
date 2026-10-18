@@ -1,0 +1,60 @@
+{% comment %}
+  Окно рулетки — ответ на открытие кейса (cosmetics.views.case_open). Исход уже записан:
+  лента его только показывает (roulette в components.js). Закрыть окно посреди ленты — или
+  нажать на неё — значит докрутить сразу: выпавшее человек увидит в любом случае.
+  Плитки ленты — картинкой без видео (lazy="still"): видео фонов в ленте — это десяток
+  декодеров на четыре секунды. Разных картинок в ленте не больше восьми (cosmetics.cases.reel).
+
+  Баланс в шапке витрины меняется, когда лента встала (data-coins), а не сразу: по цифре
+  исход был бы виден раньше ленты. Кейсы под полками перерисовываются сразу (hx-swap-oob
+  внизу): «бесплатно» после первого открытия должно смениться ценой.
+{% endcomment %}
+<div class="relative p-6 flex flex-col gap-5"
+     {% if opening %}x-data="roulette" data-coins="{{ coins }}" @offer-closing.window="if (!done) { $event.preventDefault(); skip() }"{% endif %}>
+  <button type="button" @click="close()" aria-label="Закрыть"
+          class="absolute top-3 right-3 w-8 h-8 rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+    <i class="fa-solid fa-xmark"></i>
+  </button>
+
+  <div>
+    <h2 class="text-lg font-bold pr-8">Кейс «{{ case.name }}»</h2>
+    {% if opening %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">
+      {% if opening.paid %}за {{ opening.paid }} <i class="fa-solid fa-cent-sign text-xs"></i>{% else %}<i class="fa-solid fa-gift"></i> первый — в подарок{% endif %}
+    </p>
+    {% endif %}
+  </div>
+
+  {% if error %}
+  <p class="text-sm">{{ error }}</p>
+  {% else %}
+  <div class="roulette" @click="skip()">
+    <div class="roulette-track" x-ref="track">
+      {% for item in reel %}
+      <span class="roulette-cell"{% if forloop.counter0 == stop %} data-prize{% endif %}>{% include "cosmetics/_tile.html" with item=item lazy="still" only %}</span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div x-show="done" x-cloak x-transition.opacity class="flex flex-col items-center gap-2 text-center">
+    {% if opening.item %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">Выпало</p>
+    <p class="text-2xl font-extrabold leading-tight">{{ opening.item.name }}</p>
+    <p class="text-sm rarity-{{ opening.item.rarity }} rarity-ink font-medium">{{ opening.item.get_rarity_display }} · {{ opening.item.get_kind_display }}</p>
+    <div class="flex flex-wrap justify-center gap-2 mt-2">
+      <form method="post" action="{% url 'item_equip' opening.item.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-shirt"></i>Надеть</button>
+      </form>
+      {% if again %}{% include "cosmetics/_case_button.html" with case=again ghost=True only %}{% endif %}
+    </div>
+    <p class="text-xs text-slate-400">Вещь добавлена в инвентарь.</p>
+    {% else %}
+    <p class="text-lg font-bold">Выпала {{ opening.get_rarity_display }} — но такие из этого кейса у тебя уже все</p>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Списали только половину цены: {{ opening.refund }} <i class="fa-solid fa-cent-sign text-xs"></i> остались у тебя.</p>
+    {% if again %}<div class="mt-2">{% include "cosmetics/_case_button.html" with case=again ghost=True only %}</div>{% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+<div id="cases" hx-swap-oob="true">{% include "cosmetics/_cases.html" %}</div>

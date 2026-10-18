@@ -1,6 +1,6 @@
 from django import forms
 
-from .models import CosmeticItem
+from .models import Case, CosmeticItem
 from .specs import validate, validate_video
 
 FILES = ("image", "video")
@@ -41,4 +41,24 @@ class CosmeticItemForm(forms.ModelForm):
             validate(kind, data["image"])
         if self.files.get("video") and data.get("video"):
             validate_video(kind, data["video"])
+        return data
+
+
+class CaseForm(forms.ModelForm):
+    """Форма кейса в админке. Пустой кейс включить нельзя: на витрине он не покажется, а
+    открыть его по старой ссылке значило бы взять деньги ни за что."""
+
+    class Meta:
+        model = Case
+        exclude = ("created",)
+
+    def clean(self):
+        data = super().clean()
+        # Прежняя обложка — как у вещи (CosmeticItemForm): снимается после записи.
+        self.stale = []
+        old = self.instance.cover if self.instance.pk else None
+        if old and (self.files.get("cover") or data.get("cover") is False):
+            self.stale.append((old.storage, old.name))
+        if data.get("active") and not data.get("items"):
+            self.add_error("active", "Сначала выбери вещи: пустой кейс открыть нельзя")
         return data

@@ -12,11 +12,23 @@
   постер мелькнул как можно короче. С lazy наоборот: качать до попадания в экран нечего.
 
   playsinline обязателен: без него iOS открывает видео на весь экран вместо фона.
+
+  lazy="shelf" — полка магазина (cosmetics/_shelves.html). Там и картинка, и постер видео
+  ждут, пока плитку станет видно (lazyMedia в components.js): браузерный loading=lazy
+  качает с запасом в полтора-два экрана, и витрина тянула все анимации разом. Играет
+  видео тоже не само: включает видимые и ставит на паузу ушедшие сама полка (shelf).
+
+  lazy="still" — лента рулетки кейса (cosmetics/_roulette.html): одна картинка, без видео,
+  и сразу — лента едет четыре секунды, ждать видимости ей некогда.
 {% endcomment %}
-{% if item.video %}
-<video {% if lazy %}x-data="lazyVideo" data-src="{{ item.video|media }}" preload="none"{% else %}src="{{ item.video|media }}" autoplay preload="auto"{% endif %}
-       poster="{{ item.image|media }}" muted loop playsinline
+{% if lazy == "still" %}
+<img src="{{ item.image|media }}" alt="" decoding="async" class="{{ css }}">
+{% elif item.video %}
+<video {% if lazy == "shelf" %}x-data="lazyMedia" data-poster="{{ item.image|media }}" data-src="{{ item.video|media }}" preload="none"{% elif lazy %}x-data="lazyVideo" data-src="{{ item.video|media }}" poster="{{ item.image|media }}" preload="none"{% else %}src="{{ item.video|media }}" poster="{{ item.image|media }}" autoplay preload="auto"{% endif %}
+       muted loop playsinline
        class="{{ css }}"></video>
+{% elif lazy == "shelf" %}
+<img x-data="lazyMedia" data-src="{{ item.image|media }}" alt="" decoding="async" class="{{ css }}">
 {% else %}
 <img src="{{ item.image|media }}" alt="" loading="lazy" decoding="async" class="{{ css }}">
 {% endif %}

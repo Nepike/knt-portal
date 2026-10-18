@@ -36,15 +36,23 @@ class CosmeticItem(models.Model):
     # «legendary» оказывался бы между «epic» и «mythical». Отсюда явный порядок.
     RARITY_ORDER = (Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY, Rarity.MYTHICAL)
 
-    # Цена по ступени. Проставлять её каждой из полусотни вещей руками незачем — редкость
-    # ровно про это и есть. Цифры от начислений: медиана заработанного 510, а 127 человек
-    # из 324 получат только стартовые 500, и им должно хватать на первую обычную вещь.
-    RARITY_PRICE = {
-        Rarity.COMMON: 250,
-        Rarity.RARE: 600,
-        Rarity.EPIC: 1200,
-        Rarity.LEGENDARY: 2500,
-        Rarity.MYTHICAL: 5000,
+    # Цена по виду и ступени. Проставлять её каждой из полусотни вещей руками незачем:
+    # ступень ровно про это и есть, а вид решает, сколько места вещь занимает. Рамка — мера;
+    # фон примерно в полтора раза дороже — кроет всю страницу профиля и почти всегда видео;
+    # шапка дешевле — узкая полоса под именем.
+    # Цифры — решение пользователя 18 окт 2026: со стартовых 500 должно хватать не на одну
+    # вещь, а хотя бы на две редкие рамки. У половины людей на счету столько и есть.
+    # Новый вид вещи — новая строка; без неё вещь стоит как самая дорогая (см. cost).
+    PRICES = {
+        Kind.PROFILE_HEADER: {
+            Rarity.COMMON: 50, Rarity.RARE: 150, Rarity.EPIC: 350, Rarity.LEGENDARY: 900, Rarity.MYTHICAL: 2500,
+        },
+        Kind.AVATAR_FRAME: {
+            Rarity.COMMON: 100, Rarity.RARE: 250, Rarity.EPIC: 600, Rarity.LEGENDARY: 1500, Rarity.MYTHICAL: 4000,
+        },
+        Kind.PROFILE_BACKGROUND: {
+            Rarity.COMMON: 150, Rarity.RARE: 400, Rarity.EPIC: 900, Rarity.LEGENDARY: 2200, Rarity.MYTHICAL: 6000,
+        },
     }
 
     name = models.CharField("название", max_length=100, unique=True)
@@ -79,7 +87,7 @@ class CosmeticItem(models.Model):
 
     sold = models.BooleanField("продаётся", default=True)
     price = models.PositiveIntegerField(
-        "своя цена", null=True, blank=True, help_text="пусто — по редкости",
+        "своя цена", null=True, blank=True, help_text="пусто — по виду и редкости",
     )
 
     class Meta:
@@ -98,11 +106,14 @@ class CosmeticItem(models.Model):
 
     @property
     def cost(self):
-        """Сколько стоит. Неизвестная ступень — самая дорогая: ошибиться в сторону
-        «дорого» не страшно, в сторону «даром» — раздать полбакета."""
+        """Сколько стоит. Вид или ступень не из таблицы — самая высокая цена в ней:
+        ошибиться в сторону «дорого» не страшно, в сторону «даром» — раздать полбакета."""
         if self.price is not None:
             return self.price
-        return self.RARITY_PRICE.get(self.rarity, self.RARITY_PRICE[self.Rarity.MYTHICAL])
+        try:
+            return self.PRICES[self.kind][self.rarity]
+        except KeyError:
+            return max(price for row in self.PRICES.values() for price in row.values())
 
     def slot_title(self):
         return slot_heading(self.kind)
@@ -166,3 +177,61 @@ class UserItem(models.Model):
     def save(self, *args, **kwargs):
         self.kind = self.item.kind  # предмет уже загружен везде, откуда сюда приходят
         super().save(*args, **kwargs)
+
+
+class Case(models.Model):
+    """Кейс: коробка с ценой и набором вещей. Открыл — выпала одна вещь из набора.
+
+    Шансы общие на все кейсы и живут в cosmetics/cases.py — по ступеням, а не по вещам:
+    взвешивать руками каждую из полусотни вещей незачем. В набор идут любые вещи, и те,
+    которых нет в продаже (sold выключен), — так у кейса бывают свои, эксклюзивные.
+    Набор не следит за магазином сам: новую рамку в кейс «Рамки» добавляют руками.
+    """
+
+    name = models.CharField("название", max_length=100, unique=True)
+    price = models.PositiveIntegerField("цена")
+    items = models.ManyToManyField(CosmeticItem, verbose_name="вещи", related_name="cases")
+    cover = models.ImageField(
+        "обложка", upload_to=frame_upload_to, storage=media_storage, blank=True,
+        help_text="пусто — веер из трёх самых редких вещей набора",
+    )
+    active = models.BooleanField("открывается", default=False, help_text="пустой кейс включить нельзя")
+    order = models.PositiveSmallIntegerField("порядок", default=0, help_text="меньше — раньше на витрине")
+    created = models.DateTimeField("добавлен", default=timezone.now)
+
+    class Meta:
+        verbose_name = "кейс"
+        verbose_name_plural = "кейсы"
+        ordering = ["order", "price", "pk"]
+
+    def __str__(self):
+        return self.name
+
+
+class CaseOpening(models.Model):
+    """Журнал открытий: кто, какой кейс, что выпало, за сколько.
+
+    По нему шансы сверяются с фактом, и по нему же видно, был ли у человека первый,
+    подарочный кейс. Кейс с открытиями не удаляется — его выключают.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.CASCADE, related_name="case_openings",
+    )
+    case = models.ForeignKey(Case, verbose_name="кейс", on_delete=models.PROTECT, related_name="openings")
+    # Пусто — выпала ступень, которая у человека уже собрана целиком: вещи нет, вернули половину.
+    item = models.ForeignKey(
+        CosmeticItem, verbose_name="выпало", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    rarity = models.CharField("ступень", max_length=20, choices=CosmeticItem.Rarity.choices)
+    paid = models.PositiveIntegerField("цена", help_text="0 — первый, подарочный")
+    refund = models.PositiveIntegerField("вернули", default=0)
+    created = models.DateTimeField("когда", default=timezone.now)
+
+    class Meta:
+        verbose_name = "открытие кейса"
+        verbose_name_plural = "открытия кейсов"
+        ordering = ["-id"]
+
+    def __str__(self):
+        return f"{self.user}: {self.case}"

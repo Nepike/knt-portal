@@ -1,0 +1,40 @@
+{% comment %}
+  Что внутри кейса — окно на витрине (cosmetics.views.case_card). Вещи по ступеням от
+  мифической, у ступени её шанс. Что у человека уже есть, помечено: оно не выпадет.
+{% endcomment %}
+<div class="relative p-6 flex flex-col gap-5">
+  <button type="button" @click="close()" aria-label="Закрыть"
+          class="absolute top-3 right-3 w-8 h-8 rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+    <i class="fa-solid fa-xmark"></i>
+  </button>
+
+  <div>
+    <h2 class="text-lg font-bold pr-8">Кейс «{{ case.name }}»</h2>
+    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">
+      Выпадает одна вещь из {{ case.size }}: сначала редкость — по шансам ниже, потом вещь этой
+      редкости, которой у тебя ещё нет. Если такие у тебя уже все, вернётся половина цены.
+    </p>
+  </div>
+
+  {% for rarity, label, share, items in groups %}
+  <section class="flex flex-col gap-2">
+    <h3 class="text-sm font-bold rarity-{{ rarity }} rarity-ink">{{ label|capfirst }} · {{ share }} %</h3>
+    <div class="case-grid">
+      {% for item in items %}
+      <div class="min-w-0" title="{{ item.name }}">
+        {% include "cosmetics/_tile.html" with item=item lazy="shelf" only %}
+        <span class="block mt-2 text-xs leading-tight truncate text-slate-600 dark:text-slate-300">{{ item.name }}</span>
+        {% if item.owned %}<span class="block text-xs leading-tight font-medium text-emerald-500"><i class="fa-solid fa-check"></i> есть</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <div class="flex flex-wrap items-center gap-3">
+    <span class="text-sm text-slate-500 dark:text-slate-400">
+      на счету <span class="font-bold text-accent tabular-nums">{{ coins }}</span> <i class="fa-solid fa-cent-sign text-xs text-accent"></i>
+    </span>
+    <span class="ml-auto">{% include "cosmetics/_case_button.html" with case=case only %}</span>
+  </div>
+</div>

@@ -11,7 +11,7 @@
   как покупка уживётся с тем, что уже надето.
 {% endcomment %}
 <div class="relative p-6">
-  <button type="button" @click="open = false" aria-label="Закрыть"
+  <button type="button" @click="close()" aria-label="Закрыть"
           class="absolute top-3 right-3 w-8 h-8 rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
     <i class="fa-solid fa-xmark"></i>
   </button>
@@ -19,6 +19,21 @@
   <h2 class="text-lg font-bold pr-8">{{ item.name }}</h2>
   <p class="text-sm rarity-{{ item.rarity }} rarity-ink font-medium">{{ item.get_rarity_display }} · {{ item.get_kind_display }}</p>
   {% if item.note %}<p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ item.note }}</p>{% endif %}
+
+  {% if total > 1 %}
+  {# Листать полку, не закрывая окно. data-step — за них же дёргают стрелки клавиатуры (shop.html) #}
+  <div class="flex items-center gap-2 mt-3 text-xs text-slate-400 tabular-nums">
+    <button type="button" data-step="prev" aria-label="Предыдущая вещь" class="w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
+            {% if before %}hx-get="{% url 'item_card' before.pk %}{% if query %}?{{ query }}{% endif %}" hx-target="#offer"{% else %}disabled{% endif %}>
+      <i class="fa-solid fa-chevron-left"></i>
+    </button>
+    <span>{{ position }} из {{ total }}</span>
+    <button type="button" data-step="next" aria-label="Следующая вещь" class="w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
+            {% if after %}hx-get="{% url 'item_card' after.pk %}{% if query %}?{{ query }}{% endif %}" hx-target="#offer"{% else %}disabled{% endif %}>
+      <i class="fa-solid fa-chevron-right"></i>
+    </button>
+  </div>
+  {% endif %}
 
   <div class="mt-4">{% include preview %}</div>
   <p class="text-xs text-slate-400 text-center mt-2">так это увидят на твоей странице</p>
@@ -37,6 +52,9 @@
     {# Отдельного «точно?» тут нет: это окно и есть подтверждение — вещь показана, цена названа #}
     <form method="post" action="{% url 'item_buy' item.pk %}" class="ml-auto">
       {% csrf_token %}
+      {# Подбор витрины — чтобы вернуться в неё таким же, каким её оставили #}
+      <input type="hidden" name="order" value="{{ order }}">
+      {% if affordable %}<input type="hidden" name="afford" value="1">{% endif %}
       <button type="submit" class="btn btn-primary"><i class="fa-solid fa-cart-shopping"></i>Купить за {{ item.cost }} <i class="fa-solid fa-cent-sign text-xs"></i></button>
     </form>
     {% endif %}
