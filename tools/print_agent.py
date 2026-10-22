@@ -74,6 +74,9 @@ PDF_SLACK = 1024
 COVERAGE_DPI = 100
 # Превью шириной около 300 точек: сетка страниц на экране, а не чтение текста.
 PREVIEW_DPI = 36
+# А это — для просмотрщика: на 100 dpi обычный текст читается, и видно, не съехала ли
+# вёрстка и не стоят ли квадратики вместо букв (шрифта, которого нет на М4).
+LARGE_DPI = 100
 # Страница с заливкой выше этой отмечается студенту: тёмный слайд стоит как пять текстовых.
 DARK = 0.25
 
@@ -288,13 +291,21 @@ def coverage(work):
 
 
 def previews(work):
-    """JPEG в оттенках серого на каждую страницу print.pdf: pages/0001.jpg, 0002.jpg…"""
+    """JPEG в оттенках серого на каждую страницу print.pdf: pages/0001.jpg, 0002.jpg… —
+    и крупные для просмотрщика в large/. Не вышли крупные — не беда: печатать можно и без
+    них, просмотрщик покажет мелкие. Поэтому их сбой не отказ, а пустая папка."""
     (work / "pages").mkdir(exist_ok=True)
     result = sandbox(work, [
         *GS, "-sDEVICE=jpeggray", f"-r{PREVIEW_DPI}", "-dJPEGQ=70", "-o", "pages/%04d.jpg", "print.pdf",
     ], capture_output=True)
     if result.returncode != 0:
         raise Rejected("Не удалось нарисовать превью страниц. Попробуйте сохранить документ в PDF заново.")
+    (work / "large").mkdir(exist_ok=True)
+    large = sandbox(work, [
+        *GS, "-sDEVICE=jpeggray", f"-r{LARGE_DPI}", "-dJPEGQ=75", "-o", "large/%04d.jpg", "print.pdf",
+    ], capture_output=True)
+    if large.returncode != 0:
+        shutil.rmtree(work / "large", ignore_errors=True)
     return sorted(path.name for path in (work / "pages").glob("*.jpg"))
 
 
@@ -514,7 +525,11 @@ def analysis_once(site, limit):
             "token": job["token"], "pages": report["pages"],
             "coverage": report["coverage"], "sideways": report["sideways"],
         })
-        urls, types = answer["urls"], answer.get("types") or {}
+        # Крупные превью сайт просит отдельно и заливаются они, только если нарисовались.
+        urls = {**answer["urls"], **{
+            name: url for name, url in (answer.get("large") or {}).items() if (work / name).exists()
+        }}
+        types = answer.get("types") or {}
         with ThreadPoolExecutor(max_workers=UPLOAD_THREADS) as pool:
             list(pool.map(lambda name: put_file(urls[name], work / name, types.get(name)), urls))
         site.talk("commit", {"token": job["token"]})

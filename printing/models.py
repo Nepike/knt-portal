@@ -121,6 +121,9 @@ class PrintJob(models.Model):
     COUNTED = frozenset({Status.QUEUED, Status.PRINTING, Status.DONE})
     # После чего можно напечатать тот же файл ещё раз, пока он не удалён.
     REPEATABLE = frozenset({Status.DONE, Status.FAILED, Status.CANCELED, Status.UNKNOWN})
+    # Что можно удалить: всё, кроме лежащего в лимите недели. Удалённое оттуда выпало бы,
+    # а отменить ждущее в очереди — отдельная кнопка «Отменить».
+    REMOVABLE = frozenset(set(Status) - COUNTED)
 
     # Он же папка файлов в хранилище: printing/<uuid>/. Повтор берёт файлы предшественника
     # и папку свою не заводит — поэтому папку знают ключи, а не uuid.
@@ -136,6 +139,9 @@ class PrintJob(models.Model):
     pages = models.PositiveIntegerField("страниц", default=0)
     coverage = models.JSONField("заливка по страницам", default=list, blank=True)
     sideways = models.JSONField("поперёк листа", default=list, blank=True, help_text="Номера альбомных страниц")
+    # Крупные превью для просмотрщика (large/0001.jpg). Агент старше их не рисует —
+    # тогда просмотрщик показывает те же миниатюры.
+    large = models.BooleanField("крупные превью", default=False)
 
     # Выбор человека — снимок на момент «Печатать».
     selection = models.CharField("страницы", max_length=200, blank=True)
@@ -187,6 +193,10 @@ class PrintJob(models.Model):
         return self.status in self.REPEATABLE and not self.files_dropped and bool(self.pdf_key)
 
     @property
+    def can_remove(self):
+        return self.status in self.REMOVABLE
+
+    @property
     def waiting(self):
         """Ещё изменится само — страница спрашивает о нём."""
         return self.status in self.PREPARING or self.status in self.ACTIVE
@@ -196,8 +206,10 @@ class PrintJob(models.Model):
         sideways = set(self.sideways)
         for number in range(1, self.pages + 1):
             share = self.coverage[number - 1] if number <= len(self.coverage) else 0.0
+            small = f"{self.folder}pages/{number:04d}.jpg"
             yield {
-                "number": number, "key": f"{self.folder}pages/{number:04d}.jpg",
+                "number": number, "key": small,
+                "large": f"{self.folder}large/{number:04d}.jpg" if self.large else small,
                 "share": share, "dark": share > DARK, "sideways": number in sideways,
             }
 

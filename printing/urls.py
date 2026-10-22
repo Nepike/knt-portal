@@ -12,6 +12,7 @@ urlpatterns = [
     path("print/<uuid:uuid>/status/", views.status, name="print_status"),
     path("print/<uuid:uuid>/print/", views.submit, name="print_submit"),
     path("print/<uuid:uuid>/cancel/", views.cancel, name="print_cancel"),
+    path("print/<uuid:uuid>/remove/", views.remove, name="print_remove"),
     path("print/<uuid:uuid>/again/", views.again, name="print_again"),
     path("printing/agent/config/", agent.config, name="printagent_config"),
     path("printing/agent/claim/", agent.claim, name="printagent_claim"),

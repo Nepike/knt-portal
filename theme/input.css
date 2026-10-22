@@ -160,6 +160,23 @@ html { color-scheme: light; }
   .prose table { @apply block w-full overflow-x-auto text-sm; }
   .prose th, .prose td { @apply border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-left; }
 
+  /* Переключатель темы (core/_theme_toggle.html): дорожка с солнцем и луной, кружок под
+     значком выбранной темы. Положение — от класса dark на <html>, без JS. Значки — в своих
+     квадратах того же размера и на тех же местах, что кружок: так их центры совпадают, а не
+     «примерно у края». Обёрткой, потому что display у самого значка перебивает FontAwesome. */
+  .theme-switch {
+    @apply relative inline-block h-8 w-16 shrink-0 rounded-full text-sm transition;
+    @apply border border-slate-300 bg-slate-100 dark:border-slate-700 dark:bg-slate-800;
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
+  }
+  .theme-switch-icon { @apply absolute top-0.5 z-10 flex h-6 w-6 items-center justify-center; }
+  .theme-switch .fa-sun { @apply text-amber-500 dark:text-slate-500; }
+  .theme-switch .fa-moon { @apply text-slate-400 dark:text-sky-300; }
+  .theme-switch-knob {
+    @apply absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform duration-200 dark:bg-slate-950;
+  }
+  .dark .theme-switch-knob { transform: translateX(calc(4rem - 1.5rem - 0.25rem - 2px)); }
+
   .nav-link {
     @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition;
   }
@@ -285,7 +302,13 @@ html { color-scheme: light; }
      Подложка белая и в тёмной теме — это бумага, а не карточка. */
   .print-grid { @apply grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-3; }
   .print-page { @apply relative block overflow-hidden rounded-lg border-2 bg-white transition; }
-  .print-page img { @apply block w-full aspect-[210/297] object-contain; }
+  /* Превью лежит поверх спиннера: пока картинка не доехала, она прозрачна и спиннер видно,
+     доехала — непрозрачный лист его закрывает. Без JS и без событий загрузки. */
+  .print-page img { @apply relative block w-full aspect-[210/297] object-contain; }
+  .print-page-wait { @apply absolute inset-0 flex items-center justify-center text-xl text-slate-300; }
+  /* Выбор страницы — вся плитка поверх картинки и меток, лупа — ещё выше, в углу. */
+  .print-page-hit { @apply absolute inset-0 rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60; }
+  .print-page-zoom { @apply absolute top-1 right-1 flex h-7 w-7 items-center justify-center rounded-md bg-slate-900/70 text-xs text-white transition hover:bg-slate-900; }
   .print-page-on { @apply border-accent; }
   .print-page-off { @apply border-slate-200 dark:border-slate-700 opacity-40; }
   .print-page-number { @apply absolute top-1 left-1 rounded bg-slate-900/70 px-1.5 text-xs text-white tabular-nums; }

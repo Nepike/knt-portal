@@ -23,7 +23,7 @@ from core.throttle import client_ip, throttled
 
 from . import services
 from .models import Printer, PrintJob
-from .pricing import DARK, BadSelection, pages_of
+from .pricing import DARK, BadSelection, pages_of, selection_of
 
 FOLDER = "printing"
 # Ровно то, что умеет агент (tools/print_agent.SIGNATURES — их сверяет тест). Таблиц нет
@@ -179,9 +179,12 @@ def job(request, uuid):
         chosen = set(range(1, job.pages + 1))
     for picture in pictures:
         picture["url"] = image_url(picture["key"])
+        picture["zoom"] = image_url(picture["large"])
         picture["chosen"] = picture["number"] in chosen
     context = {
         "job": job, "limits": limits, "pictures": pictures, "dark": round(DARK * 100),
+        # Просмотрщику (lightbox в components.js) — крупные страницы, если агент их нарисовал.
+        "zoom": [{"url": picture["zoom"], "name": f"Страница {picture['number']}"} for picture in pictures],
         "outside": client_ip(request) not in settings.PRINT_M4_IPS,
         "max_copies": services.MAX_COPIES,
     }
@@ -192,7 +195,7 @@ def job(request, uuid):
         context["printers"] = printers
         # Сумма на экране — прикидка для человека; в задание идёт расчёт сервера (pricing.py).
         context["pick"] = {
-            "pages": job.pages, "coverage": job.coverage, "selection": job.selection or f"1-{job.pages}",
+            "pages": job.pages, "coverage": job.coverage, "selection": job.selection or selection_of(range(1, job.pages + 1)),
             "copies": job.copies, "duplex": job.duplex, "left": limits["left"], "maxCopies": services.MAX_COPIES,
             "printer": chosen.pk if chosen else None,
             "printers": {printer.pk: {"duplex": printer.duplex, "costs": printer.costs().as_dict()} for printer in ready},
@@ -234,6 +237,19 @@ def cancel(request, uuid):
     except services.Refused as problem:
         messages.error(request, str(problem))
     return redirect("print_job", uuid=job.uuid)
+
+
+@may_print
+@require_POST
+def remove(request, uuid):
+    job = _own(request, uuid)
+    try:
+        services.remove(job)
+    except services.Refused as problem:
+        messages.error(request, str(problem))
+        return redirect("print_job", uuid=job.uuid)
+    messages.success(request, f"Задание «{job.name}» удалено")
+    return redirect("print_home")
 
 
 @may_print

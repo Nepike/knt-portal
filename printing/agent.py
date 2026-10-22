@@ -162,9 +162,13 @@ def analyzed(request):
     job.pages, job.coverage, job.sideways = pages, shares, sorted(set(sideways))
     _heard(job, "pages", "coverage", "sideways")
     names = ["print.pdf", *(f"pages/{number:04d}.jpg" for number in range(1, pages + 1))]
+    # Крупные превью — отдельным полем, а не в urls: агент старше их не рисует, а по urls
+    # заливает всё подряд и на незнакомом имени споткнулся бы.
+    large = [f"large/{number:04d}.jpg" for number in range(1, pages + 1)]
     return JsonResponse({
         "urls": {name: sign_put(job.folder + name) for name in names},
-        "types": {name: content_type(name) for name in names},
+        "large": {name: sign_put(job.folder + name) for name in large},
+        "types": {name: content_type(name) for name in names + large},
     })
 
 
@@ -179,15 +183,18 @@ def commit(request):
     if not job.pages:
         return _bad("сначала analyzed")
     expected = {job.folder + "print.pdf", *(f"{job.folder}pages/{number:04d}.jpg" for number in range(1, job.pages + 1))}
-    missing = expected - under(job.folder.rstrip("/"))
+    found = under(job.folder.rstrip("/"))
+    missing = expected - found
     if missing:
         return _bad(f"в хранилище нет {len(missing)} из {len(expected)}: {min(missing)}")
 
     job.status = Status.READY
     job.pdf_key = job.folder + "print.pdf"
+    # Крупных может не быть (агент старше) — печати это не мешает, просмотрщик возьмёт мелкие.
+    job.large = all(f"{job.folder}large/{number:04d}.jpg" in found for number in range(1, job.pages + 1))
     job.analyzed_at = timezone.now()
     job.reason = ""
-    _heard(job, "status", "pdf_key", "analyzed_at", "reason")
+    _heard(job, "status", "pdf_key", "large", "analyzed_at", "reason")
     return JsonResponse({"ok": True})
 
 

@@ -16,23 +16,54 @@
     <h1 class="text-xl font-bold break-words">{{ job.name }}</h1>
     {% if job.pages %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ job.pages }} {{ job.pages|plural:"страница,страницы,страниц" }} A4 · загружено {{ job.created|date:"j E, H:i" }}</p>{% endif %}
     {% include "printing/_status.html" %}
+    {% if job.can_remove %}
+    <form method="post" action="{% url 'print_remove' job.uuid %}" x-data="{ sure: false }" class="flex flex-wrap items-center gap-2 text-sm">
+      {% csrf_token %}
+      <button type="button" x-show="!sure" @click="sure = true" class="btn btn-ghost px-2 py-1 text-xs text-rose-500">
+        <i class="fa-solid fa-trash-can"></i>Удалить задание
+      </button>
+      <template x-if="sure">
+        <div class="flex flex-wrap items-center gap-2">
+          <span>Удалить задание и файл?</span>
+          <button class="btn btn-danger px-3 py-1 text-xs">Удалить</button>
+          <button type="button" @click="sure = false" class="btn btn-ghost px-3 py-1 text-xs">Отмена</button>
+        </div>
+      </template>
+    </form>
+    {% endif %}
   </section>
 
+  {% if pictures %}
+  {{ zoom|json_script:"print-zoom" }}
+  {% comment %}
+    Просмотрщик снаружи формы выбора: компонент выбора страниц вложен в него и зовёт его
+    show() — у Alpine вложенный x-data видит методы внешнего. Окно — общее с галереей
+    материалов (attachments/_lightbox.html).
+  {% endcomment %}
+  <div x-data="lightbox(JSON.parse(document.getElementById('print-zoom').textContent))">
   {% if pick %}
   {{ pick|json_script:"print-pick" }}
   <form method="post" action="{% url 'print_submit' job.uuid %}" x-data="printPick('print-pick')" class="panel p-5 flex flex-col gap-5">
     {% csrf_token %}
     <input type="hidden" name="selection" :value="selection">
 
+    {% comment %}
+      Плитка нажимается целиком — это выбор страницы, поэтому крупный просмотр — отдельной
+      кнопкой-лупой в углу. Кнопку в кнопку не вложить, отсюда две кнопки поверх картинки.
+    {% endcomment %}
     <div class="print-grid">
       {% for picture in pictures %}
-      <button type="button" class="print-page" :class="chosen[{{ forloop.counter0 }}] ? 'print-page-on' : 'print-page-off'"
-              @click="toggle({{ picture.number }})" aria-label="Страница {{ picture.number }}">
-        <img src="{{ picture.url }}" alt="" loading="lazy">
+      <div class="print-page" :class="chosen[{{ forloop.counter0 }}] ? 'print-page-on' : 'print-page-off'">
+        <span class="print-page-wait"><i class="fa-solid fa-spinner fa-spin"></i></span>
+        <img src="{{ picture.url }}" alt=""{% if forloop.counter > 10 %} loading="lazy"{% endif %}>
         <span class="print-page-number">{{ picture.number }}</span>
         {% if picture.dark %}<span class="print-page-tag bg-amber-500 text-white">тёмная · {% widthratio picture.share 1 100 %}%</span>
         {% elif picture.sideways %}<span class="print-page-tag bg-slate-700/80 text-white">поперёк листа</span>{% endif %}
-      </button>
+        <button type="button" class="print-page-hit" @click="toggle({{ picture.number }})" aria-label="Страница {{ picture.number }}: выбрать или снять"></button>
+        <button type="button" class="print-page-zoom" @click="show({{ forloop.counter0 }})" aria-label="Страница {{ picture.number }} крупно">
+          <i class="fa-solid fa-magnifying-glass-plus"></i>
+        </button>
+      </div>
       {% endfor %}
     </div>
 
@@ -65,7 +96,7 @@
         <input type="number" name="copies" x-model.number="copies" min="1" max="{{ max_copies }}" required
                class="h-10 w-24 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 outline-none focus:border-accent">
       </label>
-      <label class="switch-field h-10" x-show="canDuplex">
+      <label class="switch-field h-10" x-show="canDuplex && count > 1">
         <input type="checkbox" name="duplex" x-model="duplex">
         <span class="switch"></span>Двусторонняя печать
       </label>
@@ -115,17 +146,22 @@
     </button>
   </form>
 
-  {% elif pictures %}
+  {% else %}
   <section class="panel p-5">
     <div class="print-grid">
       {% for picture in pictures %}
-      <div class="print-page {% if picture.chosen %}print-page-on{% else %}print-page-off{% endif %}">
-        <img src="{{ picture.url }}" alt="Страница {{ picture.number }}" loading="lazy">
+      <button type="button" class="print-page cursor-zoom-in {% if picture.chosen %}print-page-on{% else %}print-page-off{% endif %}"
+              @click="show({{ forloop.counter0 }})" aria-label="Страница {{ picture.number }} крупно">
+        <span class="print-page-wait"><i class="fa-solid fa-spinner fa-spin"></i></span>
+        <img src="{{ picture.url }}" alt="Страница {{ picture.number }}"{% if forloop.counter > 10 %} loading="lazy"{% endif %}>
         <span class="print-page-number">{{ picture.number }}</span>
-      </div>
+      </button>
       {% endfor %}
     </div>
   </section>
+  {% endif %}
+  {% include "attachments/_lightbox.html" %}
+  </div>
   {% endif %}
 </div>
 {% endblock %}

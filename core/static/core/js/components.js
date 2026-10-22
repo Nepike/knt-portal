@@ -1610,7 +1610,8 @@ document.addEventListener("alpine:init", () => {
       // Недоступные принтеры в настройки не попадают: выбрать их нельзя и считать незачем.
       get chosenPrinter() { return config.printers[this.printerId] || null; },
       get canDuplex() { return Boolean(this.chosenPrinter?.duplex); },
-      get twoSided() { return this.duplex && this.canDuplex; },
+      // Одна страница с двух сторон — та же односторонняя: переключатель тогда спрятан.
+      get twoSided() { return this.duplex && this.canDuplex && this.count > 1; },
       get sheets() { return this.copyCount * (this.twoSided ? Math.ceil(this.count / 2) : this.count); },
       get sides() { return this.copyCount * this.count; },
       get fits() { return config.left === null || this.sides <= config.left; },

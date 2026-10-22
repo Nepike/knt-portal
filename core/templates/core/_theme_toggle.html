@@ -1,10 +1,15 @@
 {% comment %}
-  Кнопка стоит в обеих шапках — и у гостя, и у вошедшего. Отдельным файлом, чтобы
-  переключение не разъехалось со скриптом в <head>: там читается тот же ключ
-  localStorage и тот же класс на <html>.
+  Переключатель темы — ползунок: солнце слева, луна справа, кружок стоит у выбранной.
+  Раньше была одна кнопка-значок, и солнце в тёмной теме путали с настройками.
+  Стоит в обеих шапках — и у гостя, и у вошедшего. Отдельным файлом, чтобы переключение
+  не разъехалось со скриптом в <head>: там читается тот же ключ localStorage и тот же класс
+  на <html>. Положение кружка задаёт этот класс (theme/input.css, .theme-switch), а не Alpine:
+  тему скрипт ставит раньше, чем Alpine проснётся, и кружок не прыгает при загрузке.
 {% endcomment %}
-<button type="button" class="btn btn-ghost shrink-0" aria-label="Сменить тему"
-        @click="document.documentElement.classList.toggle('dark'); localStorage.setItem('color-scheme', document.documentElement.classList.contains('dark') ? 'dark' : 'light')">
-  <i class="fa-solid fa-moon text-xl dark:!hidden"></i>
-  <i class="fa-solid fa-sun text-xl !hidden dark:!block"></i>
+<button type="button" role="switch" class="theme-switch shrink-0" aria-label="Тёмная тема"
+        x-data="{ dark: document.documentElement.classList.contains('dark') }" :aria-checked="dark.toString()"
+        @click="dark = !dark; document.documentElement.classList.toggle('dark', dark); localStorage.setItem('color-scheme', dark ? 'dark' : 'light')">
+  <span class="theme-switch-knob"></span>
+  <span class="theme-switch-icon left-0.5"><i class="fa-solid fa-sun"></i></span>
+  <span class="theme-switch-icon right-0.5"><i class="fa-solid fa-moon"></i></span>
 </button>

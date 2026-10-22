@@ -266,6 +266,44 @@ class LimitTests(TestCase):
 
         self.assertFalse(job.duplex)
 
+    def test_one_page_is_printed_one_sided(self):
+        one = services.submit(make_job(self.user, self.printer), "2", 1, True)
+        two = services.submit(make_job(self.user, self.printer), "1-2", 1, True)
+
+        self.assertEqual((one.duplex, two.duplex), (False, True))
+
+    def stored(self, job):
+        for name in ("print.pdf", "pages/0001.jpg"):
+            file_storage().save(f"{job.folder}{name}", ContentFile(b"x"))
+
+    def test_remove_takes_the_job_and_its_files(self):
+        job = make_job(self.user, self.printer)
+        self.stored(job)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            services.remove(job)
+
+        self.assertFalse(PrintJob.objects.filter(pk=job.pk).exists())
+        self.assertFalse(file_storage().exists(f"{job.folder}print.pdf"))
+
+    def test_remove_leaves_the_files_a_copy_still_uses(self):
+        done = make_job(self.user, self.printer, status=Status.DONE, sides=4, submitted_at=timezone.now())
+        self.stored(done)
+        copy = services.again(done)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            services.remove(copy)
+
+        self.assertFalse(PrintJob.objects.filter(pk=copy.pk).exists())
+        self.assertTrue(file_storage().exists(f"{done.folder}print.pdf"))
+
+    def test_what_counts_in_the_limit_cannot_be_removed(self):
+        for status in PrintJob.COUNTED:
+            job = make_job(self.user, self.printer, status=status, sides=2, submitted_at=timezone.now())
+            with self.subTest(status=status), self.assertRaisesRegex(services.Refused, "удалить его нельзя"):
+                services.remove(job)
+            self.assertTrue(PrintJob.objects.filter(pk=job.pk).exists())
+
     def test_copies_are_sane(self):
         for copies in ("0", "21", "три", None):
             with self.subTest(copies=copies), self.assertRaises(services.Refused):
@@ -328,6 +366,13 @@ class LimitTests(TestCase):
         self.assertEqual((copy.selection, copy.copies, copy.duplex), ("2-3", 2, False))
         self.assertEqual(copy.folder, done.folder)
         self.assertEqual(services.used(self.user), 4)
+
+    def test_again_keeps_the_large_previews(self):
+        done = self.counted(timezone.now())
+        done.large = True
+        done.save()
+
+        self.assertTrue(services.again(done).large)
 
     def test_again_needs_the_files(self):
         done = self.counted(timezone.now())
@@ -500,6 +545,59 @@ class PageTests(TestCase):
 
         job.refresh_from_db()
         self.assertEqual((job.status, job.printer), (Status.QUEUED, other))
+
+    def test_a_page_shows_a_spinner_until_its_picture_arrives(self):
+        """Первые страницы видны сразу — их не откладываем; дальние грузятся, когда до них долистают."""
+        job = make_job(self.user, self.printer, pages=12)
+
+        response = self.client.get(reverse("print_job", args=[job.uuid]))
+
+        self.assertContains(response, 'class="print-page-wait"', count=12)
+        self.assertContains(response, 'loading="lazy"', count=2)
+
+    def test_remove_from_the_page(self):
+        job = make_job(self.user, self.printer)
+
+        response = self.client.post(reverse("print_remove", args=[job.uuid]), follow=True)
+
+        self.assertRedirects(response, reverse("print_home"))
+        self.assertContains(response, "удалено")
+        self.assertFalse(PrintJob.objects.filter(pk=job.pk).exists())
+
+    def test_someone_elses_job_cannot_be_removed(self):
+        job = make_job(make_user("o@t.local", "use"), self.printer)
+
+        self.assertEqual(self.client.post(reverse("print_remove", args=[job.uuid])).status_code, 404)
+        self.assertTrue(PrintJob.objects.filter(pk=job.pk).exists())
+
+    def test_the_remove_button_is_only_where_removing_is_allowed(self):
+        ready = make_job(self.user, self.printer)
+        done = make_job(self.user, self.printer, status=Status.DONE, sides=4, selection="1-4", submitted_at=timezone.now())
+
+        self.assertContains(self.client.get(reverse("print_job", args=[ready.uuid])), reverse("print_remove", args=[ready.uuid]))
+        self.assertNotContains(self.client.get(reverse("print_job", args=[done.uuid])), reverse("print_remove", args=[done.uuid]))
+
+    def test_a_one_page_document_is_offered_as_page_1(self):
+        job = make_job(self.user, self.printer, pages=1)
+
+        self.assertEqual(self.client.get(reverse("print_job", args=[job.uuid])).context["pick"]["selection"], "1")
+
+    def test_the_viewer_gets_large_pages_when_the_agent_drew_them(self):
+        small = make_job(self.user, self.printer, pages=2)
+        large = make_job(self.user, self.printer, pages=2, large=True)
+
+        zoom = lambda job: self.client.get(reverse("print_job", args=[job.uuid])).context["zoom"]  # noqa: E731
+
+        self.assertEqual(zoom(small)[1], {"url": image_url(f"{small.folder}pages/0002.jpg"), "name": "Страница 2"})
+        self.assertEqual(zoom(large)[1]["url"], image_url(f"{large.folder}large/0002.jpg"))
+
+    def test_a_printed_job_opens_its_pages_in_the_viewer(self):
+        job = make_job(self.user, self.printer, status=Status.DONE, sides=4, selection="1-4", submitted_at=timezone.now())
+
+        response = self.client.get(reverse("print_job", args=[job.uuid]))
+
+        self.assertContains(response, 'id="print-zoom"')
+        self.assertContains(response, '@click="show(0)"')
 
     def test_printing_from_the_page(self):
         job = make_job(self.user, self.printer)
@@ -801,7 +899,12 @@ class AnalyzeQueueTests(AgentCase):
             "pages/0001.jpg": f"https://r2/{job.folder}pages/0001.jpg",
             "pages/0002.jpg": f"https://r2/{job.folder}pages/0002.jpg",
         })
+        self.assertEqual(answer["large"], {
+            "large/0001.jpg": f"https://r2/{job.folder}large/0001.jpg",
+            "large/0002.jpg": f"https://r2/{job.folder}large/0002.jpg",
+        })
         self.assertEqual(answer["types"]["pages/0001.jpg"], "image/jpeg")
+        self.assertEqual(answer["types"]["large/0002.jpg"], "image/jpeg")
         self.assertEqual(answer["types"]["print.pdf"], "application/pdf")
         job.refresh_from_db()
         self.assertEqual((job.pages, job.coverage, job.sideways), (2, [0.05, 0.3], [2]))
@@ -823,6 +926,24 @@ class AnalyzeQueueTests(AgentCase):
         job.refresh_from_db()
         self.assertEqual((job.status, job.pdf_key), (Status.READY, f"{job.folder}print.pdf"))
         self.assertIsNotNone(job.analyzed_at)
+
+    def test_commit_notes_whether_the_large_previews_came(self):
+        """Крупных может не быть (агент старше) — печатать можно, просмотрщик возьмёт мелкие."""
+        job = self.uploaded()
+        token = self.claim("analyze")["token"]
+        self.call("analyzed", {"token": token, "pages": 2, "coverage": [0.05, 0.3]})
+        small = {f"{job.folder}print.pdf", f"{job.folder}pages/0001.jpg", f"{job.folder}pages/0002.jpg"}
+
+        with mock.patch("printing.agent.under", return_value=small | {f"{job.folder}large/0001.jpg"}):
+            self.call("commit", {"token": token})
+        job.refresh_from_db()
+        self.assertEqual((job.status, job.large), (Status.READY, False))
+
+        PrintJob.objects.filter(pk=job.pk).update(status=Status.ANALYZING)
+        with mock.patch("printing.agent.under", return_value=small | {f"{job.folder}large/0001.jpg", f"{job.folder}large/0002.jpg"}):
+            self.call("commit", {"token": token})
+        job.refresh_from_db()
+        self.assertTrue(job.large)
 
     def test_commit_before_the_numbers_is_refused(self):
         self.uploaded()
@@ -1612,6 +1733,26 @@ class AgentServiceTests(SimpleTestCase):
         self.assertEqual(site.doors(), ["claim", "analyzed", "commit"])
         self.assertEqual(site.calls[1][1], {"token": "t", "pages": 1, "coverage": [0.05], "sideways": []})
         self.assertEqual(sorted(call.args[0] for call in mocks["put_file"].call_args_list), ["https://r2/1", "https://r2/p"])
+
+    def test_large_previews_are_uploaded_only_when_drawn(self):
+        def drawn(source, work, ppd, beat):
+            (work / "large").mkdir()
+            (work / "large" / "0001.jpg").write_bytes(b"jpeg")
+            return {"pages": 1, "coverage": [0.05], "sideways": []}
+
+        answer = {
+            "urls": {"print.pdf": "https://r2/p", "pages/0001.jpg": "https://r2/1"},
+            "large": {"large/0001.jpg": "https://r2/L1", "large/0002.jpg": "https://r2/L2"},
+            "types": {},
+        }
+        site = FakeSite(claim={"job": {"uuid": "a" * 32, "token": "t", "name": "x.pdf", "extension": ".pdf",
+                                       "source": "s", "queue": "q"}}, analyzed=answer)
+        with mock.patch.multiple(print_agent, download=mock.DEFAULT, printer_ppd=mock.Mock(return_value=""),
+                                 analyze=mock.Mock(side_effect=drawn), put_file=mock.DEFAULT) as mocks:
+            print_agent.analysis_once(site, 50 * 1024 * 1024)
+
+        sent = sorted(call.args[0] for call in mocks["put_file"].call_args_list)
+        self.assertEqual(sent, ["https://r2/1", "https://r2/L1", "https://r2/p"])
 
     def test_a_file_the_analyzer_refuses_is_told_to_the_student(self):
         site, _, _ = self.analysis(analyze=mock.Mock(side_effect=print_agent.Rejected("PDF защищён паролем.")))

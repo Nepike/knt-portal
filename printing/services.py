@@ -6,11 +6,14 @@
 """
 
 from datetime import datetime, time, timedelta
+from functools import partial
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
+
+from attachments.storage import drop_prefix
 
 from . import pricing
 from .models import Printer, PrintAccount, PrintJob
@@ -94,11 +97,13 @@ def submit(job, selection, copies, duplex, ip="", printer=None):
         if not printer.online:
             raise Refused(f"С принтером «{printer}» нет связи — печать на нём сейчас недоступна")
         job.printer = printer
-        duplex = bool(duplex) and printer.duplex
         try:
             numbers = pricing.pages_of(selection, job.pages)
         except pricing.BadSelection as problem:
             raise Refused(str(problem))
+        # Одна страница с двух сторон — та же односторонняя, только с пометкой, которая
+        # смущает человека в сводке задания.
+        duplex = bool(duplex) and printer.duplex and len(numbers) > 1
 
         sides = pricing.sides(len(numbers), copies)
         total = allowance(job.user)
@@ -151,6 +156,23 @@ def again(job):
     return PrintJob.objects.create(
         user=job.user, printer=job.printer, status=PrintJob.Status.READY, name=job.name,
         source_key=job.source_key, pdf_key=job.pdf_key, pages=job.pages, coverage=job.coverage,
-        sideways=job.sideways, analyzed_at=job.analyzed_at,
+        sideways=job.sideways, large=job.large, analyzed_at=job.analyzed_at,
         selection=job.selection, copies=job.copies, duplex=job.duplex,
     )
+
+
+def remove(job):
+    """Удалить задание. Лежащее в лимите недели — нельзя: оно оттуда выпало бы.
+
+    Файлы снимаем сразу (после коммита), если на них не смотрит копия «ещё раз», —
+    загрузивший не то ждёт, что файла больше нет. Общую папку уберёт ночная уборка,
+    когда уйдёт и копия. Агент, разбиравший этот файл, получит на доклады отказ и бросит.
+    """
+    with transaction.atomic():
+        job = PrintJob.objects.select_for_update().get(pk=job.pk)
+        if not job.can_remove:
+            raise Refused("Это задание уже в очереди или напечатано — удалить его нельзя")
+        folder = job.folder
+        job.delete()
+        if not PrintJob.objects.filter(source_key__startswith=folder).exists():
+            transaction.on_commit(partial(drop_prefix, folder))
