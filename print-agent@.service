@@ -1,0 +1,36 @@
+# Агент печати как служба — два экземпляра одного юнита: разбор файлов и печать.
+# Ставится на local-server в М4 (docs/printing.md), не на сервер сайта.
+#
+#   sudo cp /srv/print-agent/print-agent@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now print-agent@analyze print-agent@print
+#   journalctl -u 'print-agent@*' -f
+#
+# Адрес сайта и токен агент читает из /srv/print-agent/.env (PRINT_URL, PRINT_AGENT_TOKEN):
+# файл root:printagent 640 — токен не должен читать кто угодно на машине.
+
+[Unit]
+Description=Агент печати КНТ: %i
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+# Свой пользователь без sudo и не в группе docker: та фактически даёт root, а агент
+# открывает чужие файлы (документы студентов).
+User=printagent
+WorkingDirectory=/srv/print-agent
+ExecStart=/usr/bin/python3 /srv/print-agent/tools/print_agent.py serve %i
+# /var/lib/print-agent: журнал печати (переживает перезапуск — ради него и заведён)
+# и рабочие папки заданий. На диске, а не в /tmp: тот бывает в памяти.
+StateDirectory=print-agent
+Environment=TMPDIR=/var/lib/print-agent
+Restart=always
+RestartSec=10
+# На остановку разбор и неотправленная печать возвращаются в очередь — ответа сайта ждём.
+# Отправленное в CUPS не трогаем: его доведёт журнал после старта.
+TimeoutStopSec=90
+# LibreOffice над тяжёлой презентацией ест гигабайты; предел — чтобы не задел пекарню рядом.
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

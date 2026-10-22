@@ -4,9 +4,11 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -976,6 +978,18 @@ class PrintQueueTests(AgentCase):
             with self.subTest(wrong=wrong):
                 self.assertEqual(self.call("sent", {"token": token, "cups_job": wrong}).status_code, 400)
 
+    def test_printed_without_the_counter_moving_is_unknown(self):
+        job = self.queued()
+        token = self.claim("print")["token"]
+        self.call("sent", {"token": token, "cups_job": 17})
+
+        self.call("printed", {"token": token, "sure": False})
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, Status.UNKNOWN)
+        self.assertIn("лоток", job.reason)
+        self.assertEqual(services.used(self.user), 0)
+
     def test_printed_is_done(self):
         job = self.queued()
         token = self.claim("print")["token"]
@@ -1283,3 +1297,354 @@ class AlertTests(TestCase):
         planned = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
 
         self.assertLessEqual({"printing.tasks.sweep_printing", "printing.tasks.watch_printers"}, planned)
+
+
+# Ответ snmpget -Oqv -Ox от Kyocera M2535dn в М4, снят 22 окт 2026 (порядок — print_agent.OIDS).
+KYOCERA = ["3", '"00 "', "97654", "7200", "7200", "-3", '"53 6C 65 65 70 69 6E 67 2E 2E 2E 20 20 "']
+
+
+class FakeSite:
+    """Сайт для агента: записывает, куда стучались, и отвечает заготовленным."""
+
+    def __init__(self, **answers):
+        self.calls, self.answers = [], answers
+
+    def talk(self, door, body=None):
+        self.calls.append((door, body))
+        answer = self.answers.get(door, {})
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def tell(self, door, body):
+        try:
+            return self.talk(door, body)
+        except (print_agent.Gone, print_agent.SiteError, OSError):
+            return None
+
+    def doors(self):
+        return [door for door, _ in self.calls]
+
+
+class FakeCups:
+    def __init__(self, states=(9,), found=None, submit=41):
+        self.states, self.found, self.answer = list(states), found, submit
+        self.asked = 0
+
+    def last(self):
+        return 40
+
+    def submit(self, queue, path, duplex):
+        if isinstance(self.answer, BaseException):
+            raise self.answer
+        return self.answer
+
+    def state(self, job):
+        # Предохранитель: зациклившееся ожидание (под мутацией — обычное дело) падает, а не висит.
+        self.asked += 1
+        assert self.asked < 100, "агент спрашивает CUPS без конца"
+        return (self.states.pop(0) if len(self.states) > 1 else self.states[0]), "Замятие в кассете 1"
+
+    def find(self, name, after):
+        return self.found
+
+
+class Clock:
+    """Время для циклов ожидания: sleep двигает его, а не ждёт."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+        assert self.now < 24 * 3600, "ожидание не кончается"
+
+
+class AgentServiceTests(SimpleTestCase):
+    """Служба агента: SNMP, сборка копий, журнал, ожидание счётчика, разговор с сайтом."""
+
+    def setUp(self):
+        patch = mock.patch.object(print_agent, "say")  # агент рассказывает о работе в журнал службы
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def journal(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        return print_agent.Journal(Path(folder.name) / "journal.json")
+
+    def entry(self, **extra):
+        return {"token": "t", "name": "knt-u.pdf", "address": "192.168.16.41", "expected": 4, "before": 100,
+                "after": 40, "state": "sent", "cups_job": 41, **extra}
+
+    def test_a_real_kyocera_answer_is_read(self):
+        self.assertEqual(
+            print_agent.reading(KYOCERA),
+            {"state": "ready", "panel": "Sleeping...", "toner": 100, "counter": 97654},
+        )
+
+    def test_the_error_bits_name_the_trouble(self):
+        def state(errors="00", status="3", cassette="-3"):
+            lines = list(KYOCERA)
+            lines[0], lines[1], lines[5] = status, f'"{errors} "', cassette
+            return print_agent.reading(lines)["state"]
+
+        self.assertEqual(state("40"), "no_paper")
+        self.assertEqual(state(cassette="0"), "no_paper")
+        self.assertEqual(state("C0"), "no_paper")  # «мало бумаги» сверху не мешает
+        self.assertEqual(state("04"), "jam")
+        self.assertEqual(state("4C"), "jam")  # замятие важнее остального
+        self.assertEqual(state("08"), "open")
+        self.assertEqual(state("10"), "no_toner")
+        self.assertEqual(state("02"), "offline")
+        self.assertEqual(state(status="4"), "busy")
+        self.assertEqual(state(status="2"), "unknown")
+
+    def test_toner_that_cannot_be_measured_is_no_percent(self):
+        lines = list(KYOCERA)
+        lines[3] = "-3"
+        self.assertIsNone(print_agent.reading(lines)["toner"])
+        lines[3], lines[4] = "3600", "0"
+        self.assertIsNone(print_agent.reading(lines)["toner"])
+
+    def test_a_printer_that_does_not_answer_is_none(self):
+        silent = subprocess.CompletedProcess([], 1, "", "Timeout: No Response from 192.168.16.41.")
+        with mock.patch.object(print_agent.subprocess, "run", return_value=silent):
+            self.assertIsNone(print_agent.snmp_read("192.168.16.41", "public"))
+        with mock.patch.object(print_agent.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertIsNone(print_agent.snmp_read("192.168.16.41", "public"))
+
+    def test_each_copy_starts_on_a_new_sheet(self):
+        P, B = print_agent.PRINT_PDF, print_agent.BLANK_PDF
+
+        self.assertEqual(print_agent.assembly("1-3", 10, 3, True), [(P, "1-3"), (B, "1"), (P, "1-3"), (B, "1"), (P, "1-3")])
+        self.assertEqual(print_agent.assembly("1-2", 10, 2, True), [(P, "1-2"), (P, "1-2")])
+        self.assertEqual(print_agent.assembly("1-3", 10, 2, False), [(P, "1-3"), (P, "1-3")])
+        self.assertEqual(print_agent.assembly("1-3", 10, 1, True), [(P, "1-3")])
+
+    def test_a_selection_outside_the_document_is_not_printed(self):
+        with self.assertRaises(BadSelection):
+            print_agent.assembly("9-12", 10, 1, False)
+
+    def test_the_journal_keeps_what_is_being_printed(self):
+        journal = self.journal()
+        self.assertEqual(journal.load(), {})
+
+        journal.put("a", {"state": "sending"})
+        journal.put("b", {"state": "sent"})
+        journal.drop("a")
+
+        self.assertEqual(journal.load(), {"b": {"state": "sent"}})
+        self.assertEqual([p.name for p in journal.path.parent.iterdir()], ["journal.json"])
+
+    def wait(self, readings, before=100, expected=4):
+        clock, readings, panels = Clock(), list(readings), []
+        read = lambda: readings.pop(0) if len(readings) > 1 else readings[0]  # noqa: E731
+        sure = print_agent.wait_counter(read, before, expected, panels.append, clock, clock.sleep)
+        return sure, clock.now, panels
+
+    def test_the_counter_decides_that_paper_came_out(self):
+        sure, _, _ = self.wait([{"counter": 100}, {"counter": 102}, {"counter": 104}])
+
+        self.assertTrue(sure)
+
+    def test_a_counter_that_stands_still_means_no_paper_came_out(self):
+        sure, waited, _ = self.wait([{"counter": 100, "state": "ready"}])
+
+        self.assertFalse(sure)
+        self.assertGreater(waited, print_agent.COUNTER_PATIENCE)
+        self.assertLess(waited, print_agent.COUNTER_PATIENCE + 2 * print_agent.COUNTER_EVERY)
+
+    def test_while_the_printer_has_trouble_the_wait_goes_on(self):
+        stuck = [{"counter": 101, "state": "no_paper", "panel": "Добавьте бумагу"}] * 100
+        sure, waited, panels = self.wait([*stuck, {"counter": 104, "state": "busy"}])
+
+        self.assertTrue(sure)
+        self.assertGreater(waited, print_agent.COUNTER_PATIENCE)
+        self.assertIn("Добавьте бумагу", panels)
+
+    def test_a_growing_counter_buys_more_time(self):
+        slow = [{"counter": 100 + step // 30} for step in range(100)]  # +1 каждые 150 секунд
+        sure, _, _ = self.wait([*slow, {"counter": 104}])
+
+        self.assertTrue(sure)
+
+    def test_without_a_reading_before_printing_nothing_is_sure(self):
+        self.assertFalse(self.wait([{"counter": 999}], before=None)[0])
+
+    def finish(self, site, cups, journal, readings=({"counter": 104},)):
+        clock = Clock()
+        journal.put("u", self.entry())
+        readings = list(readings)
+        read = lambda: readings.pop(0) if len(readings) > 1 else readings[0]  # noqa: E731
+        print_agent.finish(site, cups, journal, "u", self.entry(), read, lambda **kwargs: None, clock, clock.sleep)
+
+    def test_finish_reports_printed_and_clears_the_journal(self):
+        site, journal = FakeSite(), self.journal()
+
+        self.finish(site, FakeCups(states=(5, 5, 9)), journal)
+
+        self.assertEqual(site.doors(), ["sent", "printed"])
+        self.assertEqual(site.calls[-1][1], {"token": "t", "sure": True})
+        self.assertEqual(journal.load(), {})
+
+    def test_finish_reports_what_cups_said_when_it_gave_up(self):
+        site, journal = FakeSite(), self.journal()
+
+        self.finish(site, FakeCups(states=(5, 8)), journal)
+
+        self.assertEqual(site.doors(), ["sent", "fail"])
+        self.assertEqual(site.calls[-1][1]["error"], "Замятие в кассете 1")
+        self.assertEqual(journal.load(), {})
+
+    def test_finish_is_unsure_when_the_counter_stands(self):
+        site = FakeSite()
+
+        self.finish(site, FakeCups(), self.journal(), readings=({"counter": 100, "state": "ready"},))
+
+        self.assertEqual(site.calls[-1][1], {"token": "t", "sure": False})
+
+    def test_a_job_the_site_closed_leaves_the_journal(self):
+        journal = self.journal()
+
+        self.finish(FakeSite(printed=print_agent.Gone("закрыто")), FakeCups(), journal)
+
+        self.assertEqual(journal.load(), {})
+
+    def test_an_unanswered_report_stays_in_the_journal(self):
+        """Не дошло «напечатано» — запись остаётся и доложится на следующем круге."""
+        journal = self.journal()
+
+        with self.assertRaises(OSError):
+            self.finish(FakeSite(printed=OSError("сеть")), FakeCups(), journal)
+
+        self.assertIn("u", journal.load())
+
+    def test_after_a_restart_an_unsent_job_goes_back_in_line(self):
+        site, journal = FakeSite(), self.journal()
+        journal.put("u", self.entry(state="sending"))
+
+        print_agent.recover(site, FakeCups(found=None), journal, lambda entry: None, lambda **kwargs: None)
+
+        self.assertEqual(site.doors(), ["release"])
+        self.assertEqual(journal.load(), {})
+
+    def test_after_a_restart_a_job_found_in_cups_is_finished_not_printed_again(self):
+        site, journal = FakeSite(), self.journal()
+        journal.put("u", self.entry(state="sending", cups_job=None))
+
+        with mock.patch.object(print_agent, "finish") as finish:
+            print_agent.recover(site, FakeCups(found=57), journal, lambda entry: None, lambda **kwargs: None)
+
+        self.assertNotIn("release", site.doors())
+        self.assertEqual((journal.load()["u"]["state"], journal.load()["u"]["cups_job"]), ("sent", 57))
+        finish.assert_called_once()
+
+    def print_once(self, cups, journal, site=None, **patches):
+        job = {"uuid": "u" * 32, "token": "t", "queue": "m4-kyocera", "pdf": "https://r2/pdf", "pages": 4,
+               "selection": "1-2", "copies": 1, "duplex": False, "sides": 2}
+        site = site or FakeSite(claim={"job": job})
+        defaults = {"download": mock.DEFAULT, "assemble": mock.DEFAULT, "finish": mock.DEFAULT, "recover": mock.DEFAULT}
+        with mock.patch.multiple(print_agent, **{**defaults, **patches}) as mocks:
+            result = print_agent.print_once(site, cups, journal, {}, lambda entry: {"counter": 100}, lambda **kwargs: None)
+        return site, result, mocks
+
+    def test_stopped_before_the_journal_the_job_goes_back(self):
+        site = FakeSite(claim={"job": {"uuid": "u" * 32, "token": "t", "queue": "q", "pdf": "x", "pages": 1,
+                                       "selection": "1", "copies": 1, "duplex": False, "sides": 1}})
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.print_once(FakeCups(), self.journal(), site=site, download=mock.Mock(side_effect=KeyboardInterrupt))
+
+        self.assertEqual(site.doors(), ["claim", "release"])
+
+    def test_stopped_while_sending_the_job_is_left_to_the_journal(self):
+        """Остановка посреди отправки: что ушло в CUPS, решит `recover` — иначе двойная печать."""
+        journal = self.journal()
+        site = FakeSite(claim={"job": {"uuid": "u" * 32, "token": "t", "queue": "q", "pdf": "x", "pages": 1,
+                                       "selection": "1", "copies": 1, "duplex": False, "sides": 1}})
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.print_once(FakeCups(submit=KeyboardInterrupt()), journal, site=site)
+
+        self.assertNotIn("release", site.doors())
+        self.assertEqual(journal.load()["u" * 32]["state"], "sending")
+
+    def test_a_failed_send_is_settled_by_looking_into_cups(self):
+        journal = self.journal()
+
+        _, result, mocks = self.print_once(FakeCups(submit=RuntimeError("cupsd лежит")), journal)
+
+        self.assertFalse(result)
+        mocks["recover"].assert_called_once()
+
+    def test_a_sent_job_is_journaled_and_finished(self):
+        journal = self.journal()
+
+        _, result, mocks = self.print_once(FakeCups(), journal)
+
+        self.assertTrue(result)
+        entry = mocks["finish"].call_args.args[4]
+        self.assertEqual((entry["state"], entry["cups_job"], entry["before"], entry["expected"]), ("sent", 41, 100, 2))
+        self.assertEqual(journal.load()["u" * 32]["state"], "sent")
+
+    def analysis(self, **patches):
+        job = {"uuid": "a" * 32, "token": "t", "name": "Курсовая.docx", "extension": ".docx",
+               "source": "https://r2/src", "queue": "m4-kyocera"}
+        site = FakeSite(claim={"job": job}, analyzed={
+            "urls": {"print.pdf": "https://r2/p", "pages/0001.jpg": "https://r2/1"},
+            "types": {"print.pdf": "application/pdf", "pages/0001.jpg": "image/jpeg"},
+        })
+        report = {"pages": 1, "coverage": [0.05], "sideways": []}
+        defaults = {"download": mock.DEFAULT, "printer_ppd": mock.Mock(return_value=""),
+                    "analyze": mock.Mock(return_value=report), "put_file": mock.DEFAULT}
+        with mock.patch.multiple(print_agent, **{**defaults, **patches}) as mocks:
+            result = print_agent.analysis_once(site, 50 * 1024 * 1024)
+        return site, result, mocks
+
+    def test_an_analysis_brings_numbers_files_and_commit(self):
+        site, result, mocks = self.analysis()
+
+        self.assertTrue(result)
+        self.assertEqual(site.doors(), ["claim", "analyzed", "commit"])
+        self.assertEqual(site.calls[1][1], {"token": "t", "pages": 1, "coverage": [0.05], "sideways": []})
+        self.assertEqual(sorted(call.args[0] for call in mocks["put_file"].call_args_list), ["https://r2/1", "https://r2/p"])
+
+    def test_a_file_the_analyzer_refuses_is_told_to_the_student(self):
+        site, _, _ = self.analysis(analyze=mock.Mock(side_effect=print_agent.Rejected("PDF защищён паролем.")))
+
+        self.assertEqual(site.doors(), ["claim", "fail"])
+        self.assertEqual(site.calls[-1][1]["error"], "PDF защищён паролем.")
+
+    def test_our_own_breakdown_returns_the_file_to_the_queue(self):
+        site, result, _ = self.analysis(put_file=mock.Mock(side_effect=OSError("хранилище не отвечает")))
+
+        self.assertFalse(result)
+        self.assertEqual(site.doors()[-1], "release")
+        self.assertNotIn("fail", site.doors())
+
+    def test_the_sites_answers_become_exceptions(self):
+        site = print_agent.Site("https://knt-mipt.ru", "t")
+
+        def refused(code, body):
+            error = urllib.error.HTTPError("https://knt-mipt.ru", code, "x", {}, io.BytesIO(body.encode()))
+            return mock.patch.object(print_agent.urllib.request, "urlopen", side_effect=error)
+
+        with refused(409, '{"error": "задание закрыто"}'), self.assertRaisesRegex(print_agent.Gone, "закрыто"):
+            site.talk("printed", {"token": "t"})
+        with refused(502, "<html>Bad Gateway</html>"), self.assertRaisesRegex(print_agent.SiteError, "502"):
+            site.talk("claim", {"kind": "print"})
+
+    def test_every_door_the_agent_knocks_on_exists(self):
+        """Ручки агент складывает строкой — своего Django у него нет, и опечатка нашлась бы
+        только на М4, посреди печати."""
+        source = Path(print_agent.__file__).read_text(encoding="utf-8")
+        doors = set(re.findall(r'(?:talk|tell)\("([a-z]+)"', source))
+
+        self.assertGreater(len(doors), 8)
+        for door in doors:
+            with self.subTest(door=door):
+                reverse(f"printagent_{door}")

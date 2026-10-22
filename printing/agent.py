@@ -211,13 +211,22 @@ def sent(request):
 @require_POST
 def printed(request):
     """CUPS сказал «выполнено». Это «принтер принял всё», а не «лист вышел» — сверку
-    со счётчиком страниц делает агент до того, как сюда прийти."""
-    job, kind = _job(agents.body(request))
+    со счётчиком страниц делает агент до того, как сюда прийти.
+
+    `{"sure": false}` — счётчик не сдвинулся: листов, похоже, нет. Это не «не вышло»
+    (могли и выйти) и не «напечатано» — `unknown`, в лимит не идёт, решает человек у лотка.
+    """
+    payload = agents.body(request)
+    job, kind = _job(payload)
     if kind != PRINT:
         return _gone()
-    job.status = Status.DONE
+    if payload.get("sure", True) is False:
+        job.status = Status.UNKNOWN
+        job.reason = "CUPS принял задание, но счётчик принтера не сдвинулся — проверь лоток"
+    else:
+        job.status = Status.DONE
     job.finished_at = timezone.now()
-    _heard(job, "status", "finished_at")
+    _heard(job, "status", "reason", "finished_at")
     return JsonResponse({"ok": True})
 
 
