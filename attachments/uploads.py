@@ -41,6 +41,10 @@ MAX_IMAGE_SIZE = 10 * 1024 * 1024
 # список storage.CONTENT_TYPES, и всё, чего в нём нет, отдаётся потоком байтов.
 FORBIDDEN_EXTENSIONS = {"html", "htm", "xhtml", "svg", "js", "mjs", "exe", "msi", "bat", "cmd", "sh"}
 UPLOAD_SALT = "attachments.direct-upload"
+# Папка прямых загрузок вложений и лекций. Токен годится только той папке, которую ждёт
+# его потребитель: иначе файл печати, прицепленный к материалу, исчез бы через сутки
+# вместе с уборкой печати.
+PREFIX = "uploads"
 UPLOAD_MAX_AGE = 6 * 3600  # столько живёт токен между подписью и отправкой формы
 
 
@@ -182,9 +186,12 @@ def check_uploads(uploads):
     return errors
 
 
-def sign_upload(name):
+def sign_upload(name, folder=PREFIX):
     """Ключ выбирает сервер и подтверждает подписью: иначе к своей книге можно было бы
     прицепить любой чужой объект из бакета, просто прислав его ключ.
+
+    `folder` — у печати своя папка (`printing/`): её файлы живут сутки и убираются своей
+    уборкой, а `clean_uploads` про них не знает.
 
     ВАЖНО: по этой ссылке браузер кладёт файл НАПРЯМУЮ в R2, а это другой домен — значит
     в самом бакете должен быть разрешён CORS с домена сайта, иначе браузер не отправит
@@ -207,7 +214,7 @@ def sign_upload(name):
     мы его затем, чтобы браузер прислал ровно его. Иначе тип объекта выбирал бы
     загружающий — и с ним файл потом уезжал бы всем остальным (storage.CONTENT_TYPES).
     """
-    key = new_key(name)
+    key = new_key(name, folder)
     kind = content_type(key)
     storage = file_storage()
     url = storage.connection.meta.client.generate_presigned_url(
@@ -218,7 +225,7 @@ def sign_upload(name):
     return url, adopt_token(key, name), kind
 
 
-def new_key(name):
+def new_key(name, folder=PREFIX):
     """Ключ прямой загрузки.
 
     Через `random_key`, а не своей строкой: у `File.file` длина по умолчанию — 100
@@ -228,7 +235,7 @@ def new_key(name):
     вместо файла человек получал пятисотку. Загрузки ЧЕРЕЗ приложение этого не знали —
     там ключ с самого начала считает `random_key`.
     """
-    return random_key("uploads", name)
+    return random_key(folder, name)
 
 
 def sign_download(key):
@@ -418,12 +425,19 @@ def upload_key(token):
     return payload["key"] if payload else None
 
 
-def _unsign(token):
-    """Содержимое токена или None, если подпись не наша или протухла."""
+def uploaded_file(token, folder):
+    """(ключ, имя файла) по токену прямой загрузки в эту папку, или None."""
+    payload = _unsign(token, folder)
+    return (payload["key"], payload["name"]) if payload else None
+
+
+def _unsign(token, folder=PREFIX):
+    """Содержимое токена или None, если подпись не наша, протухла или ключ не из этой папки."""
     try:
-        return signing.loads(token, salt=UPLOAD_SALT, max_age=UPLOAD_MAX_AGE)
+        payload = signing.loads(token, salt=UPLOAD_SALT, max_age=UPLOAD_MAX_AGE)
     except signing.BadSignature:
         return None
+    return payload if str(payload.get("key", "")).startswith(f"{folder}/") else None
 
 
 def _stored_size(request, key):

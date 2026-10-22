@@ -204,7 +204,7 @@ def fetch(site, token):
 
 def token_problem(token):
     """Почему таким токеном не сходить, или None. Та же мерка, что у сайта
-    (`intake/views.py:unusable`): заголовки HTTP переносят только латиницу без пробелов,
+    (`core/agents.py:unusable`): заголовки HTTP переносят только латиницу без пробелов,
     и без этой проверки пекарня падала бы на 'latin-1 codec can't encode'."""
     if not token.isascii() or not token.isprintable() or " " in token:
         return "INTAKE_TOKEN не латиницей или с пробелом, такой заголовок не отправить"

@@ -365,6 +365,7 @@ document.addEventListener("alpine:init", () => {
     add(files) {
       if (this.percent !== null) return; // идёт загрузка: новые файлы прошли бы мимо прогресса
       this.errors = [];
+      if (config.single) this.items = []; // форма на один файл: новый выбор заменяет прежний
       for (const file of files) {
         // Предел на пачку — не про сервер, а про хранилище: сырьё лежит в бакете, пока
         // до него не дойдёт пекарня, и за всё это время оно стоит денег.
@@ -501,7 +502,7 @@ document.addEventListener("alpine:init", () => {
           const body = new FormData();
           body.append("title", item.title);
           body.append("uploaded", item.token);
-          await this.hand(config.each, body);
+          item.next = (await this.hand(config.each, body)).redirect;
           item.percent = 100;
           item.done = true;
           item.posted = true; // повтор после ошибки на соседнем файле не заведёт вторую копию
@@ -514,7 +515,12 @@ document.addEventListener("alpine:init", () => {
       this.syncInput();
       // Готовые записи уже стоят в очереди — страница о них ещё не знает. Если что-то
       // не вышло, остаёмся: причина написана у своей строки, и её видно.
-      if (!this.items.some((item) => item.failed) && !this.cancelled) location.reload();
+      // Ответ может сказать, куда идти дальше: у печати это страница задания.
+      if (!this.items.some((item) => item.failed) && !this.cancelled) {
+        const next = this.items.find((item) => item.next)?.next;
+        if (next) location.assign(next);
+        else location.reload();
+      }
     },
 
     // Тот же запрос, что и подпись, но телом формы: вьюха ждёт обычные поля.
@@ -1534,6 +1540,105 @@ document.addEventListener("alpine:init", () => {
   const remember = (height) => {
     try { localStorage.setItem(QUALITY, height); } catch { /* приватный режим */ }
   };
+
+  // Выбор страниц на печать: превью нажимается, поле «1-3,7» и сетка показывают одно
+  // и то же. Разбор — копия printing.pricing.pages_of, а печатает сервер по своему
+  // разбору; сумма здесь — прикидка для человека, в задание идёт расчёт сервера.
+  Alpine.data("printPick", (id) => {
+    const config = JSON.parse(document.getElementById(id).textContent);
+    const word = (n) => (n % 10 === 1 && n % 100 !== 11 ? "страница"
+      : n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14) ? "страницы" : "страниц");
+    return {
+      chosen: Array(config.pages).fill(false),
+      text: config.selection,
+      copies: config.copies,
+      duplex: config.duplex,
+      printerId: config.printer,
+      error: "",
+      init() { this.apply(); },
+      parse(text) {
+        const chosen = new Set();
+        const cleaned = text.trim().replace(/\s*[-–—]\s*/g, "-");
+        for (const part of cleaned.split(/[,;\s]+/).filter(Boolean)) {
+          const match = /^(\d+)(?:-(\d+))?$/.exec(part);
+          if (!match) throw new Error(`Не понял «${part}». Номера и диапазоны пишутся через запятую, например 1-3,7`);
+          const [first, last] = [Number(match[1]), Number(match[2] || match[1])].sort((a, b) => a - b);
+          if (first < 1 || last > config.pages) {
+            throw new Error(`Страницы ${first < 1 ? first : last} нет: в документе ${config.pages} ${word(config.pages)}`);
+          }
+          for (let number = first; number <= last; number += 1) chosen.add(number);
+        }
+        return chosen;
+      },
+      apply() {
+        try {
+          const chosen = this.parse(this.text);
+          this.chosen = this.chosen.map((_, index) => chosen.has(index + 1));
+          this.error = "";
+        } catch (problem) {
+          this.error = problem.message;
+        }
+      },
+      toggle(number) {
+        this.chosen[number - 1] = !this.chosen[number - 1];
+        this.text = this.selection;
+        this.error = "";
+      },
+      all(on) {
+        this.chosen = this.chosen.map(() => on);
+        this.text = this.selection;
+        this.error = "";
+      },
+      // [1, 2, 3, 7] → «1-3,7», как pricing.selection_of
+      get selection() {
+        const parts = [];
+        let start = null;
+        this.chosen.forEach((on, index) => {
+          const number = index + 1;
+          if (on && start === null) start = number;
+          if (start !== null && (!on || number === this.chosen.length)) {
+            const end = on ? number : number - 1;
+            parts.push(end > start ? `${start}-${end}` : `${start}`);
+            start = null;
+          }
+        });
+        return parts.join(",");
+      },
+      get count() { return this.chosen.filter(Boolean).length; },
+      get copiesValid() { return Number.isInteger(this.copies) && this.copies >= 1 && this.copies <= config.maxCopies; },
+      get copyCount() { return this.copiesValid ? this.copies : 0; },
+      // Недоступные принтеры в настройки не попадают: выбрать их нельзя и считать незачем.
+      get chosenPrinter() { return config.printers[this.printerId] || null; },
+      get canDuplex() { return Boolean(this.chosenPrinter?.duplex); },
+      get twoSided() { return this.duplex && this.canDuplex; },
+      get sheets() { return this.copyCount * (this.twoSided ? Math.ceil(this.count / 2) : this.count); },
+      get sides() { return this.copyCount * this.count; },
+      get fits() { return config.left === null || this.sides <= config.left; },
+      // Логическим, а не через «||»: пустая строка ошибки для Alpine — значение, и :disabled
+      // с ней выключил бы кнопку навсегда.
+      get ready() { return this.count > 0 && this.copiesValid && this.fits && !this.error && Boolean(this.chosenPrinter); },
+      // Цены за единицу, копейки: лист, страница обычного текста (5%), барабан на страницу.
+      get rates() {
+        const c = this.chosenPrinter?.costs;
+        if (!c) return { paper: 0, toner: 0, drum: 0 };
+        return { paper: c.paper_sheet, toner: c.toner_price / c.toner_yield * c.toner_factor, drum: c.drum_price / c.drum_yield };
+      },
+      get parts() {
+        const shares = config.coverage.filter((_, index) => this.chosen[index]);
+        const toner = shares.reduce((sum, share) => sum + this.rates.toner * (share / 0.05), 0);
+        return {
+          paper: this.rates.paper * this.sheets,
+          toner: this.copyCount * toner,
+          drum: this.copyCount * this.count * this.rates.drum,
+        };
+      },
+      get total() { return this.parts.paper + this.parts.toner + this.parts.drum; },
+      rub(kopecks) {
+        const whole = Math.round(kopecks);
+        return `${Math.floor(whole / 100)},${String(whole % 100).padStart(2, "0")} ₽`;
+      },
+    };
+  });
 
   Alpine.data("lecturePlayer", (src) => {
     // Плеер и счётчик — ЗДЕСЬ, в замыкании, а не в данных компонента. Alpine оборачивает

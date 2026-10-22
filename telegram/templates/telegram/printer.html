@@ -1,0 +1,4 @@
+{% load text_extras %}{% if trouble %}🖨 <b>{{ printer.name }}</b>{% if printer.place %} ({{ printer.place }}){% endif %}: {{ trouble }}{% if waiting %}, в очереди {{ waiting }} {{ waiting|plural:"задание,задания,заданий" }}{% endif %}
+{% if printer.state_text %}На панели: {{ printer.state_text }}{% endif %}
+{% else %}✅ <b>{{ printer.name }}</b>{% if printer.place %} ({{ printer.place }}){% endif %}: снова в порядке{% if was %} (было: {{ was }}){% endif %}
+{% endif %}

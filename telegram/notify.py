@@ -15,6 +15,8 @@ SUPPORT = "support"
 # Отдельно от поддержки не для порядка: в поддержку пишут про сломанный сайт, а сюда —
 # про поступление и общежитие, и отвечают на это разные люди.
 FEEDBACK = "feedback"
+# Неполадки принтеров и молчание агента печати (printing.alerts) — тем, кто носит бумагу.
+PRINTERS = "printers"
 
 
 def notify(chat_name, template, context=None, image=None):

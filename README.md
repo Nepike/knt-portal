@@ -41,6 +41,7 @@ GitHub Actions
 | `intake` | What a finished media file must be, plus the job queue the off-site bakery works from |
 | `lectorium` | Video lectures: playlists that go through review, an HLS player, no bytes of its own |
 | `moderation` | The review queue over everything that inherits `Moderated` |
+| `printing` | Printing on the faculty printer: jobs, a weekly page limit, cost per page, the queue a print agent on the faculty server works from (`docs/printing.md`) |
 | `telegram` | Bot: notifications into configurable chats and topics |
 
 ## Notes on the parts that are not obvious
@@ -112,7 +113,7 @@ to guests and to logged-in students alike; an htmx request is told to reload the
 People holding `core.pass_lockdown` see the site as usual, with a reminder in the header: the
 right comes with the «Доступ при закрытии» group, and a superuser needs neither. Three things are
 left open on purpose (`OPEN` in `core/lockdown.py`): login, logout and the password pages, or the
-listed people could not get in; the bakery intake, a machine with its own token; and file
+listed people could not get in; the bakery intake and the print agent, machines with their own tokens; and file
 delivery. The files domain carries no session, so the listed cannot be told from the rest there —
 the signature in the address is the permission, and it does not expire: a link saved earlier
 keeps working while the pages are closed. WebSockets are refused by `SocketGate` in
@@ -126,7 +127,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1371 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1502 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

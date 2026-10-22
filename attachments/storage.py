@@ -37,6 +37,15 @@ CONTENT_TYPES = {
     ".avif": "image/avif",
     ".heic": "image/heic",
     ".pdf": "application/pdf",
+    # Офисные документы браузер не показывает, а сохраняет — с этим типом он хотя бы
+    # знает, чем их открыть. Их принимает печать (printing.views.ACCEPTED).
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".rtf": "application/rtf",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
     ".mp3": "audio/mpeg",
     ".m4a": "audio/mp4",
     # Без charset: кодировку конспекта десятилетней давности браузер угадает лучше нас.

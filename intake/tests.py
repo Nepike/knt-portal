@@ -25,6 +25,7 @@ from django.urls import resolve, reverse
 from django.utils import timezone
 
 from attachments.models import File
+from core import agents
 from core.models import Subject
 from lectorium.models import Lecture, Playlist
 from materials.models import Material
@@ -354,7 +355,7 @@ class TokenAgreementTests(SimpleTestCase):
     def test_both_sides_call_the_same_tokens_unusable(self):
         for token in self.CASES:
             with self.subTest(token=token):
-                self.assertEqual(bool(views.unusable(token)), bool(bake.token_problem(token)))
+                self.assertEqual(bool(agents.unusable(token, "INTAKE_TOKEN")), bool(bake.token_problem(token)))
 
     def test_every_door_the_bakery_knocks_on_exists(self):
         """Адреса ручек пекарня складывает строкой, а не берёт по имени — своего Django

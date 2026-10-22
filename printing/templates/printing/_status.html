@@ -1,0 +1,48 @@
+{% load printing_extras text_extras %}
+{% comment %}
+  Пока задание меняется само (готовится превью, стоит в очереди, печатается), блок
+  спрашивает о нём каждые две секунды. Сменилось состояние — сервер велит перерисовать
+  страницу целиком (printing.views.status); не сменилось — обновляется только этот блок.
+{% endcomment %}
+<div id="job-status" class="flex flex-col gap-3"
+     {% if job.waiting %}hx-get="{% url 'print_status' job.uuid %}?was={{ job.status }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% if job.status == "uploaded" or job.status == "analyzing" %}
+  <p class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+    <i class="fa-solid fa-spinner fa-spin text-accent"></i>Готовим превью… Обычно это меньше минуты.
+  </p>
+  {% elif job.status == "ready" %}
+  <p class="text-sm text-slate-500 dark:text-slate-400">Выбери страницы и нажми «Печатать». Нажатие на превью включает и выключает страницу.</p>
+  {% elif job.status == "rejected" %}
+  <p class="rounded-xl bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300">{{ job.reason|default:"Файл не удалось подготовить к печати." }}</p>
+  <a href="{% url 'print_home' %}" class="btn btn-secondary self-start"><i class="fa-solid fa-file-arrow-up"></i>Загрузить другой файл</a>
+  {% elif job.status == "expired" %}
+  <p class="text-sm text-slate-500 dark:text-slate-400">Срок хранения истёк: файл удалён через сутки без печати. Загрузи его снова.</p>
+  <a href="{% url 'print_home' %}" class="btn btn-secondary self-start"><i class="fa-solid fa-file-arrow-up"></i>Загрузить снова</a>
+  {% else %}
+  <p class="text-sm">
+    {% if job.status == "queued" %}В очереди: агент заберёт задание в ближайшие секунды.
+    {% elif job.status == "printing" %}Печатается{% if job.printer.state_text %} · на панели принтера: «{{ job.printer.state_text }}»{% endif %}.
+    {% elif job.status == "done" %}Напечатано{% if job.finished_at %} {{ job.finished_at|date:"j E в H:i" }}{% endif %} — листы ждут в лотке принтера{% if job.printer.place %} ({{ job.printer.place }}){% endif %}.
+    {% elif job.status == "failed" %}Не вышло{% if job.reason %}: {{ job.reason }}{% endif %}. Страницы вернулись в лимит.
+    {% elif job.status == "canceled" %}Отменено — страницы вернулись в лимит.
+    {% elif job.status == "unknown" %}Статус неизвестен: задание ушло на принтер, но агент перестал отвечать. Проверь лоток — в лимит эти страницы не пошли.
+    {% endif %}
+  </p>
+  <p class="text-xs text-slate-500 dark:text-slate-400">
+    Страницы {{ job.selection }} · {{ job.copies }} {{ job.copies|plural:"копия,копии,копий" }} · {% if job.duplex %}двусторонняя{% else %}односторонняя{% endif %} ·
+    {{ job.printer }} · себестоимость для факультета ≈ {{ job.cost|rub }}
+  </p>
+  <div class="flex flex-wrap gap-2">
+    {% if job.status == "queued" %}
+    <form method="post" action="{% url 'print_cancel' job.uuid %}">{% csrf_token %}
+      <button class="btn btn-ghost"><i class="fa-solid fa-xmark"></i>Отменить</button>
+    </form>
+    {% endif %}
+    {% if job.can_repeat %}
+    <form method="post" action="{% url 'print_again' job.uuid %}">{% csrf_token %}
+      <button class="btn btn-secondary"><i class="fa-solid fa-rotate-right"></i>{% if job.status == "failed" or job.status == "unknown" %}Повторить{% else %}Напечатать ещё раз{% endif %}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

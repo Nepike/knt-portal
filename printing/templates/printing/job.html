@@ -1,0 +1,131 @@
+{% extends "core/base.html" %}
+{% load text_extras %}
+
+{% block title %}{{ job.name }} · печать{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-4">
+
+  <section class="panel p-5 flex flex-col gap-3">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <a href="{% url 'print_home' %}" class="text-sm text-accent hover:underline">
+        <i class="fa-solid fa-arrow-left text-xs"></i> Печать
+      </a>
+      <span class="ml-auto">{% include "printing/_badge.html" %}</span>
+    </div>
+    <h1 class="text-xl font-bold break-words">{{ job.name }}</h1>
+    {% if job.pages %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ job.pages }} {{ job.pages|plural:"страница,страницы,страниц" }} A4 · загружено {{ job.created|date:"j E, H:i" }}</p>{% endif %}
+    {% include "printing/_status.html" %}
+  </section>
+
+  {% if pick %}
+  {{ pick|json_script:"print-pick" }}
+  <form method="post" action="{% url 'print_submit' job.uuid %}" x-data="printPick('print-pick')" class="panel p-5 flex flex-col gap-5">
+    {% csrf_token %}
+    <input type="hidden" name="selection" :value="selection">
+
+    <div class="print-grid">
+      {% for picture in pictures %}
+      <button type="button" class="print-page" :class="chosen[{{ forloop.counter0 }}] ? 'print-page-on' : 'print-page-off'"
+              @click="toggle({{ picture.number }})" aria-label="Страница {{ picture.number }}">
+        <img src="{{ picture.url }}" alt="" loading="lazy">
+        <span class="print-page-number">{{ picture.number }}</span>
+        {% if picture.dark %}<span class="print-page-tag bg-amber-500 text-white">тёмная · {% widthratio picture.share 1 100 %}%</span>
+        {% elif picture.sideways %}<span class="print-page-tag bg-slate-700/80 text-white">поперёк листа</span>{% endif %}
+      </button>
+      {% endfor %}
+    </div>
+
+    {% comment %}
+      Принтер выбирается здесь, а не при загрузке: где забирать листы, решают, когда жмут
+      «Печатать». Недоступный (выключен в админке или нет связи) виден, но не выбирается.
+    {% endcomment %}
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-2 text-sm text-slate-500 dark:text-slate-400">Принтер</legend>
+      {% for printer in printers %}
+      <label class="block rounded-xl border-2 transition {% if printer.available %}cursor-pointer{% else %}cursor-not-allowed{% endif %}"
+             :class="printerId === {{ printer.pk }} ? 'border-accent' : 'border-transparent'">
+        <input type="radio" name="printer" value="{{ printer.pk }}" x-model.number="printerId" class="sr-only"
+               {% if not printer.available %}disabled{% endif %}>
+        {% include "printing/_printer.html" %}
+      </label>
+      {% endfor %}
+      <p x-show="!chosenPrinter" x-cloak class="text-sm text-rose-600 dark:text-rose-400">Сейчас ни один принтер не доступен — печать придётся отложить.</p>
+    </fieldset>
+
+    <div class="flex flex-wrap items-end gap-4">
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-slate-500 dark:text-slate-400">Страницы</span>
+        <input type="text" x-model="text" @input.debounce.300ms="apply()" @change="apply()" maxlength="200"
+               placeholder="например 1-3,7" autocomplete="off"
+               class="h-10 w-48 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 outline-none focus:border-accent">
+      </label>
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-slate-500 dark:text-slate-400">Копий</span>
+        <input type="number" name="copies" x-model.number="copies" min="1" max="{{ max_copies }}" required
+               class="h-10 w-24 rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 outline-none focus:border-accent">
+      </label>
+      <label class="switch-field h-10" x-show="canDuplex">
+        <input type="checkbox" name="duplex" x-model="duplex">
+        <span class="switch"></span>Двусторонняя печать
+      </label>
+    </div>
+    <div class="flex flex-wrap gap-2 -mt-2">
+      <button type="button" class="btn btn-ghost px-2 py-1 text-xs" @click="all(true)">Выбрать все</button>
+      <button type="button" class="btn btn-ghost px-2 py-1 text-xs" @click="all(false)">Снять все</button>
+    </div>
+    <p x-show="error" x-cloak class="-mt-3 text-xs text-rose-500" x-text="error"></p>
+
+    <div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-4 text-sm flex flex-col gap-1">
+      <p>
+        Страниц <b class="tabular-nums" x-text="count"></b> ·
+        копий <b class="tabular-nums" x-text="copyCount"></b> ·
+        листов <b class="tabular-nums" x-text="sheets"></b>
+      </p>
+      {% if limits.left is not None %}<p class="text-slate-500 dark:text-slate-400">На этой неделе осталось {{ limits.left }} стр.</p>{% endif %}
+      <p class="text-slate-500 dark:text-slate-400" x-show="chosenPrinter">
+        Себестоимость для факультета ≈ <b class="text-slate-700 dark:text-slate-200" x-text="rub(total)"></b>:
+        бумага <span x-text="rub(parts.paper)"></span> · тонер <span x-text="rub(parts.toner)"></span> · барабан <span x-text="rub(parts.drum)"></span>
+      </p>
+      <details class="text-xs text-slate-500 dark:text-slate-400" x-show="chosenPrinter">
+        <summary class="cursor-pointer select-none">Как считается</summary>
+        <div class="mt-2 flex flex-col gap-1">
+          <p>Цена = копии × (листы × бумага + тонер каждой страницы + страницы × барабан).</p>
+          <p>Бумага — <span x-text="rub(rates.paper)"></span> за лист, барабан — <span x-text="rub(rates.drum)"></span> за страницу.</p>
+          <p>
+            Тонер — <span x-text="rub(rates.toner)"></span> за страницу обычного текста: на ней закрашено около 5% листа.
+            Страница дороже во столько раз, во сколько больше её заливка: тёмный слайд с заливкой 50% — в десять раз.
+          </p>
+        </div>
+      </details>
+      <p x-show="!fits" x-cloak class="text-rose-600 dark:text-rose-400">
+        Не влезает в лимит недели. Выбери меньше страниц или копий — двусторонняя печать бережёт бумагу, но не лимит.
+      </p>
+    </div>
+
+    {% if outside %}
+    <p class="text-sm text-amber-700 dark:text-amber-300">
+      <i class="fa-solid fa-location-dot"></i>
+      Судя по IP, ты сейчас не в здании М4. Печать начнётся сразу, листы будут ждать в лотке принтера.
+    </p>
+    {% endif %}
+
+    <button type="submit" class="btn btn-primary self-start" :disabled="!ready">
+      <i class="fa-solid fa-print"></i>Печатать
+    </button>
+  </form>
+
+  {% elif pictures %}
+  <section class="panel p-5">
+    <div class="print-grid">
+      {% for picture in pictures %}
+      <div class="print-page {% if picture.chosen %}print-page-on{% else %}print-page-off{% endif %}">
+        <img src="{{ picture.url }}" alt="Страница {{ picture.number }}" loading="lazy">
+        <span class="print-page-number">{{ picture.number }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

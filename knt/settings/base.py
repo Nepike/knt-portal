@@ -35,6 +35,7 @@ LOCAL_APPS = [
     "economy",
     "cosmetics",
     "wall",
+    "printing",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -186,9 +187,22 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.backup_database",
         "schedule": crontab(hour=3, minute=40),
     },
+    # Файлы печати — между бэкапом и уборкой бакета: уборка печати короткая, а та
+    # занимает воркер надолго.
+    "sweep-printing": {
+        "task": "printing.tasks.sweep_printing",
+        "schedule": crontab(hour=3, minute=50),
+    },
     "sweep-storage": {
         "task": "attachments.tasks.sweep_storage",
         "schedule": crontab(hour=4, minute=20),
+    },
+    # Молчание агента печати замечает только сайт. Протухшие проверки выбрасываем: пока
+    # воркер занят ночной уборкой, их накопились бы десятки, а нужна одна, свежая.
+    "watch-printers": {
+        "task": "printing.tasks.watch_printers",
+        "schedule": 60.0,
+        "options": {"expires": 50},
     },
 }
 
@@ -196,6 +210,16 @@ CELERY_BEAT_SCHEDULE = {
 # не годится — она не человек и в сессии не живёт. Пусто = приёмка закрыта совсем:
 # ручки открыты в интернет без логина, и забытая настройка не должна пускать всех.
 INTAKE_TOKEN = env("INTAKE_TOKEN", default="")
+
+# Печать (docs/printing.md). Агент на М4 ходит по своему токену, а не по INTAKE_TOKEN:
+# пекарню и печать отзывают независимо. Пусто = ручки агента закрыты.
+PRINT_AGENT_TOKEN = env("PRINT_AGENT_TOKEN", default="")
+PRINT_WEEKLY_PAGES = 100  # сторон A4 в неделю на человека; свой предел — в PrintAccount
+# Внешний адрес сети М4: с него человек «в здании». Не с него — только предупреждение.
+PRINT_M4_IPS = ("194.50.24.117",)
+PRINT_MAX_FILE_MB = 50
+# Больше недельного лимита: печатают часто одну главу из толстого учебника.
+PRINT_MAX_DOC_PAGES = 300
 
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
 TELEGRAM_CONSOLE = False  # dev печатает сообщения вместо отправки, как и письма

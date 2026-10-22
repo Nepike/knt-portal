@@ -1,0 +1,97 @@
+{% extends "core/base.html" %}
+{% load printing_extras %}
+
+{% block title %}Печать{% endblock %}
+
+{% block content %}
+<div class="w-full max-w-3xl mx-auto flex flex-col gap-4">
+
+  <section class="panel p-5 flex flex-col gap-4">
+    <h1 class="page-title text-xl font-bold">Печать</h1>
+    {% for printer in printers %}{% include "printing/_printer.html" %}{% endfor %}
+    {% include "printing/_limit.html" %}
+  </section>
+
+  {% comment %}
+    Тот же компонент, что у материалов и лекций (fileForm): с хранилищем R2 файл уходит
+    туда напрямую, а сюда — только подписанный токен; без него (разработка) форма
+    отправляет сам файл. Ответ ведёт на страницу задания.
+
+    Поле после выбора НЕ очищаем, в отличие от лекций: без R2 форма отправляет именно его,
+    и очищенное уезжало пустым — задание не заводилось вовсе.
+  {% endcomment %}
+  <section class="panel p-5">
+    <h2 class="font-semibold">Загрузить файл</h2>
+    {% if printer %}
+    <form class="mt-3 flex flex-col gap-3"
+          hx-post="{% url 'print_upload' %}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="none"
+          x-data="fileForm({{ upload }}, [])"
+          @htmx:confirm="beforeSend($event)"
+          @htmx:before-request="begin()" @htmx:before-on-load="end()" @htmx:after-request="end()">
+      {% csrf_token %}
+      <input type="file" name="file" x-ref="input" accept="{{ accept }}" class="hidden"
+             @change="add($event.target.files)">
+      <button type="button" @click="$refs.input.click()" x-show="!items.length"
+              class="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 px-4 py-8 text-sm text-slate-500 hover:border-accent hover:text-accent transition">
+        <i class="fa-solid fa-file-arrow-up text-2xl"></i>
+        Выбрать файл
+        <span class="text-xs text-slate-400">PDF, DOC, DOCX, ODT, RTF, PPT, PPTX, ODP, JPG, PNG · до {{ max_size }}</span>
+      </button>
+
+      <template x-for="item in items" :key="item.id">
+        <div class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-800 p-3">
+          <i class="fa-regular fa-file-lines text-xl text-slate-400"></i>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm font-medium" x-text="item.name"></p>
+            <p class="text-xs text-slate-400">
+              <span x-text="item.size"></span>
+              <span x-show="item.percent !== null"> · <span x-text="item.percent + '%'"></span></span>
+            </p>
+            <p x-show="item.failed" x-cloak class="mt-1 text-xs text-rose-500" x-text="item.failed"></p>
+          </div>
+          <button type="button" @click="remove(items.indexOf(item))" x-show="!item.done && percent === null"
+                  class="w-8 h-8 shrink-0 flex items-center justify-center text-slate-400 hover:text-rose-500" aria-label="Убрать">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </template>
+      <template x-for="problem in errors"><p class="text-xs text-rose-500" x-text="problem"></p></template>
+
+      <button type="submit" class="btn btn-primary" x-show="items.length" x-cloak :disabled="percent !== null">
+        <i class="fa-solid fa-arrow-up-from-bracket"></i>Загрузить и посмотреть превью
+      </button>
+    </form>
+    <ul class="mt-3 flex flex-col gap-1 text-xs text-slate-500 dark:text-slate-400">
+      <li><i class="fa-solid fa-circle-check text-emerald-500 w-4"></i> PDF печатается ровно так, как выглядит.</li>
+      <li><i class="fa-solid fa-triangle-exclamation text-amber-500 w-4"></i> Документы и презентации переводятся в PDF и могут съехать — сначала посмотри превью.</li>
+      <li><i class="fa-regular fa-clock w-4"></i> Файлы удаляются в течение суток после печати.</li>
+    </ul>
+    {% else %}
+    <p class="mt-2 text-sm text-slate-500">Печать сейчас недоступна: ни один принтер не принимает задания.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel p-5">
+    <h2 class="font-semibold">Мои задания</h2>
+    <ul class="mt-2 flex flex-col divide-y divide-slate-100 dark:divide-slate-800">
+      {% for job in jobs %}
+      <li>
+        <a href="{% url 'print_job' job.uuid %}" class="flex items-center gap-3 py-2.5 hover:text-accent">
+          <i class="fa-regular fa-file-lines text-slate-400"></i>
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-sm font-medium">{{ job.name }}</span>
+            <span class="block text-xs text-slate-400">
+              {{ job.created|date:"j E, H:i" }}{% if job.sides %} · {{ job.sides }} стр.{% elif job.pages %} · {{ job.pages }} стр. в файле{% endif %}
+            </span>
+          </span>
+          {% if job.sides %}<span class="shrink-0 text-sm tabular-nums text-slate-500 dark:text-slate-400">{{ job.cost|rub }}</span>{% endif %}
+          {% include "printing/_badge.html" %}
+        </a>
+      </li>
+      {% empty %}
+      <li class="py-3 text-sm text-slate-400">Заданий пока нет.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

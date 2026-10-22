@@ -25,6 +25,7 @@ SECTIONS = {
     "students": {"student_list"},
     "wall": {"wall"},
     "shop": {"shop", "item_card"},
+    "printing": {"print_home", "print_job"},
     "bookmarks": {"bookmark_list"},
     "moderation": {"review_queue"},
 }

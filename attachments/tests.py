@@ -99,7 +99,7 @@ class PresignTests(TestCase):
 
     def test_the_type_is_ours_and_the_browser_is_told_which(self):
         """Тип объекта выбирает сервер и отдаёт браузеру: тот обязан прислать ровно его."""
-        for name, kind in (("слайды.pptx", "application/octet-stream"), ("Зорич.pdf", "application/pdf")):
+        for name, kind in (("таблица.xlsx", "application/octet-stream"), ("Зорич.pdf", "application/pdf")):
             with self.subTest(name=name):
                 storage = fake_storage()
                 answer = self.ask(name=name, storage=storage).json()
@@ -551,14 +551,16 @@ class ContentTypeTests(SimpleTestCase):
         и другое браузер исполняет. Запрещённые расширения тут же: запрет стоит на входе,
         а тип отвечает за то, что его всё-таки миновало."""
         for name in ("страница.xml", "схема.svg", "схема.svgz", "страница.html", "страница.xhtml",
-                     "код.js", "слайды.pptx", "архив.tar.gz"):
+                     "код.js", "таблица.xlsx", "архив.tar.gz"):
             self.assertEqual(content_type(name), "application/octet-stream", name)
 
     def test_the_list_itself_holds_nothing_a_browser_would_run(self):
         """Сторож на будущее: список будут дополнять, а строка с svg в нём выглядит
         безобидной картинкой."""
+        # XML браузер разбирает по типу text/xml, application/xml и «…+xml» — отсюда \b.
+        # «openxmlformats» у docx — просто имя производителя, документом браузер его не откроет.
         for suffix, kind in CONTENT_TYPES.items():
-            self.assertNotRegex(kind, r"html|xml|svg|script", suffix)
+            self.assertNotRegex(kind, r"html|\bxml\b|svg|script", suffix)
 
     def test_the_unknown_is_a_stream_of_bytes(self):
         """Честнее, чем угадать неверно: браузер предложит сохранить, а не покажет мусор."""
@@ -1038,7 +1040,7 @@ class DownloadCountTests(TestCase):
 
 
 IMMUTABLE = "public, max-age=31536000, immutable"
-PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class RetypeTests(SimpleTestCase):
@@ -1047,7 +1049,7 @@ class RetypeTests(SimpleTestCase):
     def setUp(self):
         self.bucket = {
             "books/a/Зорич.pdf": {"ContentType": "application/pdf", "CacheControl": IMMUTABLE},
-            "books/b/слайды.pptx": {"ContentType": PPTX, "CacheControl": IMMUTABLE},
+            "books/b/таблица.xlsx": {"ContentType": XLSX, "CacheControl": IMMUTABLE},
             # Тип уже верный, не так только кодировка: её storages дописывал по хвосту имени.
             "books/c/данные.gz": {"ContentType": "application/octet-stream", "ContentEncoding": "gzip"},
             "uploads/d/страница.xml": {"ContentType": "text/html"},
@@ -1088,7 +1090,7 @@ class RetypeTests(SimpleTestCase):
     def test_what_people_uploaded_gets_the_type_of_our_list(self):
         self.retype("--apply", "--journal", self.journal)
 
-        self.assertEqual(self.bucket["books/b/слайды.pptx"]["ContentType"], "application/octet-stream")
+        self.assertEqual(self.bucket["books/b/таблица.xlsx"]["ContentType"], "application/octet-stream")
         self.assertEqual(self.bucket["uploads/d/страница.xml"]["ContentType"], "application/octet-stream")
         # Верное не трогаем: копия на себя — это запрос, а их тут тысячи.
         self.assertEqual(self.api.copy_object.call_count, 3)
@@ -1111,7 +1113,7 @@ class RetypeTests(SimpleTestCase):
         """REPLACE стирает всё разом: без переноса объект терял бы вечный кеш."""
         self.retype("--apply", "--journal", self.journal)
 
-        self.assertEqual(self.bucket["books/b/слайды.pptx"]["CacheControl"], IMMUTABLE)
+        self.assertEqual(self.bucket["books/b/таблица.xlsx"]["CacheControl"], IMMUTABLE)
 
     def test_an_encoding_guessed_from_the_name_goes_away(self):
         """С `Content-Encoding: gzip` браузер молча распаковывает архив при скачивании."""

@@ -37,6 +37,7 @@ from attachments.uploads import under
 from knt.celery import app as celery_app
 from core.models import Funding, Lockdown, Supporter, Team
 from intake import urls as intake_urls
+from printing import urls as printing_urls
 from teachers.models import Review, Teacher
 from users.models import User
 
@@ -1704,6 +1705,19 @@ class LockdownTests(TestCase):
         self.assertEqual(response["Content-Type"], "application/json")
         for pattern in intake_urls.urlpatterns:
             self.assertTrue(lockdown.always_open(reverse(pattern.name)), pattern.name)
+
+    @override_settings(PRINT_AGENT_TOKEN="token")
+    def test_the_print_agent_is_not_turned_away_but_the_print_pages_are_closed(self):
+        close_site()
+
+        response = self.client.get(reverse("printagent_config"), headers={"Authorization": "Bearer token"})
+
+        self.assertEqual(response.status_code, 200)
+        agent = [pattern.name for pattern in printing_urls.urlpatterns if pattern.name.startswith("printagent_")]
+        self.assertGreater(len(agent), 5)
+        for name in agent:
+            self.assertTrue(lockdown.always_open(reverse(name)), name)
+        self.assertFalse(lockdown.always_open(reverse("print_home")))
 
     # --- сама страница ---
 

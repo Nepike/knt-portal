@@ -5,13 +5,10 @@
 причины: на той стороне скрипт, который должен напечатать внятное, а не «401».
 """
 
-import json
 import posixpath
-import secrets
 from pathlib import PurePosixPath
 from uuid import uuid4
 
-from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
 from django.core import signing
 from django.db import transaction
@@ -22,54 +19,16 @@ from django.views.decorators.http import require_GET, require_POST
 
 from attachments.storage import content_type
 from attachments.uploads import sign_download, sign_put, under
+from core import agents
 
 from .models import MediaJob, sweep, take
 from .spec import MASTER, POSTER, RECIPES, check_ladder, payload
 from .tasks import drop_source
 
-BEARER = "Bearer "
-
-
-def unusable(token):
-    """Почему таким токеном пользоваться нельзя, или None.
-
-    Заголовки HTTP переносят только латиницу: кириллический токен клиент физически
-    не отправит, а пробел разорвёт заголовок. Отвергаем это КАК ненастроенность —
-    иначе токен «работал бы» в тестах, а пекарня падала бы на кодировке.
-
-    Пробел ловится не для красоты: django-environ не срезает хвост после решётки,
-    и `INTAKE_TOKEN=abc # заметка` даёт значение вместе с заметкой (на это в проекте
-    уже наступали). Такой токен лучше назвать сломанным сразу.
-    """
-    if not token:
-        return "приёмка не настроена: пустой INTAKE_TOKEN"
-    if not token.isascii() or not token.isprintable() or " " in token:
-        return "INTAKE_TOKEN годится только из латиницы, цифр и знаков, без пробелов: заголовки HTTP другого не несут"
-    return None
-
-
-def _authorised(request):
-    header = request.headers.get("Authorization", "")
-    if not header.startswith(BEARER):
-        return False
-    # compare_digest, а не ==: сравнение строк выходит на первом несовпавшем символе,
-    # и по времени ответа токен подбирается посимвольно.
-    #
-    # Байты, а не строки: строковый вариант отказывается сравнивать что угодно за
-    # пределами латиницы, а ЗАГОЛОВОК — это чужой ввод. Настройка своя и проверена
-    # в unusable(), но присланное проверить нельзя, и падать на нём вьюха не должна.
-    return secrets.compare_digest(header[len(BEARER):].encode(), settings.INTAKE_TOKEN.encode())
-
 
 def guard(request):
-    """Ответ-отказ или None, если пускаем. Общий для всех ручек приёмки."""
-    # Ненастроенность — это НЕ «пускаем всех»: ручки открыты в интернет без логина,
-    # и забытая или битая настройка не должна превращаться в открытую дверь.
-    if problem := unusable(settings.INTAKE_TOKEN):
-        return JsonResponse({"error": problem}, status=503)
-    if not _authorised(request):
-        return JsonResponse({"error": "нужен заголовок Authorization: Bearer <INTAKE_TOKEN>"}, status=401)
-    return None
+    """Ответ-отказ или None, если пускаем. Общий для всех ручек приёмки (core/agents.py)."""
+    return agents.guard(request, "INTAKE_TOKEN")
 
 
 @login_not_required
@@ -92,13 +51,6 @@ JOB_MAX_AGE = 12 * 3600
 # Ссылок за один заход. У двухчасовой лекции кусков 2400, и все разом — полтора
 # мегабайта ответа и лишний риск, что они протухнут по дороге.
 MAX_SIGNED = 200
-
-
-def _body(request):
-    try:
-        return json.loads(request.body or b"{}")
-    except ValueError:
-        return {}
 
 
 def _job(payload):
@@ -146,7 +98,7 @@ def claim(request):
     if refusal := guard(request):
         return refusal
 
-    job = take(str(_body(request).get("worker", "пекарня")))
+    job = take(str(agents.body(request).get("worker", "пекарня")))
     if job is None:
         return JsonResponse({"job": None})
     return JsonResponse({"job": {
@@ -169,7 +121,7 @@ def plan(request):
     """
     if refusal := guard(request):
         return refusal
-    body = _body(request)
+    body = agents.body(request)
     job = _job(body)
     if job is None:
         return _gone()
@@ -206,7 +158,7 @@ def sign(request):
     """Подписанные ссылки на запись очередной порции кусков."""
     if refusal := guard(request):
         return refusal
-    body = _body(request)
+    body = agents.body(request)
     job = _job(body)
     if job is None or not job.prefix:
         return _gone()
@@ -250,7 +202,7 @@ def commit(request):
     """«Залил». Сайт проверяет, что всё обещанное на месте, и привязывает к лекции."""
     if refusal := guard(request):
         return refusal
-    job = _job(_body(request))
+    job = _job(agents.body(request))
     if job is None or not job.prefix:
         return _gone()
     if problem := _incomplete(job):
@@ -290,7 +242,7 @@ def alive(request):
     """
     if refusal := guard(request):
         return refusal
-    job = _job(_body(request))
+    job = _job(agents.body(request))
     if job is None:
         return _gone()
     _still_here(job)
@@ -317,7 +269,7 @@ def release(request):
     """
     if refusal := guard(request):
         return refusal
-    job = _job(_body(request))
+    job = _job(agents.body(request))
     if job is None:
         return _gone()
 
@@ -337,7 +289,7 @@ def fail(request):
     """Не вышло. Причину показываем человеку — иначе лекция висит «печётся» вечно."""
     if refusal := guard(request):
         return refusal
-    body = _body(request)
+    body = agents.body(request)
     job = _job(body)
     if job is None:
         return _gone()

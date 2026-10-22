@@ -94,6 +94,7 @@
           <a href="{% url 'student_list' %}" class="nav-link {% if section == 'students' %}nav-link-active{% endif %}"><i class="fa-solid fa-graduation-cap text-lg"></i>Студенты</a>
           <a href="{% url 'wall' %}" class="nav-link {% if section == 'wall' %}nav-link-active{% endif %}"><i class="fa-solid fa-border-all text-lg"></i>Стена</a>
           <a href="{% url 'shop' %}" class="nav-link {% if section == 'shop' %}nav-link-active{% endif %}"><i class="fa-solid fa-basket-shopping text-lg"></i>Магазин</a>
+          {% if perms.printing.use %}<a href="{% url 'print_home' %}" class="nav-link {% if section == 'printing' %}nav-link-active{% endif %}"><i class="fa-solid fa-print text-lg"></i>Печать</a>{% endif %}
 
           {% comment %}
             None — не модератор, ссылки быть не должно; 0 — модератор, но очередь пуста.
