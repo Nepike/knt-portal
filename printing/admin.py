@@ -70,7 +70,11 @@ class PrintJobAdmin(admin.ModelAdmin):
 
 @admin.register(PrintAccount)
 class PrintAccountAdmin(admin.ModelAdmin):
-    list_display = ("user", "weekly_limit", "this_week")
+    # Запретить печать: «Добавить», найти человека, галочка. Если строка уже есть — галочка
+    # прямо в списке.
+    list_display = ("user", "weekly_limit", "banned", "this_week")
+    list_editable = ("banned",)
+    list_filter = ("banned",)
     search_fields = ("user__email", "user__surname", "user__name")
     autocomplete_fields = ("user",)
 

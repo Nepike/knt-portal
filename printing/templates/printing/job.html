@@ -16,6 +16,9 @@
     <h1 class="text-xl font-bold break-words">{{ job.name }}</h1>
     {% if job.pages %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ job.pages }} {{ job.pages|plural:"страница,страницы,страниц" }} A4 · загружено {{ job.created|date:"j E, H:i" }}</p>{% endif %}
     {% include "printing/_status.html" %}
+    {% if banned and job.can_print %}
+    <p class="rounded-xl bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300">{{ banned_text }}</p>
+    {% endif %}
     {% if job.can_remove %}
     <form method="post" action="{% url 'print_remove' job.uuid %}" x-data="{ sure: false }" class="flex flex-wrap items-center gap-2 text-sm">
       {% csrf_token %}

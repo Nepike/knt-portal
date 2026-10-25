@@ -381,6 +381,7 @@ CHUNK = 1024 * 1024
 PUT_TRIES = 4
 UPLOAD_THREADS = 8
 CONFIG_EVERY = 600
+CONFIG_WAIT = 15  # секунд между попытками достучаться до сайта на старте
 STOP_SIGNALS = [name for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
 PRINT_PDF, BLANK_PDF = "print.pdf", "blank.pdf"
 
@@ -912,9 +913,20 @@ def serve(kind):
         return 0
 
 
+def wait_config(site):
+    """Настройки с сайта — дождавшись его. Агент обычно стартует, когда сайт и так есть,
+    но во время выкатки тот отвечает 502, и падение с перезапуском выглядело бы аварией."""
+    while True:
+        try:
+            return site.talk("config")
+        except (Gone, SiteError, OSError, ValueError) as error:
+            say(f"  сайт молчит: {error} — жду")
+            time.sleep(CONFIG_WAIT)
+
+
 def serve_analysis(site):
     global MAX_FILE_MB, MAX_DOC_PAGES
-    limits = site.talk("config")["limits"]
+    limits = wait_config(site)["limits"]
     MAX_FILE_MB, MAX_DOC_PAGES = limits["max_file_mb"], limits["max_doc_pages"]
     say(f"агент разбирает файлы: {site.url}")
     while True:

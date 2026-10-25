@@ -172,10 +172,7 @@ class PrintJob(models.Model):
         verbose_name_plural = "задания печати"
         ordering = ["-created", "-pk"]
         indexes = [models.Index(fields=["user", "submitted_at"], name="printing_job_week")]
-        permissions = [
-            ("use", "печатать через сайт"),
-            ("unlimited", "печатать без недельного лимита"),
-        ]
+        permissions = [("unlimited", "печатать без недельного лимита")]
 
     def __str__(self):
         return f"{self.name} ({self.get_status_display()})"
@@ -216,17 +213,21 @@ class PrintJob(models.Model):
 
 class PrintAccount(models.Model):
     """Отдельная строка, как Wallet: под её блокировкой ставится задание в очередь
-    (printing.services.submit), и в ней же личный лимит, если он не общий."""
+    (printing.services.submit), и в ней же личное — свой лимит и запрет печатать."""
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.CASCADE, related_name="print_account")
     weekly_limit = models.PositiveIntegerField(
         "свой лимит, стр. в неделю", null=True, blank=True,
         help_text="Пусто — общий лимит сайта. Без лимита — право «печатать без недельного лимита»",
     )
+    banned = models.BooleanField(
+        "печать запрещена", default=False,
+        help_text="Бессрочно, пока галочку не снимут. Человек видит раздел, но загрузить и напечатать не может",
+    )
 
     class Meta:
-        verbose_name = "лимит печати"
-        verbose_name_plural = "лимиты печати"
+        verbose_name = "печать человека"
+        verbose_name_plural = "печать: лимиты и запреты"
 
     def __str__(self):
         return str(self.user)

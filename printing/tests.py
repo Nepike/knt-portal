@@ -159,7 +159,7 @@ class LimitTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.printer = make_printer()
-        cls.user = make_user("p@t.local", "use")
+        cls.user = make_user("p@t.local")
 
     def counted(self, at, status=Status.DONE, sides=5):
         return make_job(self.user, self.printer, status=status, sides=sides, submitted_at=at)
@@ -190,7 +190,7 @@ class LimitTests(TestCase):
         self.assertEqual(services.allowance(self.user), settings.PRINT_WEEKLY_PAGES)
         PrintAccount.objects.create(user=self.user, weekly_limit=20)
         self.assertEqual(services.allowance(self.user), 20)
-        self.assertIsNone(services.allowance(make_user("d@t.local", "use", "unlimited")))
+        self.assertIsNone(services.allowance(make_user("d@t.local", "unlimited")))
 
     def test_printing_takes_a_snapshot_of_the_choice_and_the_prices(self):
         job = make_job(self.user, self.printer, coverage=[0.05, 0.4, 0.05, 0.1])
@@ -230,7 +230,7 @@ class LimitTests(TestCase):
             services.submit(make_job(self.user, self.printer), "1-3", 1, False)
 
     def test_no_limit_with_the_unlimited_right(self):
-        dean = make_user("d@t.local", "use", "unlimited")
+        dean = make_user("d@t.local", "unlimited")
         PrintAccount.objects.create(user=dean, weekly_limit=1)
 
         job = services.submit(make_job(dean, self.printer), "1-4", 3, False)
@@ -374,6 +374,16 @@ class LimitTests(TestCase):
 
         self.assertTrue(services.again(done).large)
 
+    def test_a_banned_student_cannot_print_or_repeat(self):
+        done = self.counted(timezone.now())
+        ready = make_job(self.user, self.printer)
+        PrintAccount.objects.create(user=self.user, banned=True)
+
+        with self.assertRaisesRegex(services.Refused, "закрыта"):
+            services.submit(ready, "1", 1, False)
+        with self.assertRaisesRegex(services.Refused, "закрыта"):
+            services.again(done)
+
     def test_again_needs_the_files(self):
         done = self.counted(timezone.now())
         done.files_dropped = True
@@ -386,7 +396,7 @@ class PageTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.printer = make_printer(place="М4, у входа")
-        cls.user = make_user("p@t.local", "use")
+        cls.user = make_user("p@t.local")
 
     def setUp(self):
         cache.clear()  # ограничитель загрузок считает в кэше
@@ -400,14 +410,58 @@ class PageTests(TestCase):
         file_storage().save(key, ContentFile(b"%PDF-1.7 test"))
         return key, adopt_token(key, name)
 
-    def test_without_the_right_there_is_no_section(self):
+    def test_every_student_can_print(self):
+        """Обкатка кончилась: никаких прав, раздел видит и открывает любой вошедший."""
         self.client.force_login(make_user("s@t.local"))
 
-        self.assertEqual(self.client.get(reverse("print_home")).status_code, 403)
-        self.assertNotContains(self.client.get(reverse("wallet")), reverse("print_home"))
-
-    def test_with_the_right_the_menu_leads_to_printing(self):
+        self.assertEqual(self.client.get(reverse("print_home")).status_code, 200)
         self.assertContains(self.client.get(reverse("wallet")), reverse("print_home"))
+
+    def ban(self, user=None):
+        PrintAccount.objects.update_or_create(user=user or self.user, defaults={"banned": True})
+
+    def test_a_banned_student_sees_why_instead_of_the_upload_form(self):
+        self.ban()
+
+        response = self.client.get(reverse("print_home"))
+
+        self.assertContains(response, services.BANNED)
+        self.assertNotContains(response, f'hx-post="{reverse("print_upload")}"')
+
+    def test_a_banned_student_cannot_upload(self):
+        self.ban()
+
+        self.send()
+
+        self.assertFalse(PrintJob.objects.exists())
+
+    @override_settings(R2_BUCKET="knt-files")
+    def test_a_banned_student_gets_no_upload_link(self):
+        self.ban()
+
+        with mock.patch("attachments.uploads.file_storage", fake_storage):
+            answer = self.client.post(
+                reverse("print_sign"), json.dumps({"name": "x.pdf", "size": 10}), content_type="application/json",
+            )
+
+        self.assertEqual(answer.status_code, 403)
+
+    def test_a_banned_student_cannot_print_what_was_already_uploaded(self):
+        job = make_job(self.user, self.printer)
+        self.ban()
+
+        page = self.client.get(reverse("print_job", args=[job.uuid]))
+        self.client.post(reverse("print_submit", args=[job.uuid]), {"selection": "1", "copies": "1"})
+
+        self.assertNotIn("pick", page.context)
+        self.assertContains(page, services.BANNED)
+        job.refresh_from_db()
+        self.assertEqual(job.status, Status.READY)
+
+    def test_someone_elses_ban_is_not_mine(self):
+        self.ban(make_user("o@t.local"))
+
+        self.assertNotContains(self.client.get(reverse("print_home")), services.BANNED)
 
     def test_the_page_shows_the_printer_and_the_week(self):
         Printer.objects.filter(pk=self.printer.pk).update(seen_at=None)  # агент ещё ни разу не отзывался
@@ -498,7 +552,7 @@ class PageTests(TestCase):
         self.assertEqual(PrintJob.objects.count(), 1)
 
     def test_someone_elses_job_is_not_found(self):
-        job = make_job(make_user("o@t.local", "use"), self.printer)
+        job = make_job(make_user("o@t.local"), self.printer)
 
         self.assertEqual(self.client.get(reverse("print_job", args=[job.uuid])).status_code, 404)
 
@@ -565,7 +619,7 @@ class PageTests(TestCase):
         self.assertFalse(PrintJob.objects.filter(pk=job.pk).exists())
 
     def test_someone_elses_job_cannot_be_removed(self):
-        job = make_job(make_user("o@t.local", "use"), self.printer)
+        job = make_job(make_user("o@t.local"), self.printer)
 
         self.assertEqual(self.client.post(reverse("print_remove", args=[job.uuid])).status_code, 404)
         self.assertTrue(PrintJob.objects.filter(pk=job.pk).exists())
@@ -655,7 +709,7 @@ class AdminTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.printer = make_printer()
-        cls.user = make_user("p@t.local", "use")
+        cls.user = make_user("p@t.local")
         cls.boss = User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345")
 
     def setUp(self):
@@ -762,7 +816,7 @@ class AgentCase(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.printer = make_printer()
-        cls.user = make_user("p@t.local", "use")
+        cls.user = make_user("p@t.local")
 
     def setUp(self):
         for name, fake in (("sign_download", lambda key: "https://r2/get"), ("sign_put", lambda key: f"https://r2/{key}")):
@@ -1197,7 +1251,7 @@ class CleanupTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.printer = make_printer()
-        cls.user = make_user("p@t.local", "use")
+        cls.user = make_user("p@t.local")
 
     def setUp(self):
         # Хранилище у тестов одно на весь прогон, а база откатывается после каждого:
@@ -1766,6 +1820,27 @@ class AgentServiceTests(SimpleTestCase):
         self.assertFalse(result)
         self.assertEqual(site.doors()[-1], "release")
         self.assertNotIn("fail", site.doors())
+
+    def test_on_start_the_agent_waits_for_the_site_instead_of_falling(self):
+        """Во время выкатки сайт отвечает 502 — агент ждёт его, а не падает с перезапуском."""
+        limits = {"max_file_mb": print_agent.MAX_FILE_MB, "max_doc_pages": print_agent.MAX_DOC_PAGES}
+
+        class Waking(FakeSite):
+            url = "https://knt-mipt.ru"
+            queue = [print_agent.SiteError("сайт ответил 502"), OSError("нет сети"), {"limits": limits}]
+
+            def talk(self, door, body=None):
+                answer = self.queue.pop(0)
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+
+        # Служба доходит до первого круга работы — значит, на старте не упала. Круг сразу
+        # останавливаем: дальше бесконечный цикл.
+        with mock.patch.object(print_agent.time, "sleep") as sleep,                 mock.patch.object(print_agent, "analysis_once", side_effect=KeyboardInterrupt),                 self.assertRaises(KeyboardInterrupt):
+            print_agent.serve_analysis(Waking())
+
+        self.assertEqual(sleep.call_count, 2)
 
     def test_the_sites_answers_become_exceptions(self):
         site = print_agent.Site("https://knt-mipt.ru", "t")

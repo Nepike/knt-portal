@@ -20,6 +20,7 @@ from .models import Printer, PrintAccount, PrintJob
 
 UNLIMITED = "printing.unlimited"
 MAX_COPIES = 20
+BANNED = "Печать для тебя закрыта. Если это ошибка — напиши в поддержку."
 
 
 class Refused(Exception):
@@ -38,6 +39,10 @@ def used(user, now=None):
         user=user, status__in=PrintJob.COUNTED, submitted_at__gte=week_start(now),
     )
     return counted.aggregate(total=Sum("sides"))["total"] or 0
+
+
+def banned(user):
+    return PrintAccount.objects.filter(user=user, banned=True).exists()
 
 
 def allowance(user):
@@ -85,7 +90,8 @@ def submit(job, selection, copies, duplex, ip="", printer=None):
         raise Refused(f"Копий — от 1 до {MAX_COPIES}")
 
     with transaction.atomic():
-        lock(job.user)
+        if lock(job.user).banned:
+            raise Refused(BANNED)
         job = PrintJob.objects.select_for_update().select_related("printer").get(pk=job.pk)
         if not job.can_print:
             raise Refused("Это задание уже не ждёт печати — обнови страницу")
@@ -151,6 +157,8 @@ def again(job):
     Новое, а не прежнее заново: напечатанное уже лежит в лимите недели, и переписанное
     задание унесло бы оттуда свои страницы. Файлы общие — повтор их не копирует.
     """
+    if banned(job.user):
+        raise Refused(BANNED)
     if not job.can_repeat:
         raise Refused("Файл этого задания уже удалён — загрузи его снова")
     return PrintJob.objects.create(

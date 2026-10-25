@@ -1,7 +1,8 @@
 """Печать для студентов: загрузка, выбор страниц, очередь.
 
 Документ сайт не открывает: превью и заливку приносит агент на М4, здесь — показ, выбор,
-лимит и очередь. Всё за правом `printing.use`: пока идёт обкатка, раздел видят не все.
+лимит и очередь. Раздел открыт всем вошедшим; кому печатать нельзя — галочка «печать
+запрещена» в PrintAccount (админка): раздел он видит, загрузить и напечатать не может.
 """
 
 import json
@@ -10,7 +11,6 @@ from uuid import UUID
 
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import permission_required
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -31,8 +31,6 @@ FOLDER = "printing"
 ACCEPTED = (".pdf", ".doc", ".docx", ".odt", ".rtf", ".ppt", ".pptx", ".odp", ".jpg", ".jpeg", ".png")
 UPLOADS_PER_HOUR = 20
 JOBS_SHOWN = 30
-
-may_print = permission_required("printing.use", raise_exception=True)
 
 
 def max_size():
@@ -62,10 +60,10 @@ def _printer():
     return next((printer for printer in printers if printer.online), printers[0] if printers else None)
 
 
-@may_print
 @require_GET
 def home(request):
     context = {
+        "banned": services.banned(request.user), "banned_text": services.BANNED,
         "printer": _printer(),
         "printers": Printer.objects.all(),
         "limits": services.limits(request.user),
@@ -86,7 +84,6 @@ def _too_often(user):
     return throttled(f"print:upload:{user.pk}", UPLOADS_PER_HOUR)
 
 
-@may_print
 @require_POST
 def sign(request):
     """Подписанная ссылка: файл едет в хранилище браузером, мимо нашего процесса."""
@@ -97,6 +94,8 @@ def sign(request):
         name, size = str(payload["name"])[:150], int(payload["size"] or 0)
     except (ValueError, KeyError, TypeError):
         return HttpResponseBadRequest("Ожидались name и size")
+    if services.banned(request.user):
+        return JsonResponse({"error": services.BANNED}, status=403)
     if _printer() is None:
         return JsonResponse({"error": "Печать сейчас недоступна"}, status=409)
     if problem := refusal(name, size):
@@ -107,7 +106,6 @@ def sign(request):
     return JsonResponse({"url": url, "token": token, "type": kind})
 
 
-@may_print
 @require_POST
 def upload(request):
     """Файл уже в хранилище (или пришёл сюда, если хранилище — диск): заводим задание."""
@@ -119,6 +117,8 @@ def upload(request):
         messages.error(request, reason)
         return redirect("print_home")
 
+    if services.banned(request.user):
+        return refuse(services.BANNED)
     printer = _printer()
     if printer is None:
         return refuse("Печать сейчас недоступна")
@@ -167,7 +167,6 @@ def _own(request, uuid):
     return get_object_or_404(PrintJob.objects.select_related("printer"), uuid=uuid, user=request.user)
 
 
-@may_print
 @require_GET
 def job(request, uuid):
     job = _own(request, uuid)
@@ -187,8 +186,9 @@ def job(request, uuid):
         "zoom": [{"url": picture["zoom"], "name": f"Страница {picture['number']}"} for picture in pictures],
         "outside": client_ip(request) not in settings.PRINT_M4_IPS,
         "max_copies": services.MAX_COPIES,
+        "banned": services.banned(request.user), "banned_text": services.BANNED,
     }
-    if job.can_print:
+    if job.can_print and not context["banned"]:
         printers = list(Printer.objects.all())
         ready = [printer for printer in printers if printer.available]
         chosen = job.printer if job.printer.available else next(iter(ready), None)
@@ -203,7 +203,6 @@ def job(request, uuid):
     return render(request, "printing/job.html", context)
 
 
-@may_print
 @require_GET
 def status(request, uuid):
     """Опрос со страницы задания. Сменилось состояние — перерисовать страницу целиком:
@@ -214,7 +213,6 @@ def status(request, uuid):
     return render(request, "printing/_status.html", {"job": job})
 
 
-@may_print
 @require_POST
 def submit(request, uuid):
     job = _own(request, uuid)
@@ -228,7 +226,6 @@ def submit(request, uuid):
     return redirect("print_job", uuid=job.uuid)
 
 
-@may_print
 @require_POST
 def cancel(request, uuid):
     job = _own(request, uuid)
@@ -239,7 +236,6 @@ def cancel(request, uuid):
     return redirect("print_job", uuid=job.uuid)
 
 
-@may_print
 @require_POST
 def remove(request, uuid):
     job = _own(request, uuid)
@@ -252,7 +248,6 @@ def remove(request, uuid):
     return redirect("print_home")
 
 
-@may_print
 @require_POST
 def again(request, uuid):
     job = _own(request, uuid)
