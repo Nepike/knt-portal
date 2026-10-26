@@ -1,0 +1,5 @@
+<div class="ml-auto flex gap-0.5 rounded-btn bg-slate-200/70 dark:bg-slate-800 p-1 text-sm" role="group" aria-label="Период">
+  {% for key, label in periods.items %}
+  <a href="?period={{ key }}" {% if key == period %}aria-current="true" class="rounded-lg px-3 py-1 font-medium bg-white dark:bg-slate-900 shadow-sm"{% else %}class="rounded-lg px-3 py-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</div>

@@ -1,8 +1,13 @@
+from datetime import timedelta
+
 from celery import shared_task
+from django.utils import timezone
 
 from .mail import deliver, report_failure
 
 MAIL_RETRIES = 3
+# Сколько живут журналы входов и сбоев: квартал — с запасом на «а что было в начале семестра».
+JOURNAL_DAYS = 90
 # Дамп сегодняшней базы — секунда, но база растёт, а общий потолок задач — минута.
 BACKUP_SOFT_LIMIT = 15 * 60
 BACKUP_LIMIT = BACKUP_SOFT_LIMIT + 5 * 60
@@ -37,7 +42,8 @@ def backup_database():
     """Ночной бэкап базы (core/backup.py): снять дамп, положить в хранилище, убрать лишние.
 
     Ответ задачи уходит в лог воркера — по нему видно, что бэкап был и сколько он весит.
-    Не вышло — задача падает, и в том же логе остаётся ошибка pg_dump или хранилища.
+    Не вышло — задача падает, и ошибка pg_dump или хранилища остаётся в том же логе
+    и в журнале сбоев (core/failures.py).
     """
     # Импорт здесь: модуль тянет хранилище вложений, а задачи читаются при старте раньше моделей.
     from . import backup
@@ -45,3 +51,16 @@ def backup_database():
     key, size = backup.make()
     gone = backup.prune()
     return f"{key}: {size} байт, старых снято: {len(gone)}"
+
+
+@shared_task
+def sweep_journals():
+    """Снять из журналов входов и сбоев всё старше JOURNAL_DAYS."""
+    from users.models import LoginEvent
+
+    from .models import Failure
+
+    edge = timezone.now() - timedelta(days=JOURNAL_DAYS)
+    logins, _ = LoginEvent.objects.filter(created__lt=edge).delete()
+    failures, _ = Failure.objects.filter(last_at__lt=edge).delete()
+    return f"входов снято: {logins}, сбоев: {failures}"

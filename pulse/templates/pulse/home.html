@@ -1,0 +1,83 @@
+{% extends "pulse/base.html" %}
+{% load l10n %}
+
+{% block heading %}Сводка{% endblock %}
+
+{% block tools %}{% include "pulse/_period.html" %}{% endblock %}
+
+{% block pulse %}
+<section class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3" aria-label="Главные цифры">
+  {% for tile in tiles %}
+  <a href="{{ tile.href }}" class="panel p-4 flex flex-col gap-1 transition hover:border-accent/50">
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ tile.label }}</span>
+    <span class="text-2xl font-bold tabular-nums">{{ tile.value }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ tile.note }}</span>
+  </a>
+  {% endfor %}
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 lg:col-span-2 flex flex-col gap-4">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h3 class="font-semibold">Кто заходит</h3>
+      <span class="text-xs text-slate-500 dark:text-slate-400">{{ visits.total }} действующих аккаунтов · по последнему входу и сессиям</span>
+    </div>
+    <div class="flex flex-wrap gap-x-10 gap-y-2">
+      <div class="flex flex-col"><span class="text-xs text-slate-500 dark:text-slate-400">сегодня</span><span class="text-2xl font-bold tabular-nums">{{ visits.today }}</span></div>
+      <div class="flex flex-col"><span class="text-xs text-slate-500 dark:text-slate-400">за неделю</span><span class="text-2xl font-bold tabular-nums">{{ visits.week }}</span></div>
+      <div class="flex flex-col"><span class="text-xs text-slate-500 dark:text-slate-400">за месяц</span><span class="text-2xl font-bold tabular-nums">{{ visits.month }}</span></div>
+    </div>
+    <div class="flex h-3.5 gap-0.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" role="img"
+         aria-label="{{ visits.month }} заходили за месяц, {{ visits.away }} давно не были, {{ visits.never }} ни разу не входили">
+      <div class="bg-accent" style="width: {{ visits.month_share|unlocalize }}%"></div>
+      <div class="bg-accent/40" style="width: {{ visits.away_share|unlocalize }}%"></div>
+    </div>
+    <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+      <span class="inline-flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-sm bg-accent" aria-hidden="true"></span>заходили за месяц — {{ visits.month }}</span>
+      <span class="inline-flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-sm bg-accent/40" aria-hidden="true"></span>давно не были — {{ visits.away }}</span>
+      <a href="{% url 'pulse_people' %}?only=never" class="inline-flex items-center gap-2 text-accent hover:underline"><span class="h-2.5 w-2.5 rounded-sm bg-slate-200 dark:bg-slate-700" aria-hidden="true"></span>ни разу не входили — {{ visits.never }}</a>
+    </div>
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-1">
+    <h3 class="font-semibold mb-2">Требует внимания</h3>
+    {% for item in attention %}
+    <a href="{{ item.href }}" class="flex items-center gap-3 py-1.5 text-sm hover:text-accent">
+      <span class="h-2.5 w-2.5 shrink-0 rounded-full {% if item.tone == 'ok' %}bg-emerald-500{% elif item.tone == 'warn' %}bg-amber-500{% else %}bg-rose-500{% endif %}" aria-hidden="true"></span>
+      <span class="min-w-0 flex-1">{{ item.text }}</span>
+      <span class="text-right text-xs text-slate-500 dark:text-slate-400">{{ item.state }}</span>
+    </a>
+    {% endfor %}
+  </section>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel px-5 py-4 lg:col-span-2">
+    <div class="flex items-baseline gap-3 pb-1">
+      <h3 class="font-semibold">Свежие отзывы и комментарии</h3>
+      <a href="{% url 'pulse_feed' %}?kind=comment" class="ml-auto text-sm text-accent hover:underline">вся лента →</a>
+    </div>
+    {% for event in texts %}
+      {% include "pulse/_event.html" with dated=True %}
+    {% empty %}
+      <p class="py-4 text-sm text-slate-400">Отзывов и комментариев пока нет.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-2">
+    <div class="flex items-baseline gap-2">
+      <h3 class="font-semibold">Сейчас на сайте</h3>
+      <span class="text-xs text-slate-500 dark:text-slate-400">{{ online|length }} за 15 минут</span>
+    </div>
+    {% for person, seen in online %}
+    <div class="flex items-center gap-2 text-sm">
+      <span class="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true"></span>
+      <a href="{% url 'pulse_person' person.pk %}" class="min-w-0 truncate text-accent hover:underline">{{ person.full_name }}</a>
+      <span class="ml-auto shrink-0 text-xs text-slate-500 dark:text-slate-400">{{ seen }}</span>
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Никого.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% comment %}
+  Переключатель-кнопка: отправляет форму, в которой стоит. Ждёт on, label, danger
+  (включённое — красным, для запретов), can (есть ли право; без него — только показ).
+{% endcomment %}
+<button type="submit" role="switch" aria-checked="{{ on|yesno:'true,false' }}" aria-label="{{ label }}" {% if not can %}disabled title="Нет права на это действие"{% endif %}
+        class="relative h-6 w-10 shrink-0 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed {% if on %}{% if danger %}bg-rose-500{% else %}bg-accent{% endif %}{% else %}bg-slate-300 dark:bg-slate-700{% endif %}">
+  <span class="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform {% if on %}translate-x-4{% endif %}"></span>
+</button>

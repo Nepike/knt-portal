@@ -21,7 +21,7 @@ from attachments.storage import content_type
 from attachments.uploads import sign_download, sign_put, under
 from core import agents
 
-from .models import MediaJob, sweep, take
+from .models import MediaJob, failed_bake, sweep, take
 from .spec import MASTER, POSTER, RECIPES, check_ladder, payload
 from .tasks import drop_source
 
@@ -303,4 +303,5 @@ def fail(request):
     job.note = str(body.get("error", ""))[:300]
     job.save(update_fields=["status", "note", "prefix", "updated"])
     sweep(stale)
+    failed_bake(job)
     return JsonResponse({"ok": True})

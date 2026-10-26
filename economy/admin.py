@@ -50,7 +50,7 @@ class BalanceLogAdmin(admin.ModelAdmin):
     """
 
     form = GrantForm
-    list_display = ("created", "wallet", "amount", "reason", "note")
+    list_display = ("created", "wallet", "amount", "reason", "note", "by")
     list_filter = ("reason",)
     search_fields = ("wallet__user__email", "wallet__user__surname")
     autocomplete_fields = ("wallet",)
@@ -66,5 +66,5 @@ class BalanceLogAdmin(admin.ModelAdmin):
         # Пишет сервис, а не форма: только он трогает кэш баланса и держит блокировку.
         # Ключи возвращаем в obj, иначе админка не соберёт ссылку на созданную запись.
         move = credit if obj.amount > 0 else spend
-        entry = move(obj.wallet.user, abs(obj.amount), obj.reason, obj.note)
+        entry = move(obj.wallet.user, abs(obj.amount), obj.reason, obj.note, by=request.user)
         obj.pk, obj.balance_after, obj.created = entry.pk, entry.balance_after, entry.created

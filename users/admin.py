@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .forms import UserChangeForm, UserCreationForm
-from .models import User
+from .models import LoginEvent, User
 
 
 @admin.register(User)
@@ -28,3 +28,24 @@ class UserAdmin(BaseUserAdmin):
                 "fields": ("email", "name", "surname", "password1", "password2")}),
     )
     readonly_fields = ("last_login",)
+
+
+@admin.register(LoginEvent)
+class LoginEventAdmin(admin.ModelAdmin):
+    """Журнал входов только на просмотр: его пишут сигналы входа (users/journal.py)."""
+
+    list_display = ("created", "user", "kind", "ip", "device")
+    list_filter = ("kind",)
+    search_fields = ("user__email", "user__surname", "ip")
+    list_select_related = ("user",)
+    date_hierarchy = "created"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="устройство")
+    def device(self, event):
+        return event.where()

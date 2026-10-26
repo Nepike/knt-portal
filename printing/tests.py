@@ -32,6 +32,7 @@ from attachments.media import image_url
 from attachments.storage import content_type, drop_prefix, file_storage
 from attachments.tests import fake_storage
 from attachments.uploads import adopt_token, under, uploaded_file
+from core.models import Failure
 from tools import print_agent
 from users.models import User
 
@@ -1013,6 +1014,8 @@ class AnalyzeQueueTests(AgentCase):
 
         job.refresh_from_db()
         self.assertEqual((job.status, job.reason), (Status.REJECTED, "PDF защищён паролем. Снимите защиту и загрузите снова."))
+        # Беда файла, а не системы: в журнал сбоев такое не идёт.
+        self.assertFalse(Failure.objects.exists())
 
     def test_release_puts_the_file_back_in_line(self):
         job = self.uploaded()
@@ -1188,6 +1191,17 @@ class PrintQueueTests(AgentCase):
         self.assertIsNotNone(job.finished_at)
         self.assertEqual(services.used(self.user), 0)
 
+    def test_a_failed_print_lands_in_the_failure_journal(self):
+        job = self.queued()
+        token = self.claim("print")["token"]
+
+        self.call("fail", {"token": token, "error": "замятие бумаги"})
+
+        failure = Failure.objects.get()
+        self.assertEqual(failure.source, Failure.Source.PRINTING)
+        for part in (job.name, self.user.full_name, "замятие бумаги"):
+            self.assertIn(part, failure.text)
+
     def test_alive_brings_the_panel_text_to_the_student(self):
         self.queued()
         token = self.claim("print")["token"]
@@ -1203,6 +1217,7 @@ class PrintQueueTests(AgentCase):
         self.assertIsNone(self.claim("print"))
         job.refresh_from_db()
         self.assertEqual(job.status, Status.FAILED)
+        self.assertIn(job.name, Failure.objects.get(source=Failure.Source.PRINTING).text)
 
     def test_a_job_marked_failed_in_the_admin_is_closed_for_the_agent(self):
         job = self.queued()

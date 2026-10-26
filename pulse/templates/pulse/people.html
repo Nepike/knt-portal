@@ -1,0 +1,62 @@
+{% extends "pulse/base.html" %}
+
+{% block heading %}Люди{% endblock %}
+
+{% block pulse %}
+<section class="panel p-4 flex flex-col gap-3">
+  <form method="get" class="flex flex-wrap items-center gap-3">
+    {% if preset %}<input type="hidden" name="only" value="{{ preset }}">{% endif %}
+    <label class="flex flex-1 min-w-64 items-center gap-2 rounded-btn border border-slate-300 dark:border-slate-700 px-3 py-2 focus-within:border-accent">
+      <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
+      <input type="search" name="q" value="{{ query }}" placeholder="Фамилия, имя или почта" aria-label="Найти человека"
+             class="w-full bg-transparent text-sm outline-none">
+    </label>
+    <button type="submit" class="btn btn-primary">Найти</button>
+  </form>
+  <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Подборки">
+    {% for key, label in presets.items %}
+    <a href="?only={{ key }}{% if query %}&amp;q={{ query|urlencode }}{% endif %}" {% if key == preset %}aria-current="true" class="rounded-full border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white dark:text-slate-950"{% else %}class="rounded-full border border-slate-300 dark:border-slate-700 px-3.5 py-1 text-sm text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent"{% endif %}>{{ label }}</a>
+    {% endfor %}
+    {% if preset or query %}<a href="{% url 'pulse_people' %}" class="ml-1 text-sm text-slate-400 hover:text-accent">сбросить</a>{% endif %}
+  </div>
+</section>
+
+<section class="panel overflow-x-auto">
+  <table class="w-full min-w-[640px] text-sm">
+    <thead>
+      <tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+        <th class="px-4 py-3 font-medium">Человек</th>
+        <th class="py-3 pr-4 font-medium">Группа</th>
+        <th class="py-3 pr-4 font-medium">Почта</th>
+        <th class="py-3 pr-4 font-medium">Последний раз</th>
+        <th class="px-4 py-3 text-right font-medium">Баланс</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for person in page %}
+      <tr class="border-t border-slate-100 dark:border-slate-800">
+        <td class="px-4 py-2.5">
+          <a href="{% url 'pulse_person' person.pk %}" class="font-medium text-accent hover:underline">{{ person.full_name }}</a>
+          {% if not person.is_active %}<span class="ml-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-xs text-rose-600 dark:text-rose-400">выключен</span>{% endif %}
+          {% if person.is_superuser %}<span class="ml-1 rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">суперпользователь</span>{% endif %}
+        </td>
+        <td class="py-2.5 pr-4">{{ person.team|default:"—" }}</td>
+        <td class="py-2.5 pr-4 text-slate-500 dark:text-slate-400">{{ person.email }}</td>
+        <td class="py-2.5 pr-4 text-slate-500 dark:text-slate-400">{% if person.seen %}{{ person.seen|date:"j E, H:i" }}{% else %}ни разу{% endif %}</td>
+        <td class="px-4 py-2.5 text-right tabular-nums">{{ person.wallet.balance|default:0 }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Никого не нашлось.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if page.has_other_pages %}
+<nav class="flex items-center justify-center gap-3 text-sm" aria-label="Страницы">
+  {% if page.has_previous %}<a href="?{% if keep %}{{ keep }}&amp;{% endif %}page={{ page.previous_page_number }}" class="btn btn-ghost">← назад</a>{% endif %}
+  <span class="text-slate-500">{{ page.number }} из {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?{% if keep %}{{ keep }}&amp;{% endif %}page={{ page.next_page_number }}" class="btn btn-ghost">дальше →</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

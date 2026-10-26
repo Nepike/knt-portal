@@ -28,6 +28,7 @@ from economy.models import BalanceLog
 from library.models import Book
 from materials.models import Material
 
+from . import journal
 from .forms import MAX_AVATAR_DATA, ProfileForm, RegisterUserForm, StudentFilterForm
 from .models import User
 from .roster import RosterForm
@@ -293,6 +294,7 @@ class PasswordResetConfirmView(BasePasswordResetConfirmView):
     def form_valid(self, form):
         response = super().form_valid(form)
         _clear_must_change_password(form.user)
+        journal.forget_failures(self.request, form.user.email)
         return response
 
 

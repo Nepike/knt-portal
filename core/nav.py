@@ -28,6 +28,7 @@ SECTIONS = {
     "printing": {"print_home", "print_job"},
     "bookmarks": {"bookmark_list"},
     "moderation": {"review_queue"},
+    "pulse": {"pulse_home", "pulse_feed", "pulse_people", "pulse_person", "pulse_tokens", "pulse_wall", "pulse_system"},
 }
 
 # Имя урла → раздел. Разворачиваем один раз при импорте: на каждый запрос это иначе

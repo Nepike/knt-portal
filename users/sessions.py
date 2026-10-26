@@ -21,7 +21,7 @@ SEEN_KEY = "_seen"
 REFRESH = 5 * 60
 
 
-def _agent(request):
+def user_agent(request):
     return request.META.get("HTTP_USER_AGENT", "")[:200]
 
 
@@ -36,7 +36,7 @@ def remember(sender, request, user, **kwargs):
     UserSession.objects.update_or_create(
         session_id=request.session.session_key,
         defaults={
-            "user": user, "ip": client_ip(request) or None, "agent": _agent(request),
+            "user": user, "ip": client_ip(request) or None, "agent": user_agent(request),
             "created": timezone.now(), "seen": timezone.now(),
         },
     )

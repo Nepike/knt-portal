@@ -58,8 +58,12 @@ def report_failure(payload, error):
     """
     from telegram.notify import SUPPORT, notify
 
+    from .failures import record
+    from .models import Failure
+
     to = ", ".join(payload["to"])
     logger.error("Письмо не ушло: кому %s, тема «%s»: %r", to, payload["subject"], error)
+    record(Failure.Source.MAIL, f"кому {to}, тема «{payload['subject']}»: {type(error).__name__}: {error}")
     try:
         if cache.add("mail:failed", 1, ALERT_EVERY):
             notify(SUPPORT, "telegram/mail_failed.html", {

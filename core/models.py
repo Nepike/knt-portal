@@ -293,3 +293,36 @@ class Team(models.Model):
         """
         graduated = self.year_of_admission == self.ALUMNI_YEAR or date.today().year > self.graduation_year()
         return ALUMNI if graduated else str(self.get_grade_level())
+
+
+class Failure(models.Model):
+    """Журнал сбоев: что сломалось, пока рядом никого не было (core/failures.py).
+
+    Письмо не ушло, задача очереди упала окончательно, печать не дошла до бумаги, пекарня
+    бросила запись. До журнала всё это оставалось в логе воркера, а бэкап, к примеру,
+    не говорил о провале вовсе. Одинаковый сбой в течение часа — та же строка с
+    увеличенным счётчиком: задача, падающая ежеминутно, иначе завалила бы журнал.
+    Живёт JOURNAL_DAYS (core/tasks.py).
+    """
+
+    class Source(models.TextChoices):
+        MAIL = "mail", "почта"
+        TASK = "task", "задача очереди"
+        PRINTING = "printing", "печать"
+        BAKERY = "bakery", "пекарня"
+
+    source = models.CharField("где", max_length=10, choices=Source.choices, db_index=True)
+    text = models.CharField("что случилось", max_length=500)
+    times = models.PositiveIntegerField("сколько раз", default=1)
+    created = models.DateTimeField("впервые", default=timezone.now)
+    last_at = models.DateTimeField("последний раз", default=timezone.now, db_index=True)
+
+    class Meta:
+        verbose_name = "сбой"
+        verbose_name_plural = "журнал сбоев"
+        ordering = ["-last_at"]
+        # Право на раздел целиком; живёт здесь, как pass_lockdown у Lockdown: своей модели у Пульса нет.
+        permissions = [("view_pulse", "Открывает Пульс — раздел для админов")]
+
+    def __str__(self):
+        return f"{self.get_source_display()}: {self.text}"

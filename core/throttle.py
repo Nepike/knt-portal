@@ -28,6 +28,31 @@ def throttled(key, limit, window=3600):
         return False
 
 
+def exhausted(key, limit):
+    """Лимит уже выбран; сама проверка в счёт не идёт. Пара к strike: так считают одни
+    неудачи, а пускать или нет, решают на каждой попытке. Без кэша — пропускаем, как throttled."""
+    try:
+        return (cache.get(key) or 0) >= limit
+    except Exception:  # noqa: BLE001
+        logger.exception("Кэш недоступен, ограничитель пропускает «%s»", key)
+        return False
+
+
+def strike(key, window=3600):
+    """Засчитать неудачу в окно."""
+    try:
+        _count(key, window)
+    except Exception:  # noqa: BLE001
+        logger.exception("Кэш недоступен, неудача по «%s» не засчитана", key)
+
+
+def forgive(key):
+    try:
+        cache.delete(key)
+    except Exception:  # noqa: BLE001
+        logger.exception("Кэш недоступен, счёт «%s» не сброшен", key)
+
+
 def _count(key, window):
     """Который это по счёту вызов в текущем окне.
 

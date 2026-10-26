@@ -52,6 +52,7 @@ services:
       context: .
       args:
         PROXY: ${PROXY:-}   # из .env; пусто = качать напрямую
+        KNT_VERSION: ${KNT_VERSION:-}   # ставит деплой: какой коммит собирается
     entrypoint: ["python", "manage.py", "migrate", "--noinput"]
     env_file: .env
     depends_on:

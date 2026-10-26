@@ -1,0 +1,27 @@
+{% extends "core/base.html" %}
+
+{% block title %}Пульс{% endblock %}
+{% block main_width %}max-w-6xl{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-4">
+  <header class="panel px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+    <h1 class="page-title text-xl font-bold">Пульс</h1>
+    <nav class="flex flex-wrap gap-1 text-sm" aria-label="Разделы Пульса">
+      <a href="{% url 'pulse_home' %}" {% if tab == 'home' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Сводка</a>
+      <a href="{% url 'pulse_feed' %}" {% if tab == 'feed' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Лента</a>
+      <a href="{% url 'pulse_people' %}" {% if tab == 'people' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Люди</a>
+      <a href="{% url 'pulse_tokens' %}" {% if tab == 'tokens' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Токены и магазин</a>
+      <a href="{% url 'pulse_wall' %}" {% if tab == 'wall' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Стена</a>
+      <a href="{% url 'pulse_system' %}" {% if tab == 'system' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Система</a>
+    </nav>
+  </header>
+
+  <div class="flex flex-wrap items-center gap-3 px-1 min-h-10">
+    <h2 class="text-xl font-bold">{% block heading %}{% endblock %}</h2>
+    {% block tools %}{% endblock %}
+  </div>
+
+  {% block pulse %}{% endblock %}
+</div>
+{% endblock %}

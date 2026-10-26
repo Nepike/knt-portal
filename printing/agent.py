@@ -254,6 +254,7 @@ def fail(request):
         job.status = Status.FAILED
         job.finished_at = timezone.now()
         _heard(job, "status", "reason", "finished_at")
+        queue.failed_print(job)
     return JsonResponse({"ok": True})
 
 

@@ -180,7 +180,8 @@ class AdminGrantTests(TestCase):
         self.assertEqual(self.post(250).status_code, 302)
         self.assertEqual(wallet_of(self.user).balance, 250)
         # Только по этому кошельку: вход самого модератора в админку тоже оставил строку.
-        self.assertEqual(BalanceLog.objects.get(wallet=self.wallet).balance_after, 250)
+        entry = BalanceLog.objects.get(wallet=self.wallet)
+        self.assertEqual((entry.balance_after, entry.by), (250, self.boss))
 
     def test_overdraft_is_refused_by_the_form(self):
         response = self.post(-5)

@@ -3,6 +3,7 @@ from binascii import Error as BadBase64
 from io import BytesIO
 
 from django import forms
+from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.forms import UserChangeForm as BaseUserChangeForm
 from django.contrib.auth.forms import UserCreationForm as BaseUserCreationForm
 from django.contrib.auth.models import Group
@@ -13,6 +14,7 @@ from PIL import Image as PilImage
 
 from core.widgets import AccentSelect, AccentSelectMultiple
 
+from . import journal
 from .models import User
 
 # Сторона готовой миниатюры. Крупнее её не показывают нигде, а в бакете это ~50 КБ.
@@ -24,6 +26,18 @@ MAX_AVATAR_DATA = 2 * 1024 * 1024
 # Гифка едет файлом и целиком (см. ProfileForm.photo_file), поэтому лимит ей нужен свой.
 MAX_GIF = 3 * 1024 * 1024
 DROP = "clear"
+
+
+class LoginForm(AuthenticationForm):
+    """Вход сайта. Отличие одно: остановленному ограничителем говорим правду, а не
+    «неверный пароль» — иначе он так и будет подбирать уже верный."""
+
+    def get_invalid_login_error(self):
+        if getattr(self.request, journal.STOPPED, False):
+            return ValidationError(
+                "Слишком много неудачных попыток. Подожди час или восстанови пароль.", code="stopped",
+            )
+        return super().get_invalid_login_error()
 
 
 class UserCreationForm(BaseUserCreationForm):

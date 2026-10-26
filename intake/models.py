@@ -13,6 +13,9 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 
+from core.failures import record
+from core.models import Failure
+
 # Столько ждём вестей от взявшего задание. Двухчасовая лекция печётся минут двадцать,
 # час — с запасом на медленную машину и на скачивание сырья.
 CLAIM_TIMEOUT = 3600
@@ -163,3 +166,10 @@ def _give_up(job):
     job.note = f"пекарня бралась за запись {job.tries} раз и ни разу не довела её до конца"
     job.save(update_fields=["status", "note", "prefix", "updated"])
     sweep(stale)
+    failed_bake(job)
+
+
+def failed_bake(job):
+    """В журнал сбоев: запись, которую пекарня не испекла."""
+    what = f"«{job.lecture.title}»" if job.lecture else job.source
+    record(Failure.Source.BAKERY, f"{what}: {job.note}")

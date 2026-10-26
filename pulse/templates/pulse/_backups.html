@@ -1,0 +1,9 @@
+{% if copies %}
+<div class="mt-2 flex max-h-48 flex-col gap-1 overflow-y-auto text-xs">
+  {% for day, key, size in copies %}
+  <div class="flex gap-2"><span class="tabular-nums">{{ day|date:"j E Y, D" }}</span><span class="ml-auto tabular-nums text-slate-500 dark:text-slate-400">{{ size|filesizeformat }}</span></div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="mt-2 text-xs text-slate-400">Копий в хранилище нет.</p>
+{% endif %}

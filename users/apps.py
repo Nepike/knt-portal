@@ -6,4 +6,4 @@ class UsersConfig(AppConfig):
     verbose_name = "Пользователи"
 
     def ready(self):
-        from . import sessions  # noqa: F401 — подписка на вход живёт там
+        from . import journal, sessions  # noqa: F401 — подписки на вход живут там

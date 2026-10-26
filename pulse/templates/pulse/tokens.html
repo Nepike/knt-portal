@@ -1,0 +1,170 @@
+{% extends "pulse/base.html" %}
+{% load l10n text_extras %}
+
+{% block heading %}Токены и магазин{% endblock %}
+{% block tools %}{% include "pulse/_period.html" %}{% endblock %}
+
+{% block pulse %}
+<section class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3" aria-label="Главные цифры">
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">На руках у всех</span>
+    <span class="text-2xl font-bold tabular-nums">{{ on_hands }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{% if in_debt %}в минусе {{ in_debt }}{% else %}в минусе никого{% endif %}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Начислено за период</span>
+    <span class="text-2xl font-bold tabular-nums">+{{ period.plus }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ period.plus_n }} {{ period.plus_n|plural:"операция,операции,операций" }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Списано за период</span>
+    <span class="text-2xl font-bold tabular-nums">{{ period.minus }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ period.minus_n }} {{ period.minus_n|plural:"операция,операции,операций" }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Магазин, всё время</span>
+    <span class="text-2xl font-bold tabular-nums">{{ shop.1 }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ shop.1|plural:"покупка,покупки,покупок" }} · −{{ shop.0 }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Кейсы, всё время</span>
+    <span class="text-2xl font-bold tabular-nums">{{ rarity.total }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ rarity.total|plural:"открыт,открыто,открыто" }} · −{{ cases_spent.0 }}</span>
+  </div>
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 lg:col-span-2 flex flex-col gap-3">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h3 class="font-semibold">Откуда берутся токены</h3>
+      <span class="text-xs text-slate-500 dark:text-slate-400">за всё время · начислено {{ earned }}</span>
+    </div>
+    {% for row in sources %}
+    <div class="grid grid-cols-[minmax(0,11rem)_minmax(0,1fr)_5rem_4.5rem] items-center gap-3 text-sm">
+      <span class="truncate text-slate-600 dark:text-slate-300">{{ row.label|capfirst }}</span>
+      <div class="h-3 overflow-hidden rounded bg-slate-100 dark:bg-slate-800"><div class="h-full rounded bg-accent" style="width: {{ row.share|unlocalize }}%"></div></div>
+      <span class="text-right font-medium tabular-nums">{{ row.total }}</span>
+      <span class="text-right text-xs tabular-nums text-slate-400">{{ row.n }} {{ row.n|plural:"раз,раза,раз" }}</span>
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Начислений пока не было.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-3">
+    <h3 class="font-semibold">Куда уходят</h3>
+    <div class="flex flex-col">
+      <span class="text-3xl font-bold tabular-nums">{{ spent_share|unlocalize }}%</span>
+      <span class="text-sm text-slate-500 dark:text-slate-400">начисленного потрачено — {{ spent }} из {{ earned }}</span>
+    </div>
+    <div class="flex flex-col gap-2 text-sm">
+      <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-sm bg-amber-500" aria-hidden="true"></span><span class="flex-1">Магазин · {{ shop.1 }} {{ shop.1|plural:"покупка,покупки,покупок" }}</span><span class="font-medium tabular-nums">−{{ shop.0 }}</span></div>
+      <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-sm bg-amber-300" aria-hidden="true"></span><span class="flex-1">Кейсы · {{ cases_spent.1 }} {{ cases_spent.1|plural:"платный,платных,платных" }}</span><span class="font-medium tabular-nums">−{{ cases_spent.0 }}</span></div>
+    </div>
+    <div class="flex flex-col gap-1.5 border-t border-slate-100 dark:border-slate-800 pt-3">
+      <span class="text-xs text-slate-500 dark:text-slate-400">ходовые вещи · {{ owned }} на руках, в продаже {{ on_sale }}</span>
+      {% for item in popular %}
+      <div class="flex gap-2 text-sm"><span class="min-w-0 flex-1 truncate">{{ item.name }}</span><span class="text-xs text-slate-400">{{ item.kind }}</span><span class="w-8 text-right tabular-nums">{{ item.n }}</span></div>
+      {% empty %}
+      <p class="text-sm text-slate-400">Вещей ни у кого нет.</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<section class="panel p-5 flex flex-col gap-3">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <h3 class="font-semibold">Кейсы</h3>
+    <span class="text-xs text-slate-500 dark:text-slate-400">первый кейс любой — бесплатно</span>
+    <a href="{% url 'admin:cosmetics_case_changelist' %}" class="ml-auto text-sm text-accent hover:underline">в админке →</a>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full min-w-[640px] text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+        <th class="py-2 pr-3 font-medium">Кейс</th><th class="py-2 pr-3 text-right font-medium">Цена</th>
+        <th class="py-2 pr-3 text-right font-medium">Вещей</th><th class="py-2 pr-3 text-right font-medium">Открыто</th>
+        <th class="py-2 pr-3 text-right font-medium">Из них даром</th><th class="py-2 pr-3 text-right font-medium">Получено</th>
+        <th class="py-2 pr-3 text-right font-medium">Вернули</th><th class="py-2 text-right font-medium">Открывается</th>
+      </tr></thead>
+      <tbody>
+        {% for row in cases %}
+        <tr class="border-t border-slate-100 dark:border-slate-800">
+          <td class="py-2.5 pr-3 font-medium">{{ row.case.name }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.case.price }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.size }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.opened }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.free }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.paid }}</td>
+          <td class="py-2.5 pr-3 text-right tabular-nums">{{ row.refund }}</td>
+          <td class="py-2.5 text-right">
+            <form method="post" action="{% url 'pulse_case_toggle' row.case.pk %}" class="inline-flex">
+              {% csrf_token %}
+              <input type="hidden" name="active" value="{{ row.case.active|yesno:'0,1' }}">
+              {% include "pulse/_switch.html" with on=row.case.active label=row.case.name can=perms.cosmetics.change_case %}
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="py-3 text-slate-400">Кейсов нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="flex flex-col gap-2">
+    <span class="text-xs text-slate-500 dark:text-slate-400">что выпадало против заявленных шансов · {{ rarity.total }} {{ rarity.total|plural:"открытие,открытия,открытий" }}{% if rarity.small %} — выборка пока мала, расхождение ничего не значит{% endif %}</span>
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+      {% for row in rarity.rows %}
+      <div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 px-3 py-2 flex flex-col">
+        <span class="text-xs text-slate-500 dark:text-slate-400">{{ row.label|capfirst }}</span>
+        <span class="text-lg font-bold tabular-nums">{{ row.n }}{% if rarity.total %} · {{ row.share }}%{% endif %}</span>
+        <span class="text-xs text-slate-400">шанс {{ row.odds }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 flex flex-col gap-2">
+    <h3 class="font-semibold">Самые большие балансы</h3>
+    {% for wallet in rich %}
+    <div class="flex items-center gap-2 text-sm">
+      <span class="w-5 text-xs tabular-nums text-slate-400">{{ forloop.counter }}</span>
+      <a href="{% url 'pulse_person' wallet.user_id %}" class="min-w-0 flex-1 truncate text-accent hover:underline">{{ wallet.user.full_name }}</a>
+      <span class="font-medium tabular-nums">{{ wallet.balance }}</span>
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Кошельков нет.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel p-5 lg:col-span-2 flex flex-col gap-2">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h3 class="font-semibold">Начисления вручную</h3>
+      <span class="text-xs text-slate-500 dark:text-slate-400">{{ manual_total.n }} {{ manual_total.n|plural:"операция,операции,операций" }} · {{ manual_total.total|default:0|stringformat:"+d" }} за всё время</span>
+      <a href="{% url 'pulse_feed' %}?kind=wallet" class="ml-auto text-sm text-accent hover:underline">все в ленте →</a>
+    </div>
+    {% for entry in manual %}
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-slate-100 dark:border-slate-800 py-2 text-sm">
+      <span class="w-16 text-xs text-slate-400">{{ entry.created|date:"j E" }}</span>
+      <a href="{% url 'pulse_person' entry.wallet.user_id %}" class="text-accent hover:underline">{{ entry.wallet.user.full_name }}</a>
+      <span class="min-w-0 flex-1 text-slate-500 dark:text-slate-400">{% if entry.note %}«{{ entry.note }}»{% endif %}{% if entry.by %} · провёл(а) {{ entry.by.full_name }}{% endif %}</span>
+      <span class="font-medium tabular-nums {% if entry.amount > 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ entry.amount|stringformat:"+d" }}</span>
+    </div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Ручных операций не было.</p>
+    {% endfor %}
+  </section>
+</div>
+
+<section class="panel p-5 flex flex-col gap-3">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <h3 class="font-semibold">Сверка кошельков с журналом</h3>
+    <span class="text-xs text-slate-500 dark:text-slate-400">баланс — кэш, правда в журнале; расхождение значит, что баланс меняли мимо сервиса</span>
+  </div>
+  <form hx-post="{% url 'pulse_reconcile' %}" hx-target="#reconcile" hx-swap="innerHTML">
+    <button type="submit" class="btn btn-ghost border border-slate-300 dark:border-slate-700">Сверить</button>
+  </form>
+  <div id="reconcile"></div>
+</section>
+{% endblock %}

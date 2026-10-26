@@ -1,0 +1,14 @@
+{% if error %}
+<p class="text-xs text-rose-600 dark:text-rose-400">{{ error }}</p>
+{% else %}
+<div x-data="{ copied: false }" class="flex flex-col gap-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-100">
+  <p>Кука <b>{{ cookie }}</b>, путь <b>/</b>{% if secure %}, флаг <b>Secure</b>{% endif %} · действует до {{ until|date:"H:i" }}</p>
+  <div class="flex items-center gap-2">
+    <code x-ref="key" class="min-w-0 flex-1 select-all break-all rounded-lg bg-white dark:bg-slate-900 px-2 py-1.5 font-mono text-[13px] text-slate-900 dark:text-slate-100">{{ key }}</code>
+    <button type="button" @click="navigator.clipboard.writeText($refs.key.textContent.trim()); copied = true"
+            class="shrink-0 rounded-lg border border-amber-300 dark:border-amber-800 px-2.5 py-1.5 hover:bg-amber-100 dark:hover:bg-amber-900/40"
+            x-text="copied ? 'скопировано' : 'скопировать'">скопировать</button>
+  </div>
+  <p>Открой сайт в приватном окне, в инструментах разработчика замени куку {{ cookie }} этим ключом и обнови страницу. Ключ показан один раз. Закрыть раньше срока — «Завершить» у этой сессии во «Входах и сессиях».</p>
+</div>
+{% endif %}

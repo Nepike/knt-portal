@@ -73,6 +73,11 @@ class BalanceLog(models.Model):
     # суммой всей предыдущей ленты.
     balance_after = models.IntegerField("баланс после")
     created = models.DateTimeField("когда", default=timezone.now)
+    # Кто провёл операцию руками (админка, Пульс). У машинных — награды, покупки — пусто.
+    by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="кто провёл", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
 
     class Meta:
         verbose_name = "операция"

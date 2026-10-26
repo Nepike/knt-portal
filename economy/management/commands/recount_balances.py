@@ -9,10 +9,9 @@
 """
 
 from django.core.management.base import BaseCommand
-from django.db.models import Sum
 
 from economy.models import Wallet
-from economy.services import recount
+from economy.services import mismatched, recount
 
 
 class Command(BaseCommand):
@@ -22,11 +21,10 @@ class Command(BaseCommand):
         parser.add_argument("--apply", action="store_true", help="без него только показывает")
 
     def handle(self, *args, **options):
-        wallets = list(Wallet.objects.annotate(journal=Sum("entries__amount")))
-        broken = [(w, w.journal or 0) for w in wallets if w.balance != (w.journal or 0)]
+        broken = mismatched()
 
         if not broken:
-            self.stdout.write(self.style.SUCCESS(f"расхождений нет, кошельков: {len(wallets)}"))
+            self.stdout.write(self.style.SUCCESS(f"расхождений нет, кошельков: {Wallet.objects.count()}"))
             return
 
         for wallet, journal in broken:
@@ -36,8 +34,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("ничего не сделано — запусти с --apply"))
             return
 
-        # Минус по журналу — не поломка: так выглядит возврат награды за удалённое,
-        # если её успели потратить (rewards.remove). Чиним такой кошелёк как любой.
         for wallet, _ in broken:
             recount(wallet)
         self.stdout.write(self.style.SUCCESS(f"поправлено: {len(broken)}"))

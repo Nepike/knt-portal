@@ -127,7 +127,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1551 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1641 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

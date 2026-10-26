@@ -4,11 +4,14 @@ import time
 from base64 import b64encode
 from datetime import date, timedelta
 from io import BytesIO, StringIO
+from unittest import mock
 
 from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
 from django.contrib.messages import get_messages
 from django.contrib.sessions.models import Session
 from django.core import mail
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -16,6 +19,8 @@ from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 from openpyxl import Workbook
 from PIL import Image as PilImage
@@ -27,7 +32,8 @@ from economy.services import credit, reclaim, spend
 from materials.models import Material
 
 from .forms import AVATAR_PX, MAX_AVATAR_DATA
-from .models import STATUS_MAX, User, UserSession
+from . import journal
+from .models import STATUS_MAX, LoginEvent, User, UserSession
 from .sessions import REFRESH, SEEN_KEY
 
 
@@ -505,7 +511,7 @@ class UserSessionTests(TestCase):
 class SessionForCommandTests(TestCase):
     """Ключ сессии из консоли: им и правда можно смотреть сайт чужими глазами."""
 
-    LOGGER = "users.management.commands.session_for"
+    LOGGER = "users.impersonation"
 
     def setUp(self):
         self.person = make_user("student@t.local")
@@ -1072,3 +1078,135 @@ class RosterTests(TestCase):
         answer = self.load([line("Бережная", "berezhol@mail.ru", "M07-601")])
 
         self.assertFalse(answer.context["form"].errors)
+
+
+class LoginJournalTests(TestCase):
+    """Журнал входов и ограничитель неудач (users/journal.py): что пишется и кого останавливают."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.person = make_user("me@t.local")
+
+    def attempt(self, password="pass12345", email="me@t.local", ip="10.0.0.7", client=None):
+        """Попытка входа с отдельного клиента: вошедшего форма входа не спрашивает."""
+        return (client or Client()).post(
+            reverse("login"), {"username": email, "password": password},
+            headers={"user-agent": CHROME}, REMOTE_ADDR=ip,
+        )
+
+    def mistype(self, times, **where):
+        for _ in range(times):
+            self.attempt("не тот", **where)
+
+    def kinds(self):
+        return list(LoginEvent.objects.order_by("id").values_list("kind", flat=True))
+
+    def test_a_login_is_written_down_with_address_and_browser(self):
+        self.assertEqual(self.attempt().status_code, 302)
+
+        event = LoginEvent.objects.get()
+        self.assertEqual((event.kind, event.user, event.ip, event.agent), ("login", self.person, "10.0.0.7", CHROME))
+
+    def test_a_logout_is_written_down(self):
+        client = Client()
+        self.attempt(client=client)
+
+        client.post(reverse("logout"))
+
+        self.assertEqual(self.kinds(), ["login", "logout"])
+
+    def test_a_wrong_password_is_written_down_against_the_account(self):
+        self.attempt("не тот")
+
+        event = LoginEvent.objects.get()
+        self.assertEqual((event.kind, event.user), ("failed", self.person))
+
+    def test_an_unknown_address_leaves_no_trace_of_what_was_typed(self):
+        """В поле почты нет-нет да набирают пароль — набранное в журнал не идёт."""
+        self.attempt("не тот", email="секрет123")
+
+        event = LoginEvent.objects.values().get()
+        self.assertEqual((event["kind"], event["user_id"]), ("failed", None))
+        self.assertNotIn("секрет123", str(event))
+
+    def test_too_many_failures_stop_even_the_right_password(self):
+        self.mistype(journal.FAILS_PER_ACCOUNT)
+
+        response = self.attempt()
+
+        self.assertContains(response, "Слишком много неудачных попыток")
+        self.assertEqual(self.kinds()[-1], "stopped")
+
+    def test_a_stopped_brute_force_is_written_down_once_not_per_attempt(self):
+        self.mistype(journal.FAILS_PER_ACCOUNT + 5)
+
+        self.assertEqual(self.kinds().count("failed"), journal.FAILS_PER_ACCOUNT)
+        self.assertEqual(self.kinds().count("stopped"), 1)
+
+    def test_a_stranger_typing_your_address_does_not_lock_you_out_at_home(self):
+        self.mistype(journal.FAILS_PER_ACCOUNT, ip="203.0.113.9")
+
+        self.assertEqual(self.attempt(ip="10.0.0.7").status_code, 302)
+
+    def test_one_address_trying_many_accounts_is_stopped(self):
+        with mock.patch.object(journal, "FAILS_PER_IP", 3):
+            for n in range(3):
+                self.attempt("не тот", email=f"guess{n}@t.local")
+
+            self.assertContains(self.attempt(), "Слишком много неудачных попыток")
+
+    def test_a_successful_login_forgives_earlier_typos(self):
+        self.mistype(journal.FAILS_PER_ACCOUNT - 1)
+        self.attempt()
+        self.mistype(journal.FAILS_PER_ACCOUNT - 1)
+
+        self.assertEqual(self.attempt().status_code, 302)
+
+    def test_a_password_reset_by_link_lifts_the_stop(self):
+        """Остановленному так и пишут: «восстанови пароль». После этого он должен войти."""
+        self.mistype(journal.FAILS_PER_ACCOUNT)
+        client = Client(REMOTE_ADDR="10.0.0.7")
+        uid = urlsafe_base64_encode(force_bytes(self.person.pk))
+        token = default_token_generator.make_token(self.person)
+        form = client.get(reverse("password_reset_confirm", args=[uid, token]), follow=True)
+        client.post(form.redirect_chain[-1][0], {"new_password1": "новый-пароль-9", "new_password2": "новый-пароль-9"})
+
+        self.assertEqual(self.attempt("новый-пароль-9").status_code, 302)
+
+    def test_the_admin_login_is_stopped_too(self):
+        """Шлагбаум стоит в authenticate(), а не в форме сайта: иначе перебор ушёл бы
+        на вход админки."""
+        User.objects.filter(pk=self.person.pk).update(is_staff=True)
+        self.mistype(journal.FAILS_PER_ACCOUNT)
+
+        response = Client().post(
+            "/admin/login/", {"username": "me@t.local", "password": "pass12345"}, REMOTE_ADDR="10.0.0.7",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.kinds()[-1], "stopped")
+
+    def test_sessions_signed_by_the_old_backend_stay_alive(self):
+        """Все сессии на проде записаны на ModelBackend: убери его из списка — и при
+        выкатке разлогинило бы весь сайт."""
+        self.client.force_login(self.person, backend="django.contrib.auth.backends.ModelBackend")
+
+        self.assertEqual(self.client.get(reverse("profile_edit")).status_code, 200)
+
+    def test_the_journal_is_in_the_admin_for_reading_only(self):
+        boss = User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345")
+        self.attempt("не тот")
+        self.client.force_login(boss)
+
+        listing = self.client.get(reverse("admin:users_loginevent_changelist"), {"q": "Иванов"})
+
+        self.assertContains(listing, "Chrome · Windows")
+        self.assertEqual(self.client.get(reverse("admin:users_loginevent_add")).status_code, 403)
+
+    def test_a_dead_cache_locks_nobody_out(self):
+        with mock.patch("core.throttle.cache") as dead, self.assertLogs("core.throttle", "ERROR"):
+            dead.get.side_effect = dead.add.side_effect = dead.delete.side_effect = ConnectionError("Redis лёг")
+            self.mistype(journal.FAILS_PER_ACCOUNT + 2)
+
+            self.assertEqual(self.attempt().status_code, 302)

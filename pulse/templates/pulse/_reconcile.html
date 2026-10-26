@@ -1,0 +1,27 @@
+{% if error %}
+<p class="text-sm text-rose-600 dark:text-rose-400">{{ error }}</p>
+{% elif applied %}
+<p class="text-sm text-emerald-700 dark:text-emerald-300"><i class="fa-solid fa-check"></i> Поправлено кошельков: {{ broken|length }}.</p>
+{% elif not broken %}
+<p class="text-sm text-emerald-700 dark:text-emerald-300"><i class="fa-solid fa-check"></i> Расхождений нет.</p>
+{% else %}
+<div class="flex flex-col gap-2 text-sm">
+  {% for wallet, journal in broken %}
+  <div class="flex flex-wrap gap-x-3">
+    <a href="{% url 'pulse_person' wallet.user_id %}" class="text-accent hover:underline">{{ wallet.user.full_name }}</a>
+    <span class="text-slate-500 dark:text-slate-400">в кошельке {{ wallet.balance }}, по журналу {{ journal }}</span>
+  </div>
+  {% endfor %}
+  {% if perms.economy.change_wallet %}
+  <form hx-post="{% url 'pulse_reconcile' %}" hx-target="#reconcile" hx-swap="innerHTML" x-data="{ ask: false }" class="pt-1">
+    <input type="hidden" name="apply" value="1">
+    <button type="button" x-show="!ask" @click="ask = true" class="btn btn-ghost border border-amber-300 dark:border-amber-800">Привести к журналу</button>
+    <span x-show="ask" x-cloak class="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+      Балансы станут равны сумме журнала — у кого-то могут уменьшиться.
+      <button type="submit" class="rounded-lg bg-amber-600 px-3 py-1 font-medium text-white hover:bg-amber-700">Привести</button>
+      <button type="button" @click="ask = false" class="rounded-lg px-3 py-1 hover:bg-amber-100 dark:hover:bg-amber-900/40">Отмена</button>
+    </span>
+  </form>
+  {% endif %}
+</div>
+{% endif %}

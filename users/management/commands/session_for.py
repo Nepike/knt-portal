@@ -1,11 +1,11 @@
 """Готовая сессия для чужого аккаунта — чтобы посмотреть сайт его глазами.
 
-Кнопки «войти как» на сайте намеренно НЕТ. Веб-эндпоинт пришлось бы охранять от всех,
-кто до него дотянется, и ошибка в одной проверке прав означала бы захват любого аккаунта.
-Здесь охраны не нужно вовсе: команду может запустить только тот, у кого уже есть доступ
-к серверу и базе, а такому человеку эта команда ничего нового не даёт.
-
     docker compose exec web python manage.py session_for student@phystech.edu
+
+Ту же сессию выдаёт и карточка человека в Пульсе — только суперпользователю, с записью
+в историю админки (pulse/people.py). Команда остаётся на случай, когда сайт лежит или
+суперпользователя под рукой нет: её может запустить лишь тот, у кого уже есть доступ к
+серверу, и такому человеку она ничего нового не даёт. Сама выдача — users/impersonation.py.
 
 Ключ кладётся в куку браузера — дальше сайт считает вас этим человеком. Отсюда два
 следствия, о которых команда и печатает предупреждение:
@@ -18,23 +18,14 @@
 и попавший в переписку или на скриншот действует ровно до истечения.
 """
 
-import logging
 from datetime import timedelta
-from importlib import import_module
 
 from django.conf import settings
-from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
-from django.contrib.sessions.models import Session
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from users.models import User, UserSession
-
-logger = logging.getLogger(__name__)
-
-DEFAULT_MINUTES = 30
-# Вместо браузера: в списке «мои устройства» такая сессия должна называть себя честно.
-AGENT = "выдана командой session_for"
+from users.impersonation import DEFAULT_MINUTES, drop, mint
+from users.models import User
 
 
 class Command(BaseCommand):
@@ -49,12 +40,11 @@ class Command(BaseCommand):
         user = self.find(options["who"])
 
         if options["end"]:
-            self.stdout.write(f"закрыто сессий: {self.drop(user)}")
+            self.stdout.write(f"закрыто сессий: {drop(user)}")
             return
 
         minutes = max(options["minutes"], 1)
-        key = self.mint(user, minutes)
-        logger.warning("Выдана сессия для %s (%s), на %s мин", user.email, user.pk, minutes)
+        key = mint(user, minutes)
 
         self.stdout.write(f"\n{user.full_name} <{user.email}>")
         self.stdout.write(f"персонал: {'да' if user.is_staff else 'нет'} · до {timezone.localtime(timezone.now() + timedelta(minutes=minutes)):%H:%M}")
@@ -76,28 +66,3 @@ class Command(BaseCommand):
         if not user.is_active:
             raise CommandError(f"{user.email} отключён — сессия всё равно не пустит")
         return user
-
-    def mint(self, user, minutes):
-        """Сессия ровно та же, что после обычного входа: без хеша пароля (HASH_SESSION_KEY)
-        AuthenticationMiddleware сочтёт её протухшей и выкинет на первом же запросе."""
-        store = import_module(settings.SESSION_ENGINE).SessionStore()
-        store[SESSION_KEY] = str(user.pk)
-        store[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
-        store[HASH_SESSION_KEY] = user.get_session_auth_hash()
-        store.set_expiry(minutes * 60)
-        store.create()
-        # Приписку заводим и здесь, хотя сигнала входа не было: иначе выданная сессия
-        # не попадёт в список «мои устройства» и хозяин аккаунта её не увидит.
-        UserSession.objects.create(session_id=store.session_key, user=user, agent=AGENT)
-        return store.session_key
-
-    def drop(self, user):
-        """Сессии не только выданные этой командой, а вообще все — чтобы «закрыть доступ»
-        значило именно это. Поэтому идём по живым и расшифровываем каждую: обычный вход
-        приписку оставляет (users/sessions.py), но полагаться тут на неё нельзя."""
-        doomed = [
-            session.session_key
-            for session in Session.objects.filter(expire_date__gt=timezone.now())
-            if session.get_decoded().get(SESSION_KEY) == str(user.pk)
-        ]
-        return Session.objects.filter(session_key__in=doomed).delete()[0]

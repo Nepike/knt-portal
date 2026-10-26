@@ -10,7 +10,7 @@ from django.utils.html import format_html, format_html_join
 
 from . import donors
 from .lockdown import GROUP, PASS
-from .models import Funding, Lockdown, Subject, Supporter, Team, Term
+from .models import Failure, Funding, Lockdown, Subject, Supporter, Team, Term
 
 admin.site.register(Subject)
 admin.site.register(Term)
@@ -97,3 +97,19 @@ class LockdownAdmin(admin.ModelAdmin):
         people = ModelBackend().with_perm(PASS).order_by("surname", "name")
         names = format_html_join("", "{}<br>", ((user.full_name,) for user in people))
         return format_html("{}Добавить человека: «Пользователи» → его страница → группа «{}».", names, GROUP)
+
+
+@admin.register(Failure)
+class FailureAdmin(admin.ModelAdmin):
+    """Журнал сбоев только на просмотр: пишут его сами места сбоев (core/failures.py)."""
+
+    list_display = ("last_at", "source", "text", "times", "created")
+    list_filter = ("source",)
+    search_fields = ("text",)
+    date_hierarchy = "last_at"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

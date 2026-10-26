@@ -35,23 +35,24 @@ from PIL import Image as PilImage
 from attachments.storage import file_storage
 from attachments.uploads import under
 from knt.celery import app as celery_app
-from core.models import Funding, Lockdown, Supporter, Team
+from core.models import Failure, Funding, Lockdown, Supporter, Team
 from intake import urls as intake_urls
 from printing import urls as printing_urls
 from teachers.models import Review, Teacher
-from users.models import User
+from users.models import LoginEvent, User
 
 from chats.consumers import ChatConsumer
 from chats.models import Chat
 from wall.models import Board
 
-from . import backup, donors, lockdown, nav
+from . import backup, donors, lockdown, nav, runs
 from .context_processors import theme_for
 from .search import by_name
-from .throttle import client_ip, throttled
+from .failures import record
+from .throttle import client_ip, exhausted, forgive, strike, throttled
 from .markup import render
 from .mail import pack
-from .tasks import MAIL_RETRIES, backup_database, ping, send_email
+from .tasks import JOURNAL_DAYS, MAIL_RETRIES, backup_database, ping, send_email, sweep_journals
 
 
 class CeleryTests(SimpleTestCase):
@@ -183,6 +184,18 @@ class MailFailureTests(TestCase):
 
         self.assertIn("отказ в логине или пароле", dropped)
         self.assertNotIn("отказ в логине или пароле", other)
+
+    def test_a_letter_that_never_left_lands_in_the_failure_journal_once(self):
+        """Один раз: задача письма падает и попадает в общий обработчик, но пишет о себе
+        сама — у неё есть адресат и тема."""
+        with self.assertLogs("core.mail", "ERROR"):
+            self.send(OSError("сеть лежит"))
+
+        failure = Failure.objects.get()
+        self.assertEqual(failure.source, Failure.Source.MAIL)
+        for part in ("student@t.local", "Сброс пароля", "сеть лежит"):
+            self.assertIn(part, failure.text)
+        self.assertNotIn("reset/abc", failure.text)
 
     def test_a_broken_alert_does_not_hide_the_mail_failure(self):
         letter = EmailMultiAlternatives("Сброс пароля", "Текст", to=["student@t.local"])
@@ -1266,6 +1279,18 @@ class ThrottleTests(SimpleTestCase):
             throttled("t:one", 2)
         self.assertFalse(throttled("t:two", 2))
 
+    def test_only_noted_failures_count_and_forgiving_starts_over(self):
+        """Пара для входа: проверка сама в счёт не идёт, иначе каждая удачная попытка
+        приближала бы человека к запрету."""
+        checks = []
+        for _ in range(3):
+            checks.append(exhausted("t:fails", 2))
+            strike("t:fails")
+        forgive("t:fails")
+
+        self.assertEqual(checks, [False, False, True])
+        self.assertFalse(exhausted("t:fails", 2))
+
     def test_a_dead_cache_lets_people_through_instead_of_locking_them_out(self):
         """Redis лёг — забывший пароль не должен из-за этого остаться без входа.
         Ограничитель нужен против потока, а не вместо самой страницы."""
@@ -1960,3 +1985,99 @@ class LockdownSocketTests(TransactionTestCase):
         await database_sync_to_async(put_on_the_list)(self.student)
 
         self.assertTrue(await self.knock(self.student))
+
+
+class FailureJournalTests(TestCase):
+    """Журнал сбоев (core/failures.py): что в него попадает и чем он никогда не мешает."""
+
+    def test_the_same_failure_within_an_hour_is_counted_not_repeated(self):
+        record(Failure.Source.PRINTING, "замятие")
+        record(Failure.Source.PRINTING, "замятие")
+        record(Failure.Source.PRINTING, "нет бумаги")
+
+        self.assertEqual(
+            sorted(Failure.objects.values_list("text", "times")), [("замятие", 2), ("нет бумаги", 1)],
+        )
+
+    def test_an_old_failure_coming_back_is_a_new_row(self):
+        record(Failure.Source.PRINTING, "замятие")
+        Failure.objects.update(last_at=timezone.now() - timedelta(hours=2))
+
+        record(Failure.Source.PRINTING, "замятие")
+
+        self.assertEqual(Failure.objects.count(), 2)
+
+    def test_a_broken_record_does_not_break_the_caller_or_its_transaction(self):
+        """Нулевой байт Postgres не примет. Без точки сохранения упавшая запись отравила
+        бы транзакцию вызывающего, и следующий же его запрос упал бы."""
+        with self.assertLogs("core.failures", "ERROR"):
+            record(Failure.Source.TASK, "a\x00b")
+
+        self.assertEqual(Failure.objects.count(), 0)
+
+    def test_a_task_that_gave_up_lands_in_the_journal(self):
+        """Бэкап падал молча — сбой оставался только в логе воркера."""
+        # throw=False — как в воркере: с проброшенным исключением Celery сигнал о провале не шлёт.
+        with patch("core.backup.make", side_effect=RuntimeError("pg_dump: нет связи с базой")):
+            backup_database.apply(throw=False)
+
+        failure = Failure.objects.get()
+        self.assertEqual(failure.source, Failure.Source.TASK)
+        self.assertIn("core.tasks.backup_database", failure.text)
+        self.assertIn("pg_dump: нет связи с базой", failure.text)
+
+
+    def test_the_journal_is_in_the_admin_for_reading_only(self):
+        boss = User.objects.create_superuser("boss@t.local", "Анна", "Главная", password="pass12345")
+        record(Failure.Source.MAIL, "кому a@t.local: отказ во входе")
+        self.client.force_login(boss)
+
+        self.assertContains(self.client.get(reverse("admin:core_failure_changelist")), "кому a@t.local: отказ во входе")
+        self.assertEqual(self.client.get(reverse("admin:core_failure_add")).status_code, 403)
+
+
+class JournalSweepTests(TestCase):
+    """Ночная уборка журналов: уходит старше JOURNAL_DAYS, свежее остаётся."""
+
+    def test_old_entries_go_and_fresh_ones_stay(self):
+        old = timezone.now() - timedelta(days=JOURNAL_DAYS + 1)
+        LoginEvent.objects.create(kind=LoginEvent.Kind.FAILED, created=old)
+        fresh_login = LoginEvent.objects.create(kind=LoginEvent.Kind.FAILED)
+        Failure.objects.create(source=Failure.Source.TASK, text="давнее", created=old, last_at=old)
+        # Началось давно, но повторялось недавно — это ещё живой сбой.
+        recurring = Failure.objects.create(source=Failure.Source.TASK, text="хроническое", created=old)
+
+        sweep_journals()
+
+        self.assertEqual(list(LoginEvent.objects.all()), [fresh_login])
+        self.assertEqual(list(Failure.objects.all()), [recurring])
+
+
+class RunMarkTests(TestCase):
+    """Последний запуск задачи — в кэше, для «Системы» Пульса (core/runs.py)."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_a_finished_task_leaves_its_mark(self):
+        ping.apply(args=["pong"])
+
+        mark = runs.last("core.tasks.ping")
+        self.assertEqual((mark["ok"], mark["result"]), (True, "pong"))
+
+    def test_a_failed_task_is_marked_as_failed(self):
+        with patch("core.backup.make", side_effect=RuntimeError("pg_dump упал")):
+            backup_database.apply(throw=False)
+
+        mark = runs.last("core.tasks.backup_database")
+        self.assertFalse(mark["ok"])
+        self.assertIn("pg_dump упал", mark["result"])
+
+    def test_a_dead_cache_breaks_neither_the_task_nor_the_page(self):
+        with patch("core.runs.cache") as dead, self.assertLogs("core.runs", "ERROR") as log:
+            dead.set.side_effect = dead.get.side_effect = ConnectionError("Redis лёг")
+            self.assertEqual(ping.apply(args=["pong"]).get(), "pong")
+            self.assertIsNone(runs.last("core.tasks.ping"))
+
+        self.assertIn("Не записан последний запуск", log.output[0])

@@ -1,0 +1,276 @@
+{% extends "pulse/base.html" %}
+
+{% block heading %}Люди{% endblock %}
+{% block tools %}<a href="{% url 'pulse_people' %}" class="ml-auto text-sm text-accent hover:underline">← к списку</a>{% endblock %}
+
+{% block pulse %}
+<section class="panel p-5 flex flex-wrap items-center gap-5">
+  {% include "core/_avatar.html" with person=person box="w-16 h-16 rounded-[22%]" text="text-xl" frame="p-0.5" only %}
+  <div class="min-w-0 flex-1 basis-80 flex flex-col gap-1.5">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h3 class="text-xl font-bold">{{ person.full_name }}</h3>
+      <span class="text-sm text-slate-500 dark:text-slate-400">{% if person.team %}{{ person.team }} · {% endif %}{{ person.email }}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">
+      на сайте с {{ person.date_joined|date:"j E Y" }} ·
+      {% if person.last_login %}последний вход {{ person.last_login|date:"j E, H:i" }}{% else %}ни разу не входил(а){% endif %}
+    </p>
+    <div class="flex flex-wrap gap-1.5 pt-1 text-xs">
+      {% if person.is_active %}<span class="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-emerald-700 dark:text-emerald-300">аккаунт действует</span>{% else %}<span class="rounded-full bg-rose-500/10 px-2.5 py-0.5 text-rose-600 dark:text-rose-400">аккаунт выключен</span>{% endif %}
+      {% if print_banned %}<span class="rounded-full bg-rose-500/10 px-2.5 py-0.5 text-rose-600 dark:text-rose-400">печать закрыта</span>{% endif %}
+      {% if wall_until %}<span class="rounded-full bg-rose-500/10 px-2.5 py-0.5 text-rose-600 dark:text-rose-400">Стена закрыта до {{ wall_until|date:"j E, H:i" }}</span>{% endif %}
+      {% if person.is_superuser %}<span class="rounded-full bg-accent/10 px-2.5 py-0.5 text-accent">суперпользователь</span>{% endif %}
+      {% if person.must_change_password %}<span class="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-amber-700 dark:text-amber-300">сменит пароль при входе</span>{% endif %}
+    </div>
+  </div>
+  <div class="flex flex-wrap gap-6">
+    <div class="flex flex-col"><span class="text-xs text-slate-500 dark:text-slate-400">баланс</span><span class="text-xl font-bold tabular-nums">{{ balance }}</span></div>
+    <div class="flex flex-col"><span class="text-xs text-slate-500 dark:text-slate-400">печать, неделя</span><span class="text-xl font-bold tabular-nums">{{ print.used }}{% if print.allowance is not None %} / {{ print.allowance }}{% endif %}</span></div>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    {% if person.is_active %}<a href="{% url 'profile' person.pk %}" class="btn btn-primary">Профиль на сайте</a>{% endif %}
+    <a href="{% url 'admin:users_user_change' person.pk %}" class="btn btn-ghost border border-slate-300 dark:border-slate-700">В админке</a>
+    <a href="{% url 'pulse_feed' %}?person={{ person.pk }}" class="btn btn-ghost border border-slate-300 dark:border-slate-700">В ленте</a>
+  </div>
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <div class="lg:col-span-2 flex flex-col gap-4 min-w-0">
+
+    <section class="panel p-5 flex flex-col gap-3">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 class="font-semibold">Входы и сессии</h3>
+        <span class="text-xs text-slate-500 dark:text-slate-400">журнал хранится 90 дней</span>
+      </div>
+      {% for session in sessions %}
+      <form method="post" action="{% url 'pulse_person_sessions' person.pk %}" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-sm">
+        {% csrf_token %}
+        <input type="hidden" name="id" value="{{ session.pk }}">
+        <span class="h-2 w-2 rounded-full {% if session.fresh %}bg-emerald-500{% else %}bg-slate-400{% endif %}" aria-hidden="true"></span>
+        <span class="font-medium">{{ session.where }}</span>
+        <span class="text-xs text-slate-500 dark:text-slate-400">{{ session.ip|default:"адрес неизвестен" }} · вход {{ session.created|date:"j E, H:i" }} · был {{ session.seen|date:"j E, H:i" }}</span>
+        {% if can.user %}<button type="submit" class="ml-auto rounded-lg border border-rose-200 dark:border-rose-900 px-2.5 py-1 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40">Завершить</button>{% endif %}
+      </form>
+      {% empty %}
+      <p class="text-sm text-slate-400">Открытых сессий нет.</p>
+      {% endfor %}
+      {% if sessions and can.user %}
+      <form method="post" action="{% url 'pulse_person_sessions' person.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost border border-slate-300 dark:border-slate-700">Выйти на всех устройствах</button>
+      </form>
+      {% endif %}
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[520px] text-sm">
+          <thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+            <th class="py-2 pr-3 font-medium">Когда</th><th class="py-2 pr-3 font-medium">Что</th>
+            <th class="py-2 pr-3 font-medium">Адрес</th><th class="py-2 font-medium">Устройство</th>
+          </tr></thead>
+          <tbody>
+            {% for event in logins %}
+            <tr class="border-t border-slate-100 dark:border-slate-800">
+              <td class="py-2 pr-3 whitespace-nowrap tabular-nums">{{ event.created|date:"j E, H:i" }}</td>
+              <td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full {% if event.kind == 'login' %}bg-emerald-500{% elif event.kind == 'logout' %}bg-slate-400{% else %}bg-rose-500{% endif %}" aria-hidden="true"></span>{{ event.get_kind_display }}</span></td>
+              <td class="py-2 pr-3 tabular-nums text-slate-600 dark:text-slate-300">{{ event.ip|default:"—" }}</td>
+              <td class="py-2 text-slate-600 dark:text-slate-300">{{ event.where }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="py-3 text-slate-400">Журнал пока пуст.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel p-5 flex flex-col gap-4">
+      <h3 class="font-semibold">Что добавил(а)</h3>
+      {% for part in works %}
+      <div class="flex flex-col">
+        <div class="flex items-baseline gap-2 pb-1">
+          <h4 class="text-sm font-semibold text-slate-600 dark:text-slate-300">{{ part.title }}</h4>
+          <span class="text-xs text-slate-400">{{ part.count }}</span>
+        </div>
+        {% for item in part.items %}
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 dark:border-slate-800 py-2 text-sm">
+          <a href="{{ item.get_absolute_url }}" class="min-w-0 flex-1 basis-60 text-accent hover:underline">{{ item.title }}</a>
+          <span class="rounded-full px-2 py-0.5 text-xs {% if item.status == 'approved' %}bg-emerald-500/10 text-emerald-700 dark:text-emerald-300{% elif item.status == 'pending' %}bg-amber-500/10 text-amber-700 dark:text-amber-300{% else %}bg-rose-500/10 text-rose-600 dark:text-rose-400{% endif %}">{{ item.get_status_display }}</span>
+          <span class="w-20 text-right text-xs text-slate-400">{{ item.created|date:"j E Y" }}</span>
+        </div>
+        {% empty %}
+        <p class="border-t border-slate-100 dark:border-slate-800 py-2 text-sm text-slate-400">ничего</p>
+        {% endfor %}
+        {% if part.count > part.items|length %}<p class="pt-1 text-xs text-slate-400">показаны последние {{ part.items|length }} из {{ part.count }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </section>
+
+    <section class="panel px-5 py-4">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 pb-1">
+        <h3 class="font-semibold">Отзывы и комментарии</h3>
+        <span class="text-xs text-slate-500 dark:text-slate-400">отзывов {{ reviews }} · комментариев {{ comments }}</span>
+        <a href="{% url 'pulse_feed' %}?person={{ person.pk }}" class="ml-auto text-sm text-accent hover:underline">всё в ленте →</a>
+      </div>
+      {% for event in texts %}
+        {% include "pulse/_event.html" with dated=True %}
+      {% empty %}
+        <p class="py-3 text-sm text-slate-400">Ни отзывов, ни комментариев.</p>
+      {% endfor %}
+    </section>
+  </div>
+
+  <div class="flex flex-col gap-4 min-w-0">
+    <section class="panel p-5 flex flex-col gap-4">
+      <h3 class="font-semibold">Запреты</h3>
+      <form method="post" action="{% url 'pulse_person_printing' person.pk %}" class="flex items-center gap-3">
+        {% csrf_token %}
+        <input type="hidden" name="banned" value="{{ print_banned|yesno:'0,1' }}">
+        <div class="min-w-0 flex-1"><p class="text-sm font-medium">Закрыть печать</p><p class="text-xs text-slate-500 dark:text-slate-400">печатать нельзя, пока не откроешь</p></div>
+        {% include "pulse/_switch.html" with on=print_banned label="Закрыть печать" danger=True can=can.print %}
+      </form>
+
+      <div class="flex flex-col gap-1.5">
+        <p class="text-sm font-medium">Стена</p>
+        <div class="flex gap-0.5 rounded-btn bg-slate-100 dark:bg-slate-800 p-1" role="group" aria-label="Доска для человека">
+          {% for days, label in wall_bans.items %}
+          <form method="post" action="{% url 'pulse_person_wall' person.pk %}" class="flex-1">
+            {% csrf_token %}
+            <input type="hidden" name="days" value="{{ days }}">
+            <button type="submit" {% if not can.wall %}disabled{% endif %} {% if days == 0 and not wall_until %}aria-pressed="true" class="w-full rounded-lg bg-white dark:bg-slate-900 px-1 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 shadow-sm"{% else %}aria-pressed="false" class="w-full rounded-lg px-1 py-1 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 disabled:opacity-40"{% endif %}>{{ label }}</button>
+          </form>
+          {% endfor %}
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400">рисовать нельзя до конца срока; «открыта» снимает запрет{% if not can.wall %} · менять может модератор Стены{% endif %}</p>
+      </div>
+
+      <form method="post" action="{% url 'pulse_person_active' person.pk %}" class="flex flex-col gap-2" x-data="{ ask: false }">
+        {% csrf_token %}
+        <input type="hidden" name="active" value="{{ person.is_active|yesno:'0,1' }}">
+        <div class="flex items-center gap-3">
+          <div class="min-w-0 flex-1"><p class="text-sm font-medium">Выключить аккаунт</p><p class="text-xs text-slate-500 dark:text-slate-400">войти нельзя, все сессии закроются</p></div>
+          {% if person.is_active %}
+          <button type="button" role="switch" aria-checked="false" aria-label="Выключить аккаунт" @click="ask = true" {% if not can.user or person == request.user %}disabled{% endif %}
+                  class="relative h-6 w-10 shrink-0 rounded-full bg-slate-300 dark:bg-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            <span class="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow"></span>
+          </button>
+          {% else %}
+          {% include "pulse/_switch.html" with on=True label="Выключить аккаунт" danger=True can=can.user %}
+          {% endif %}
+        </div>
+        <div x-show="ask" x-cloak class="flex flex-wrap items-center gap-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 px-3 py-2 text-xs text-rose-800 dark:text-rose-200">
+          <span>Войти будет нельзя, все сессии закроются.</span>
+          <button type="submit" class="rounded-lg bg-rose-600 px-3 py-1 font-medium text-white hover:bg-rose-700">Выключить</button>
+          <button type="button" @click="ask = false" class="rounded-lg px-3 py-1 hover:bg-rose-100 dark:hover:bg-rose-900/40">Отмена</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel p-5 flex flex-col gap-3">
+      <div class="flex items-baseline gap-2">
+        <h3 class="font-semibold">Права</h3>
+        {% if person.is_superuser %}<span class="text-xs text-slate-500 dark:text-slate-400">у суперпользователя есть все</span>{% endif %}
+      </div>
+      {% for right in rights %}
+      <form method="post" action="{% url 'pulse_person_right' person.pk %}" class="flex items-center gap-3">
+        {% csrf_token %}
+        <input type="hidden" name="group" value="{{ right.group }}">
+        <input type="hidden" name="on" value="{{ right.on|yesno:'0,1' }}">
+        <div class="min-w-0 flex-1"><p class="text-sm font-medium">{{ right.label }}</p><p class="text-xs text-slate-500 dark:text-slate-400">{{ right.note }}</p></div>
+        {% include "pulse/_switch.html" with on=right.on label=right.label can=right.can %}
+      </form>
+      {% endfor %}
+    </section>
+
+    <section class="panel p-5 flex flex-col gap-3">
+      <h3 class="font-semibold">Токены вручную</h3>
+      <form method="post" action="{% url 'pulse_person_tokens' person.pk %}" class="flex flex-col gap-2">
+        {% csrf_token %}
+        <div class="flex gap-2">
+          <input type="number" name="amount" min="1" required placeholder="сколько" aria-label="Сколько токенов" {% if not can.tokens %}disabled{% endif %}
+                 class="w-28 rounded-btn border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm outline-none focus:border-accent">
+          <input type="text" name="note" maxlength="200" required placeholder="за что — увидит человек" aria-label="За что" {% if not can.tokens %}disabled{% endif %}
+                 class="min-w-0 flex-1 rounded-btn border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm outline-none focus:border-accent">
+        </div>
+        <div class="flex gap-2">
+          <button type="submit" name="sign" value="+" {% if not can.tokens %}disabled{% endif %} class="btn flex-1 bg-emerald-600 text-white hover:bg-emerald-700">Начислить</button>
+          <button type="submit" name="sign" value="-" {% if not can.tokens %}disabled{% endif %} class="btn flex-1 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40">Списать</button>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400">в журнал кошелька — с причиной «вручную» и твоим именем</p>
+      </form>
+    </section>
+
+    {% if can.gift %}
+    <section class="panel p-5 flex flex-col gap-3">
+      <div class="flex items-baseline gap-2">
+        <h3 class="font-semibold">Подарить вещь</h3>
+        <span class="text-xs text-slate-500 dark:text-slate-400">в инвентаре {{ owned }}</span>
+      </div>
+      {% if giftable %}
+      <form method="post" action="{% url 'pulse_person_gift' person.pk %}" class="flex flex-col gap-2">
+        {% csrf_token %}
+        <select name="item" required aria-label="Какую вещь подарить"
+                class="w-full rounded-btn border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm outline-none focus:border-accent">
+          {% regroup giftable by get_kind_display as kinds %}
+          {% for kind in kinds %}
+          <optgroup label="{{ kind.grouper }}">
+            {% for item in kind.list %}<option value="{{ item.pk }}">{{ item.name }} · {{ item.get_rarity_display }}</option>{% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-secondary">Подарить</button>
+        <p class="text-xs text-slate-500 dark:text-slate-400">ляжет в инвентарь без списания токенов</p>
+      </form>
+      {% else %}
+      <p class="text-sm text-slate-400">Все вещи уже есть.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="panel p-5 flex flex-col gap-3">
+      <h3 class="font-semibold">Пароль</h3>
+      <div class="flex flex-wrap gap-2">
+        <form method="post" action="{% url 'pulse_person_password' person.pk %}">
+          {% csrf_token %}<input type="hidden" name="how" value="change">
+          <button type="submit" {% if not can.user or person.must_change_password %}disabled{% endif %} class="btn btn-ghost border border-slate-300 dark:border-slate-700">Сменить при следующем входе</button>
+        </form>
+        <form method="post" action="{% url 'pulse_person_password' person.pk %}">
+          {% csrf_token %}<input type="hidden" name="how" value="link">
+          <button type="submit" {% if not can.user or not person.is_active %}disabled{% endif %} class="btn btn-ghost border border-slate-300 dark:border-slate-700">Выслать ссылку для сброса</button>
+        </form>
+      </div>
+    </section>
+
+    {% if request.user.is_superuser and person.is_active and person != request.user %}
+    <section class="panel p-5 flex flex-col gap-3">
+      <h3 class="font-semibold">Посмотреть глазами человека</h3>
+      <p class="text-xs text-slate-500 dark:text-slate-400">Ключ сессии для приватного окна: до конца срока сайт считает тебя этим человеком, и всё сделанное подписано его именем. Выдача пишется в историю.</p>
+      <form hx-post="{% url 'pulse_person_session' person.pk %}" hx-target="#test-session" hx-swap="innerHTML" class="flex flex-wrap gap-2">
+        {% for minutes, label in test_session.items %}
+        <button type="submit" name="minutes" value="{{ minutes }}" class="btn btn-ghost border border-slate-300 dark:border-slate-700">на {{ label }}</button>
+        {% endfor %}
+      </form>
+      <div id="test-session"></div>
+    </section>
+    {% endif %}
+
+    <section class="panel p-5 flex flex-col gap-2">
+      <h3 class="font-semibold">Кошелёк</h3>
+      {% for entry in entries %}
+      <div class="flex items-baseline gap-2 text-sm">
+        <span class="w-14 shrink-0 text-xs text-slate-400">{{ entry.created|date:"j E" }}</span>
+        <span class="min-w-0 flex-1 text-slate-600 dark:text-slate-300">{{ entry.note|default:entry.get_reason_display }}{% if entry.by %} <span class="text-xs text-slate-400">· {{ entry.by.full_name }}</span>{% endif %}</span>
+        <span class="shrink-0 font-medium tabular-nums {% if entry.amount > 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ entry.amount|stringformat:"+d" }}</span>
+      </div>
+      {% empty %}
+      <p class="text-sm text-slate-400">Операций нет.</p>
+      {% endfor %}
+    </section>
+
+    <section class="panel p-5 flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-300">
+      <h3 class="font-semibold text-slate-900 dark:text-slate-100">Печать, Стена, сообщения</h3>
+      <p>печать: {{ print.used }} стр. на этой неделе{% if print.allowance is not None %} из {{ print.allowance }}{% else %}, без лимита{% endif %}</p>
+      <p>Стена: закрашено клеток — {{ painted }}</p>
+      <p class="flex items-start gap-2"><i class="fa-solid fa-lock mt-0.5 text-slate-400"></i><span>сообщения: {{ said.n }} в {{ chats }} чатах{% if said.last %}, последнее {{ said.last|date:"j E" }}{% endif %} — только число, текст переписки Пульс не показывает</span></p>
+    </section>
+  </div>
+</div>
+{% endblock %}

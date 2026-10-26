@@ -21,4 +21,5 @@ urlpatterns = [
     path('', include('economy.urls')),
     path('', include('wall.urls')),
     path('', include('printing.urls')),
+    path('', include('pulse.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

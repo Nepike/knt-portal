@@ -1,0 +1,52 @@
+{% load attachment_extras %}
+{% comment %}
+  Строка события — одна на Ленту, свежие тексты Сводки и тексты в карточке человека.
+  Действие спрашивает подтверждение на месте; htmx меняет строку на ответ (_done.html).
+  Цвет точки — вид события; неудачное (неверный пароль, печать не вышла) — красным.
+  dated — показать и дату: в Ленте её дают заголовки дней, в остальных местах их нет.
+{% endcomment %}
+<article class="flex gap-3 py-3 border-t border-slate-100 dark:border-slate-800 first:border-t-0">
+  <span class="w-11 shrink-0 pt-0.5 text-xs tabular-nums text-slate-400">{% if dated %}<span class="block">{{ event.when|date:"d.m" }}</span>{% endif %}{{ event.when|date:"H:i" }}</span>
+  <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full {% if event.bad %}bg-rose-500{% elif event.kind == 'login' %}bg-slate-400{% elif event.kind == 'review' %}bg-violet-500{% elif event.kind == 'comment' %}bg-blue-500{% elif event.kind == 'upload' %}bg-emerald-500{% elif event.kind == 'moderation' %}bg-slate-700 dark:bg-slate-300{% elif event.kind == 'shop' %}bg-amber-500{% elif event.kind == 'wallet' %}bg-yellow-600{% elif event.kind == 'print' %}bg-cyan-600{% else %}bg-pink-500{% endif %}" aria-hidden="true"></span>
+  <div class="min-w-0 flex-1 flex flex-col gap-1.5">
+    <p class="text-sm leading-snug">
+      {% if event.who %}<a href="{% url 'pulse_person' event.who.pk %}" class="font-medium text-accent hover:underline">{{ event.who.full_name }}</a>{% elif event.kind == 'login' %}<span class="text-slate-400">неизвестный адрес</span>{% else %}<span class="text-slate-400">аккаунт удалён</span>{% endif %}
+      <span class="text-slate-400">·</span> {{ event.text }}
+      {% if event.target %}{% if event.href %}<a href="{{ event.href }}" class="font-medium hover:underline">{{ event.target }}</a>{% else %}<span class="font-medium">{{ event.target }}</span>{% endif %}{% endif %}
+    </p>
+    {% if event.meta %}<p class="sm:hidden text-xs text-slate-400">{{ event.meta }}</p>{% endif %}
+    {% if event.quote %}
+    {% comment %}
+      Длинный текст свёрнут до четырёх строк и разворачивается. Обрезается внутренний
+      абзац, а поля — у обёртки: обрезанный блок с полями показывал кусок пятой строки.
+    {% endcomment %}
+    <blockquote x-data="{ open: false, long: false }" x-init="long = $refs.text.scrollHeight > $refs.text.clientHeight + 1"
+                class="rounded-r-lg border-l-4 border-accent/30 bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-sm">
+      <p x-ref="text" class="whitespace-pre-line break-words line-clamp-4" :class="{ 'line-clamp-4': !open }">{{ event.quote }}</p>
+      <button type="button" x-show="long" x-cloak @click="open = !open" class="mt-1 text-xs text-accent hover:underline"
+              x-text="open ? 'свернуть' : 'показать целиком'"></button>
+    </blockquote>
+    {% endif %}
+    {% if event.image %}{% with url=event.image|media %}
+    <a href="{{ url }}" target="_blank" rel="noopener" class="block w-fit overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+      <img src="{{ url }}" alt="Картинка к тексту" loading="lazy" class="block h-28 w-auto max-w-full object-cover">
+    </a>
+    {% endwith %}{% endif %}
+    {% if event.actions %}
+    <div class="flex flex-wrap gap-2">
+      {% for action in event.actions %}
+      <form hx-post="{{ action.url }}" hx-target="closest article" hx-swap="outerHTML" x-data="{ ask: false }" class="contents">
+        <button type="button" x-show="!ask" @click="ask = true"
+                class="rounded-lg border border-rose-200 dark:border-rose-900 px-2.5 py-1 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40">{{ action.label }}</button>
+        <div x-show="ask" x-cloak class="flex flex-wrap items-center gap-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 px-3 py-2 text-xs text-rose-800 dark:text-rose-200">
+          <span>{{ action.question }}</span>
+          <button type="submit" class="rounded-lg bg-rose-600 px-3 py-1 font-medium text-white hover:bg-rose-700">{{ action.label }}</button>
+          <button type="button" @click="ask = false" class="rounded-lg px-3 py-1 hover:bg-rose-100 dark:hover:bg-rose-900/40">Отмена</button>
+        </div>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% if event.meta %}<span class="max-sm:hidden w-52 shrink-0 text-right text-xs leading-snug text-slate-400">{{ event.meta }}</span>{% endif %}
+</article>

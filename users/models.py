@@ -118,6 +118,44 @@ class User(AbstractBaseUser, PermissionsMixin):
         return f"{self.full_name} ({self.email})"
 
 
+class LoginEvent(models.Model):
+    """Журнал входов: кто, откуда и когда вошёл, вышел или не смог войти (users/journal.py).
+
+    UserSession для этого не годится: её строка живёт, пока жива сессия, и выход уносит
+    её вместе со следом. Здесь записи живут JOURNAL_DAYS — их убирает ночная задача
+(core/tasks.py).
+    """
+
+    class Kind(models.TextChoices):
+        LOGIN = "login", "вошёл"
+        LOGOUT = "logout", "вышел"
+        FAILED = "failed", "неверный пароль"
+        STOPPED = "stopped", "остановлен ограничителем"
+
+    # Пусто — попытка на адрес, которого на сайте нет. Сам адрес не храним: в поле почты
+    # нет-нет да набирают пароль.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="пользователь", on_delete=models.CASCADE,
+        null=True, blank=True, related_name="login_events",
+    )
+    kind = models.CharField("что", max_length=10, choices=Kind.choices)
+    ip = models.GenericIPAddressField("адрес", null=True, blank=True)
+    agent = models.CharField("браузер", max_length=200, blank=True)
+    created = models.DateTimeField("когда", default=timezone.now, db_index=True)
+
+    class Meta:
+        verbose_name = "вход"
+        verbose_name_plural = "журнал входов"
+        ordering = ["-id"]
+        indexes = [models.Index(fields=["user", "-created"], name="login_event_user_created")]
+
+    def __str__(self):
+        return f"{self.user or 'неизвестный адрес'}: {self.get_kind_display()}"
+
+    def where(self):
+        return device(self.agent)
+
+
 class UserSession(models.Model):
     """Приписка к сессии: чья она, откуда и когда заходили в последний раз.
 
@@ -158,17 +196,7 @@ class UserSession(models.Model):
         return timezone.now() - self.seen < timedelta(minutes=10)
 
     def where(self):
-        """Браузер и система человеческими словами.
-
-        Порядок в списках важен: Edge представляется и хромом тоже, хром — ещё и сафари.
-        Побеждает первое совпадение, поэтому частные имена стоят раньше общих.
-        """
-        parts = (_first(self.agent, BROWSERS), _first(self.agent, SYSTEMS))
-        if named := " · ".join(part for part in parts if part):
-            return named
-        # Не узнали. Короткую строку показываем как есть — так себя называет сессия,
-        # выданная командой session_for; настоящий User-Agent для этого слишком длинный.
-        return self.agent if 0 < len(self.agent) <= 60 else "неизвестное устройство"
+        return device(self.agent)
 
 
 BROWSERS = (
@@ -183,3 +211,17 @@ SYSTEMS = (
 
 def _first(agent, names):
     return next((name for mark, name in names if mark in agent), "")
+
+
+def device(agent):
+    """Браузер и система человеческими словами.
+
+    Порядок в списках важен: Edge представляется и хромом тоже, хром — ещё и сафари.
+    Побеждает первое совпадение, поэтому частные имена стоят раньше общих.
+    """
+    parts = (_first(agent, BROWSERS), _first(agent, SYSTEMS))
+    if named := " · ".join(part for part in parts if part):
+        return named
+    # Не узнали. Короткую строку показываем как есть — так себя называет сессия,
+    # выданная командой session_for; настоящий User-Agent для этого слишком длинный.
+    return agent if 0 < len(agent) <= 60 else "неизвестное устройство"

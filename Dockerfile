@@ -29,6 +29,11 @@ COPY --from=debian /app/core/static/core/css/base.css core/static/core/css/base.
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Какой коммит в образе — для «Системы» Пульса (settings.SITE_VERSION). Последним слоем:
+# значение новое на каждую выкатку и сбросило бы кэш всех слоёв ниже.
+ARG KNT_VERSION=""
+ENV KNT_VERSION=${KNT_VERSION}
 ENTRYPOINT ["/entrypoint.sh"]
 # ASGI: gunicorn остаётся менеджером процессов, но воркеры uvicorn'овские — держат сокеты.
 # Воркеров 2, по числу ядер: они асинхронные, каждый держит много соединений разом,

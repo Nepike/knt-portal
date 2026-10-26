@@ -110,6 +110,9 @@
             {% endif %}
           </a>
           {% endif %}
+          {% if perms.core.view_pulse %}
+          <a href="{% url 'pulse_home' %}" class="nav-link {% if section == 'pulse' %}nav-link-active{% endif %}"><i class="fa-solid fa-heart-pulse text-lg"></i>Пульс</a>
+          {% endif %}
 
           <a href="{% url 'bookmark_list' %}" class="nav-link {% if section == 'bookmarks' %}nav-link-active{% endif %}"><i class="fa-solid fa-bookmark text-lg"></i>Закладки</a>
           <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>

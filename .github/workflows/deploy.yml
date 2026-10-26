@@ -52,6 +52,7 @@ jobs:
           script: |
             cd /srv/knt
             git pull --ff-only
+            export KNT_VERSION="$(git log -1 --format='%h · %cs · %s')"
             docker compose up -d --build
             docker image prune -f
 

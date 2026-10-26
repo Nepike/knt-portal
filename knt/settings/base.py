@@ -36,6 +36,7 @@ LOCAL_APPS = [
     "cosmetics",
     "wall",
     "printing",
+    "pulse",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -113,6 +114,10 @@ STORAGES = {
 
 # Cloudflare R2 для файлов книг и материалов (attachments.storage.media_storage).
 # Пусто — работаем с локальным диском, так живёт разработка.
+# Какой коммит выкачен: «3f2fc8f · 2026-10-26 · Print to EVERYONE». Ставит сборка образа
+# (Dockerfile, ARG KNT_VERSION из деплоя), не .env; в разработке пусто. Показывает Пульс.
+SITE_VERSION = env("KNT_VERSION", default="")
+
 R2_BUCKET = env("R2_BUCKET", default="")
 # Домен, с которого раздаются пользовательские файлы. Это ДРУГОЙ origin: куки сайта
 # туда не уходят, и проскочивший мимо фильтра html не дотянется до страниц сайта.
@@ -144,6 +149,9 @@ TEST_RUNNER = "core.test_runner.MediaIsolatedRunner"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "users.User"
+# Шлагбаум ограничителя впереди (users/backends.py). ModelBackend — тем же путём, что
+# был по умолчанию: под этим именем записаны все живые сессии.
+AUTHENTICATION_BACKENDS = ["users.backends.LoginGate", "django.contrib.auth.backends.ModelBackend"]
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "/"  # корень ведёт в материалы; TODO: сменить на главную, когда появится
@@ -192,6 +200,11 @@ CELERY_BEAT_SCHEDULE = {
     "sweep-printing": {
         "task": "printing.tasks.sweep_printing",
         "schedule": crontab(hour=3, minute=50),
+    },
+    # Журналы входов и сбоев — короткая уборка, до долгой уборки бакета.
+    "sweep-journals": {
+        "task": "core.tasks.sweep_journals",
+        "schedule": crontab(hour=4, minute=0),
     },
     "sweep-storage": {
         "task": "attachments.tasks.sweep_storage",

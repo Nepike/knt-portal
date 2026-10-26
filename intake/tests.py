@@ -26,7 +26,7 @@ from django.utils import timezone
 
 from attachments.models import File
 from core import agents
-from core.models import Subject
+from core.models import Failure, Subject
 from lectorium.models import Lecture, Playlist
 from materials.models import Material
 from tools import bake
@@ -1114,6 +1114,15 @@ class QueueTests(TestCase):
         self.assertEqual(job.status, MediaJob.Status.FAILED)
         self.assertEqual(job.note, "ffmpeg не справился")
 
+    def test_a_failure_lands_in_the_failure_journal(self):
+        token = self.claim()["token"]
+
+        self.call("intake_fail", token=token, error="ffmpeg не справился")
+
+        failure = Failure.objects.get()
+        self.assertEqual(failure.source, Failure.Source.BAKERY)
+        self.assertEqual(failure.text, "uploads/abc/zapis.mkv: ffmpeg не справился")
+
     def test_the_worker_that_lost_the_job_cannot_touch_it_any_more(self):
         """Медленная пекарня не умерла — она просто молчала дольше часа, и задание
         к тому времени отдали другой. Доделав своё, она снесла бы папку сменщицы."""
@@ -1136,6 +1145,7 @@ class QueueTests(TestCase):
         job = MediaJob.objects.get()
         self.assertEqual(job.status, MediaJob.Status.FAILED)
         self.assertIn(f"{MAX_TRIES} раз", job.note)
+        self.assertIn(f"{MAX_TRIES} раз", Failure.objects.get(source=Failure.Source.BAKERY).text)
 
     def test_a_worn_out_job_does_not_block_the_queue(self):
         """Очередь идёт от старых к новым, и сломанное задание стоит в самой её голове:
@@ -1281,6 +1291,8 @@ class LeftoverTests(TestCase):
         self.lecture.refresh_from_db()
         self.assertEqual(self.lecture.prefix, live)
         swept.assert_not_called()
+        # В журнале — название лекции, а не ключ сырья: по нему её и найдут.
+        self.assertEqual(Failure.objects.get().text, f"«{self.lecture.title}»: ffmpeg упал")
 
     def test_deleting_a_lecture_mid_bake_takes_the_leftovers_with_it(self):
         """Задание уезжает каскадом, и вместе с ним пропадает единственная память

@@ -1,0 +1,5 @@
+{% if alive %}
+<p class="text-sm text-emerald-700 dark:text-emerald-300"><i class="fa-solid fa-check"></i> Воркер ответил.</p>
+{% else %}
+<p class="text-sm text-rose-600 dark:text-rose-400"><i class="fa-solid fa-triangle-exclamation"></i> Очередь не ответила: Redis недоступен или воркер молчит — смотри их логи.</p>
+{% endif %}

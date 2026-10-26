@@ -1,0 +1,11 @@
+{% for event in events %}
+  {% if event.new_day %}<h3 class="pt-4 pb-1 text-sm font-semibold text-slate-500 dark:text-slate-400">{{ event.day }}</h3>{% endif %}
+  {% include "pulse/_event.html" %}
+{% empty %}
+  {% if not cursor %}<p class="py-6 text-center text-sm text-slate-400">Событий нет.</p>{% endif %}
+{% endfor %}
+{% if more %}
+<div hx-get="{% url 'pulse_feed' %}?{{ more }}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-slate-400">
+  <i class="fa-solid fa-spinner fa-spin"></i> ещё…
+</div>
+{% endif %}

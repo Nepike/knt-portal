@@ -12,6 +12,9 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from core.failures import record
+from core.models import Failure
+
 from .models import PrintJob
 
 Status = PrintJob.Status
@@ -34,6 +37,12 @@ def _hand_out(job, now):
     job.tries += 1
     job.claimed_at = job.heard_at = now
     return job
+
+
+def failed_print(job):
+    """В журнал сбоев: печать, не дошедшая до бумаги. Отказ разбора туда не пишем —
+    это беда файла, а не системы, и человек узнаёт о ней на странице задания."""
+    record(Failure.Source.PRINTING, f"«{job.name}», {job.user.full_name}: {job.reason}")
 
 
 def take_analysis():
@@ -87,6 +96,7 @@ def take_print():
             worn.reason = "агент не смог отдать задание принтеру"
             worn.finished_at = now
             worn.save(update_fields=["status", "reason", "finished_at"])
+            failed_print(worn)
         job = free.filter(tries__lt=PRINT_TRIES).first()
         if job is None:
             return None

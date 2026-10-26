@@ -33,18 +33,19 @@ def lock(user):
     return Wallet.objects.select_for_update().get(user=user)
 
 
-def credit(user, amount, reason, note="", key=""):
-    """Начислить. amount — положительное число, key — за что именно (см. BalanceLog.key)."""
+def credit(user, amount, reason, note="", key="", by=None):
+    """Начислить. amount — положительное число, key — за что именно (см. BalanceLog.key),
+    by — кто провёл руками."""
     if amount <= 0:
         raise ValueError("начисление должно быть положительным")
-    return _move(user, amount, reason, note, key)
+    return _move(user, amount, reason, note, key, by=by)
 
 
-def spend(user, amount, reason, note="", key=""):
+def spend(user, amount, reason, note="", key="", by=None):
     """Списать. amount тоже положительный — знак ставим сами."""
     if amount <= 0:
         raise ValueError("списание должно быть положительным")
-    return _move(user, -amount, reason, note, key)
+    return _move(user, -amount, reason, note, key, by=by)
 
 
 def reclaim(user, amount, reason, note="", key=""):
@@ -60,7 +61,7 @@ def reclaim(user, amount, reason, note="", key=""):
 
 
 @transaction.atomic
-def _move(user, delta, reason, note, key="", debt=False):
+def _move(user, delta, reason, note, key="", debt=False, by=None):
     wallet = lock(user)
     balance = wallet.balance + delta
     # Только списание: начисление кошельку в минусе его ещё не закрывает, но отказывать
@@ -70,8 +71,17 @@ def _move(user, delta, reason, note, key="", debt=False):
     wallet.balance = balance
     wallet.save(update_fields=["balance"])
     return BalanceLog.objects.create(
-        wallet=wallet, amount=delta, reason=reason, note=note, key=key, balance_after=balance,
+        wallet=wallet, amount=delta, reason=reason, note=note, key=key, balance_after=balance, by=by,
     )
+
+
+def mismatched():
+    """Кошельки, у которых кэш баланса разошёлся с журналом: [(кошелёк, сумма по журналу)].
+
+    Минус по журналу — не поломка: так выглядит возврат награды за удалённое, если её
+    успели потратить (rewards.remove)."""
+    wallets = Wallet.objects.select_related("user").annotate(journal=Sum("entries__amount"))
+    return [(wallet, wallet.journal or 0) for wallet in wallets if wallet.balance != (wallet.journal or 0)]
 
 
 def recount(wallet):

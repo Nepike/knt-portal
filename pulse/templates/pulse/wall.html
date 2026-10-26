@@ -1,0 +1,126 @@
+{% extends "pulse/base.html" %}
+{% load text_extras %}
+
+{% block heading %}Стена{% endblock %}
+{% block tools %}<a href="{% url 'wall' %}" class="ml-auto btn btn-primary">Открыть Стену</a>{% endblock %}
+
+{% block pulse %}
+{% if not board %}
+<section class="panel p-5 text-sm text-slate-500 dark:text-slate-400">Открытой доски нет.</section>
+{% else %}
+<section class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3" aria-label="Главные цифры">
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Доска «{{ board.title }}»</span>
+    <span class="text-2xl font-bold tabular-nums">{{ board.width }}×{{ board.height }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">открыта {{ board.created|date:"j E Y" }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Закрашено сейчас</span>
+    <span class="text-2xl font-bold tabular-nums">{{ painted }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">из {{ cells }} клеток</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Ходов на доске</span>
+    <span class="text-2xl font-bold tabular-nums">{{ moves }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">стёрто {{ erased }} · рисовали {{ artists }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">За неделю</span>
+    <span class="text-2xl font-bold tabular-nums">{{ week }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ week|plural:"ход,хода,ходов" }} · художников {{ week_artists }}</span>
+  </div>
+  <div class="panel p-4 flex flex-col gap-1">
+    <span class="text-xs text-slate-500 dark:text-slate-400">Закрыта доска</span>
+    <span class="text-2xl font-bold tabular-nums">{{ banned|length }}</span>
+    <span class="text-xs text-slate-500 dark:text-slate-400">{{ banned|length|plural:"человеку,людям,людям" }} сейчас</span>
+  </div>
+</section>
+
+<section class="panel p-5 flex flex-col gap-3">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <h3 class="font-semibold">Ходы по дням</h3>
+    <span class="text-xs text-slate-500 dark:text-slate-400">30 дней · {{ days_total }} {{ days_total|plural:"ход,хода,ходов" }} · из журнала Стены</span>
+  </div>
+  <div class="flex h-28 items-end gap-1 border-b border-slate-200 dark:border-slate-800" role="img" aria-label="Ходы на Стене по дням за 30 дней, всего {{ days_total }}">
+    {% for day in days %}
+    <div class="min-w-0 flex-1 rounded-t {% if day.n %}bg-pink-500{% else %}bg-slate-200 dark:bg-slate-700{% endif %}" style="height: {% if day.n %}{{ day.height }}%{% else %}2px{% endif %}" title="{{ day.day|date:'j E' }}: {{ day.n }}"></div>
+    {% endfor %}
+  </div>
+  <div class="flex justify-between text-xs text-slate-400">
+    <span>{{ days.0.day|date:"j E" }}</span><span>сегодня</span>
+  </div>
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 flex flex-col gap-2" x-data="{ all: false }">
+    <div class="flex items-center gap-2">
+      <h3 class="font-semibold">Кто рисует</h3>
+      <div class="ml-auto flex gap-0.5 rounded-btn bg-slate-100 dark:bg-slate-800 p-1 text-xs" role="group" aria-label="Период">
+        <button type="button" @click="all = false" :aria-pressed="!all" class="rounded-lg px-2.5 py-1" :class="{ 'bg-white dark:bg-slate-900 font-medium shadow-sm': !all }">неделя</button>
+        <button type="button" @click="all = true" :aria-pressed="all" class="rounded-lg px-2.5 py-1" :class="{ 'bg-white dark:bg-slate-900 font-medium shadow-sm': all }">всё время</button>
+      </div>
+    </div>
+    <div x-show="!all" class="flex flex-col gap-2">
+      {% for person, n in top_week %}
+      <div class="flex items-center gap-2 text-sm"><span class="w-5 text-xs text-slate-400">{{ forloop.counter }}</span>{% if person %}<a href="{% url 'pulse_person' person.pk %}" class="min-w-0 flex-1 truncate text-accent hover:underline">{{ person.full_name }}</a>{% else %}<span class="flex-1 text-slate-400">аккаунт удалён</span>{% endif %}<span class="font-medium tabular-nums">{{ n }}</span></div>
+      {% empty %}<p class="text-sm text-slate-400">На этой неделе никто не рисовал.</p>{% endfor %}
+    </div>
+    <div x-show="all" x-cloak class="flex flex-col gap-2">
+      {% for person, n in top_all %}
+      <div class="flex items-center gap-2 text-sm"><span class="w-5 text-xs text-slate-400">{{ forloop.counter }}</span>{% if person %}<a href="{% url 'pulse_person' person.pk %}" class="min-w-0 flex-1 truncate text-accent hover:underline">{{ person.full_name }}</a>{% else %}<span class="flex-1 text-slate-400">аккаунт удалён</span>{% endif %}<span class="font-medium tabular-nums">{{ n }}</span></div>
+      {% empty %}<p class="text-sm text-slate-400">Ходов не было.</p>{% endfor %}
+    </div>
+  </section>
+
+  <section class="panel px-5 py-4 lg:col-span-2">
+    <div class="flex items-baseline gap-3 pb-1">
+      <h3 class="font-semibold">Последние ходы</h3>
+      <a href="{% url 'pulse_feed' %}?kind=wall" class="ml-auto text-sm text-accent hover:underline">в ленте →</a>
+    </div>
+    {% for event in recent %}
+      {% include "pulse/_event.html" with dated=True %}
+    {% empty %}
+      <p class="py-3 text-sm text-slate-400">Ходов не было.</p>
+    {% endfor %}
+  </section>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 flex flex-col gap-2">
+    <h3 class="font-semibold">Кому закрыта доска</h3>
+    {% for profile in banned %}
+    <form method="post" action="{% url 'pulse_wall_unban' profile.user_id %}" class="flex items-center gap-2 text-sm">
+      {% csrf_token %}
+      <a href="{% url 'pulse_person' profile.user_id %}" class="min-w-0 flex-1 truncate text-accent hover:underline">{{ profile.user.full_name }}</a>
+      <span class="text-xs text-slate-400">до {{ profile.banned_until|date:"j E, H:i" }}</span>
+      {% if perms.wall.moderate_wall %}<button type="submit" class="rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-0.5 text-xs hover:border-accent hover:text-accent">открыть</button>{% endif %}
+    </form>
+    {% empty %}
+    <p class="text-sm text-slate-400">Никому. Закрыть — в карточке человека.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-2">
+    <h3 class="font-semibold">Защищённые области</h3>
+    {% for area in areas %}
+    <form method="post" action="{% url 'pulse_wall_unprotect' area.pk %}" class="flex items-center gap-2 text-sm">
+      {% csrf_token %}
+      <span class="min-w-0 flex-1 truncate">{{ area.note|default:"без подписи" }} <span class="text-xs text-slate-400">({{ area.x1 }}, {{ area.y1 }}) – ({{ area.x2 }}, {{ area.y2 }})</span></span>
+      {% if perms.wall.moderate_wall %}<button type="submit" class="rounded-lg border border-rose-200 dark:border-rose-900 px-2 py-0.5 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40">снять</button>{% endif %}
+    </form>
+    {% empty %}
+    <p class="text-sm text-slate-400">Нет ни одной. Защитить — на самой Стене.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-2">
+    <h3 class="font-semibold">Прошлые доски</h3>
+    {% for old in past %}
+    <div class="flex gap-2 text-sm"><span class="min-w-0 flex-1 truncate">«{{ old.title }}»</span><span class="text-xs text-slate-400">{{ old.width }}×{{ old.height }}{% if old.closed %} · закрыта {{ old.closed|date:"j E Y" }}{% endif %}</span></div>
+    {% empty %}
+    <p class="text-sm text-slate-400">Других досок не было.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,159 @@
+{% extends "pulse/base.html" %}
+
+{% block heading %}Система{% endblock %}
+{% block tools %}<span class="ml-auto text-xs text-slate-400">на {% now "H:i" %}</span>{% endblock %}
+
+{% block pulse %}
+{% comment %}
+  Заслон наверху: это единственное здесь, что меняет сайт для всех сразу. Включить может
+  тот, у кого есть право на заслон и сам «Проход при закрытии» — иначе закрылся бы и он.
+{% endcomment %}
+<section x-data="{ ask: false }" class="panel p-4 flex flex-wrap items-center gap-x-5 gap-y-3 {% if lockdown.active %}border-rose-300 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30{% elif lockdown.deadline and lockdown.days_left <= 14 %}border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30{% endif %}">
+  <i class="fa-solid {% if lockdown.active %}fa-lock text-rose-500{% else %}fa-lock-open text-slate-400{% endif %} text-xl"></i>
+  <div class="min-w-0 flex-1 basis-72">
+    <p class="font-semibold">{% if lockdown.active %}Сайт закрыт заслоном{% else %}Сайт открыт{% endif %}</p>
+    <p class="text-xs text-slate-500 dark:text-slate-400">
+      {% if lockdown.deadline %}срок оплаты — {{ lockdown.deadline|date:"j E" }}{% if lockdown.days_left >= 0 %}, осталось {{ lockdown.days_left }} дн.{% else %}, прошёл{% endif %} · {% endif %}текст страницы закрытия и срок — <a href="{% url 'admin:core_lockdown_changelist' %}" class="text-accent hover:underline">в админке</a>
+    </p>
+  </div>
+  {% if perms.core.change_lockdown %}
+  <form method="post" action="{% url 'pulse_system_lockdown' %}" class="flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    {% if lockdown.active %}
+    <input type="hidden" name="active" value="0">
+    <button type="submit" class="btn btn-primary">Открыть сайт</button>
+    {% else %}
+    <input type="hidden" name="active" value="1">
+    <button type="button" x-show="!ask" @click="ask = true" class="btn btn-ghost border border-rose-300 dark:border-rose-800 text-rose-600 dark:text-rose-400">Закрыть сайт…</button>
+    <span x-show="ask" x-cloak class="flex flex-wrap items-center gap-2 text-xs text-rose-800 dark:text-rose-200">
+      Сайт закроется для всех, кроме группы «Доступ при закрытии».
+      <button type="submit" class="rounded-lg bg-rose-600 px-3 py-1.5 font-medium text-white hover:bg-rose-700">Закрыть</button>
+      <button type="button" @click="ask = false" class="rounded-lg px-3 py-1.5 hover:bg-rose-100 dark:hover:bg-rose-900/40">Отмена</button>
+    </span>
+    {% endif %}
+  </form>
+  {% endif %}
+</section>
+
+<section class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3" aria-label="Службы">
+  {% for printer in printers %}{% with state=printer.condition %}
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full {% if state.1 == 'ok' %}bg-emerald-500{% elif state.1 == 'warn' %}bg-amber-500{% else %}bg-rose-500{% endif %}" aria-hidden="true"></span>
+      <span class="font-semibold">{{ printer.name }}</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{{ state.0 }}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">
+      {% if printer.toner_percent is not None %}тонер {{ printer.toner_percent }}% · {% endif %}{% if printer.page_counter %}счётчик {{ printer.page_counter }} · {% endif %}{% if printer.seen_at %}агент на связи {{ printer.seen_at|timesince }} назад{% else %}агент ни разу не отзывался{% endif %}
+    </p>
+    <a href="{% url 'admin:printing_printjob_changelist' %}" class="mt-auto text-xs text-accent hover:underline">задания печати →</a>
+  </div>
+  {% endwith %}{% endfor %}
+
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full {% if bakery.failed %}bg-amber-500{% else %}bg-emerald-500{% endif %}" aria-hidden="true"></span>
+      <span class="font-semibold">Пекарня</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if bakery.waiting or bakery.baking %}ждёт {{ bakery.waiting }} · печётся {{ bakery.baking }}{% else %}очередь пуста{% endif %}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">готово {{ bakery.done }} · не вышло {{ bakery.failed }}{% if bakery.claimed %} · последний раз брала работу {{ bakery.claimed|date:"j E, H:i" }}{% endif %}</p>
+    <a href="{% url 'admin:intake_mediajob_changelist' %}" class="mt-auto text-xs text-accent hover:underline">очередь выпечки →</a>
+  </div>
+
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full {% if redis %}bg-emerald-500{% else %}bg-slate-400{% endif %}" aria-hidden="true"></span>
+      <span class="font-semibold">Redis</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if redis %}{{ redis.0 }} из {{ redis.1 }}{% else %}нет данных{% endif %}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">шина чата, очередь задач, результаты, кэш и ограничители</p>
+  </div>
+
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full {% if mail %}bg-amber-500{% else %}bg-emerald-500{% endif %}" aria-hidden="true"></span>
+      <span class="font-semibold">Почта</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if mail %}последний сбой {{ mail.last_at|date:"j E, H:i" }}{% else %}сбоев нет{% endif %}</span>
+    </div>
+    {% if mail %}<p class="line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ mail.text }}</p>{% endif %}
+  </div>
+
+  <div class="panel p-4 flex flex-col gap-1.5" x-data>
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full {% if backup and backup.ok %}bg-emerald-500{% elif backup %}bg-rose-500{% else %}bg-slate-400{% endif %}" aria-hidden="true"></span>
+      <span class="font-semibold">Бэкап базы</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if backup %}{{ backup.at|date:"j E, H:i" }}{% else %}за неделю не запускался{% endif %}</span>
+    </div>
+    {% if backup %}<p class="line-clamp-2 break-all text-xs text-slate-500 dark:text-slate-400">{{ backup.result }}</p>{% endif %}
+    <div class="mt-auto flex flex-wrap gap-2 pt-1">
+      <button type="button" hx-get="{% url 'pulse_system_backups' %}" hx-target="#backups" hx-swap="innerHTML" class="text-xs text-accent hover:underline">показать копии</button>
+      {% if request.user.is_superuser %}
+      <form method="post" action="{% url 'pulse_system_backup' %}">{% csrf_token %}<button type="submit" class="text-xs text-accent hover:underline">снять сейчас</button></form>
+      {% endif %}
+    </div>
+    <div id="backups"></div>
+  </div>
+
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full bg-slate-400" aria-hidden="true"></span>
+      <span class="font-semibold">Сайт</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if version %}{{ version|truncatechars:9 }}{% else %}версия неизвестна{% endif %}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">{% if version %}{{ version }}{% else %}сборка не передала коммит — так бывает в разработке{% endif %}</p>
+  </div>
+</section>
+
+<div class="grid lg:grid-cols-3 gap-4 items-start">
+  <section class="panel p-5 lg:col-span-2 flex flex-col gap-2">
+    <h3 class="font-semibold">Расписание</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[560px] text-sm">
+        <thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400">
+          <th class="py-2 pr-3 font-medium">Задача</th><th class="py-2 pr-3 font-medium">Когда</th>
+          <th class="py-2 pr-3 font-medium">Последний раз</th><th class="py-2 font-medium">Итог</th>
+        </tr></thead>
+        <tbody>
+          {% for row in schedule %}
+          <tr class="border-t border-slate-100 dark:border-slate-800">
+            <td class="py-2.5 pr-3 font-medium">{{ row.label }}</td>
+            <td class="py-2.5 pr-3 text-slate-600 dark:text-slate-300">{{ row.when }}</td>
+            <td class="py-2.5 pr-3 whitespace-nowrap tabular-nums text-slate-600 dark:text-slate-300">{% if row.last %}{{ row.last.at|date:"j E, H:i" }}{% else %}—{% endif %}</td>
+            <td class="py-2.5">
+              {% if row.last %}<span class="inline-flex items-start gap-1.5"><span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {% if row.last.ok %}bg-emerald-500{% else %}bg-rose-500{% endif %}" aria-hidden="true"></span><span class="line-clamp-2 break-all text-xs text-slate-500 dark:text-slate-400">{{ row.last.result|default:"готово" }}</span></span>{% else %}<span class="text-xs text-slate-400">за неделю не запускалась</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel p-5 flex flex-col gap-3">
+    <h3 class="font-semibold">Очередь задач</h3>
+    <p class="text-xs text-slate-500 dark:text-slate-400">отправить воркеру проверку и подождать ответа до пяти секунд</p>
+    <form hx-post="{% url 'pulse_system_queue' %}" hx-target="#queue" hx-swap="innerHTML" hx-indicator="#queue-wait" class="flex items-center gap-3">
+      <button type="submit" class="btn btn-ghost border border-slate-300 dark:border-slate-700">Проверить</button>
+      <i id="queue-wait" class="fa-solid fa-spinner fa-spin text-slate-400 htmx-indicator"></i>
+    </form>
+    <div id="queue"></div>
+  </section>
+</div>
+
+<section class="panel p-5 flex flex-col gap-1">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 pb-1">
+    <h3 class="font-semibold">Последние сбои</h3>
+    <span class="text-xs text-slate-500 dark:text-slate-400">почта, задачи очереди, печать, пекарня</span>
+    <a href="{% url 'admin:core_failure_changelist' %}" class="ml-auto text-sm text-accent hover:underline">весь журнал →</a>
+  </div>
+  {% for failure in failures %}
+  <div class="flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 dark:border-slate-800 py-2 text-sm">
+    <span class="w-28 shrink-0 text-xs tabular-nums text-slate-400">{{ failure.last_at|date:"j E, H:i" }}</span>
+    <span class="w-28 shrink-0 text-xs text-slate-500 dark:text-slate-400">{{ failure.get_source_display }}{% if failure.times > 1 %} · ×{{ failure.times }}{% endif %}</span>
+    <span class="min-w-0 flex-1 basis-72 break-words">{{ failure.text }}</span>
+  </div>
+  {% empty %}
+  <p class="text-sm text-slate-400">Сбоев не было.</p>
+  {% endfor %}
+</section>
+{% endblock %}
