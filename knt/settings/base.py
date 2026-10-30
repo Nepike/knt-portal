@@ -234,6 +234,10 @@ PRINT_MAX_FILE_MB = 50
 # Больше недельного лимита: печатают часто одну главу из толстого учебника.
 PRINT_MAX_DOC_PAGES = 300
 
+# Архивы аналитики со второго сервера (telegram/views.py) — уходят в чат admin. Свой токен:
+# отзывается отдельно от пекарни и печати. Пусто = ящик закрыт.
+ANALYTICS_TOKEN = env("ANALYTICS_TOKEN", default="")
+
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
 TELEGRAM_CONSOLE = False  # dev печатает сообщения вместо отправки, как и письма
 PROXY = env("PROXY", default="")  # общий прокси для заблокированных ресурсов

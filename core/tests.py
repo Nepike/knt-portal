@@ -1767,6 +1767,16 @@ class LockdownTests(TestCase):
             self.assertTrue(lockdown.always_open(reverse(name)), name)
         self.assertFalse(lockdown.always_open(reverse("print_home")))
 
+    @override_settings(ANALYTICS_TOKEN="token")
+    def test_the_analytics_server_is_not_turned_away(self):
+        close_site()
+
+        response = self.client.post(reverse("analytics_inbox"), headers={"Authorization": "Bearer token"})
+
+        # Без файла — отказ самой ручки, а не заслона: тот отвечал бы страницей и 503.
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response["Content-Type"], "application/json")
+
     # --- сама страница ---
 
     def test_the_answer_says_it_is_temporary_and_must_not_be_kept(self):

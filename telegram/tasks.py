@@ -84,16 +84,9 @@ def send_message(chat_name, text, parse_mode="HTML"):
         )
 
 
-@shared_task(autoretry_for=(RequestException,), retry_backoff=True, retry_kwargs={"max_retries": 2})
-def send_photo(chat_name, text, image, name="image.png", parse_mode="HTML"):
-    """Картинка обращения. Приезжает сюда base64-строкой прямо в задаче (см. notify).
-
-    Длинный текст телеграм в подпись не пустит — тогда шлём его обычным сообщением,
-    а картинку следом: разорванное на две части обращение всё равно лучше обрезанного.
-    """
-    if settings.TELEGRAM_CONSOLE:
-        return to_console(chat_name, f"{text}\n\n[картинка {name}]")
-
+def _attached(chat_name, text, parse_mode, method, **attachment):
+    """Вложение с подписью. Длинный текст телеграм в подпись не пустит — тогда шлём его
+    обычным сообщением, а вложение следом: разорванное на две части всё равно лучше обрезанного."""
     bot, chat = _target(chat_name)
     if not bot:
         return
@@ -102,4 +95,21 @@ def send_photo(chat_name, text, image, name="image.png", parse_mode="HTML"):
     caption = text if len(text) <= CAPTION_LIMIT else None
     if caption is None:
         bot.send_message(**where, text=fit(text), parse_mode=parse_mode)
-    bot.send_photo(**where, photo=b64decode(image), caption=caption, parse_mode=parse_mode)
+    getattr(bot, method)(**where, **attachment, caption=caption, parse_mode=parse_mode)
+
+
+@shared_task(autoretry_for=(RequestException,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def send_photo(chat_name, text, image, name="image.png", parse_mode="HTML"):
+    """Картинка обращения. Приезжает сюда base64-строкой прямо в задаче (см. notify)."""
+    if settings.TELEGRAM_CONSOLE:
+        return to_console(chat_name, f"{text}\n\n[картинка {name}]")
+    _attached(chat_name, text, parse_mode, "send_photo", photo=b64decode(image))
+
+
+@shared_task(autoretry_for=(RequestException,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def send_document(chat_name, text, document, name, parse_mode="HTML"):
+    """Файл как есть (архив аналитики, telegram/views.py) — base64-строкой в задаче, как
+    картинка: сайт его нигде не хранит, а воркер живёт в отдельном контейнере."""
+    if settings.TELEGRAM_CONSOLE:
+        return to_console(chat_name, f"{text}\n\n[файл {name}]")
+    _attached(chat_name, text, parse_mode, "send_document", document=b64decode(document), visible_file_name=name)

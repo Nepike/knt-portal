@@ -17,6 +17,8 @@ SUPPORT = "support"
 FEEDBACK = "feedback"
 # Неполадки принтеров и молчание агента печати (printing.alerts) — тем, кто носит бумагу.
 PRINTERS = "printers"
+# Архивы аналитики со второго сервера (telegram/views.py).
+ADMIN = "admin"
 
 
 def notify(chat_name, template, context=None, image=None):

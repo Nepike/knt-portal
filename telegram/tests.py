@@ -3,15 +3,18 @@ from base64 import b64decode, b64encode
 from unittest import mock
 
 from celery.exceptions import OperationalError
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.urls import reverse
 
 from .bot import get_bot
 from .models import TelegramChat
-from .notify import MODERATION, notify
-from .tasks import CAPTION_LIMIT, CUT, MESSAGE_LIMIT, fit, send_message, send_photo
+from .notify import ADMIN, MODERATION, notify
+from .tasks import CAPTION_LIMIT, CUT, MESSAGE_LIMIT, fit, send_document, send_message, send_photo
+from .views import MAX_ARCHIVE
 
 # Шаблон держим прямо здесь: настоящие появятся вместе с модерацией.
 TEMPLATES = [{
@@ -149,6 +152,140 @@ class SendPhotoTests(TestCase):
 
         bot.send_message.assert_called_once()
         self.assertIsNone(bot.send_photo.call_args.kwargs["caption"])
+
+
+@override_settings(TELEGRAM_CONSOLE=False)
+class SendDocumentTests(TestCase):
+    def test_the_file_goes_as_is_under_its_own_name(self):
+        TelegramChat.objects.create(name=ADMIN, chat_id=-1001234567890, topic_id=3)
+        bot = mock.MagicMock()
+        with mock.patch("telegram.tasks.get_bot", return_value=bot):
+            send_document(ADMIN, "📦 Аналитика", b64encode(b"PK\x03\x04-bytes").decode(), "stats.zip")
+
+        bot.send_message.assert_not_called()
+        kwargs = bot.send_document.call_args.kwargs
+        self.assertEqual(kwargs["document"], b"PK\x03\x04-bytes")
+        self.assertEqual(kwargs["visible_file_name"], "stats.zip")
+        self.assertEqual(kwargs["caption"], "📦 Аналитика")
+        self.assertEqual(kwargs["message_thread_id"], 3)
+
+    @override_settings(TELEGRAM_CONSOLE=True)
+    def test_on_development_it_is_printed_with_the_file_name(self):
+        with mock.patch("telegram.tasks.sys.stdout") as out:
+            send_document(ADMIN, "📦 Аналитика", b64encode(b"PK").decode(), "stats.zip")
+
+        self.assertIn("[файл stats.zip]", "".join(call.args[0] for call in out.write.call_args_list))
+
+
+ZIP = b"PK\x03\x04" + b"\0" * 100
+TOKEN = "analytics-token"
+
+
+@override_settings(ANALYTICS_TOKEN=TOKEN)
+class AnalyticsInboxTests(TestCase):
+    """Второй сервер шлёт архив скриптом, сайт пересылает его в чат admin и нигде не хранит."""
+
+    def setUp(self):
+        cache.clear()  # ограничитель живёт в кэше и переживает тесты
+        self.broker = self.patch("telegram.views.celery_app.connection_for_write")
+        self.sent = self.patch("telegram.views.send_document.apply_async")
+
+    def patch(self, target):
+        patcher = mock.patch(target)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def post(self, content=ZIP, name="stats.zip", token=TOKEN, **data):
+        if content is not None:
+            data["file"] = SimpleUploadedFile(name, content, content_type="application/octet-stream")
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return self.client.post(reverse("analytics_inbox"), data, headers=headers)
+
+    def test_an_archive_goes_to_the_admin_chat_as_it_came(self):
+        response = self.post(note="за неделю <b>")
+
+        self.assertEqual(response.json(), {"ok": True, "name": "stats.zip", "size": len(ZIP)})
+        chat, text, encoded, name = self.sent.call_args.kwargs["args"]
+        self.assertEqual(chat, ADMIN)
+        self.assertEqual(b64decode(encoded), ZIP)
+        self.assertEqual(name, "stats.zip")
+        self.assertIn("stats.zip", text)
+        self.assertIn("за неделю &lt;b&gt;", text)  # подпись идёт в режиме HTML
+
+    def test_without_the_right_token_nothing_is_taken(self):
+        for token in ("", "чужой", TOKEN + "x"):
+            with self.subTest(token=token):
+                self.assertEqual(self.post(token=token).status_code, 401)
+        self.sent.assert_not_called()
+
+    @override_settings(ANALYTICS_TOKEN="")
+    def test_a_forgotten_token_closes_the_box_instead_of_opening_it(self):
+        response = self.post(token="")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("ANALYTICS_TOKEN", response.json()["error"])
+        self.sent.assert_not_called()
+
+    def test_every_kind_of_archive_is_recognised_by_its_first_bytes(self):
+        heads = {
+            "zip": ZIP, "пустой zip": b"PK\x05\x06" + b"\0" * 18, "tar.gz": b"\x1f\x8b\x08" + b"\0" * 20,
+            "bz2": b"BZh91AY", "xz": b"\xfd7zXZ\x00\0\0", "7z": b"7z\xbc\xaf\x27\x1c\0\4",
+            "zst": b"\x28\xb5\x2f\xfd\0", "tar": b"\0" * 257 + b"ustar\x0000" + b"\0" * 50,
+        }
+        for kind, content in heads.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(self.post(content, name="stats.bin").status_code, 200)
+
+    def test_anything_else_is_turned_away_whatever_it_is_called(self):
+        for content in (b"<html><script>", b"MZ\x90\x00", b"id,visits\n1,2\n"):
+            with self.subTest(content=content):
+                response = self.post(content, name="stats.zip")
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("не архив", response.json()["error"])
+        self.sent.assert_not_called()
+
+    def test_without_a_file_the_script_is_told_what_to_send(self):
+        response = self.post(content=None)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("file", response.json()["error"])
+
+    def test_a_body_declared_too_big_is_refused_before_it_is_read(self):
+        with mock.patch("django.http.request.MultiPartParser") as parser:
+            response = self.client.post(
+                reverse("analytics_inbox"), {"file": SimpleUploadedFile("stats.zip", ZIP)},
+                headers={"Authorization": f"Bearer {TOKEN}"}, CONTENT_LENGTH=str(MAX_ARCHIVE * 2),
+            )
+
+        self.assertEqual(response.status_code, 413)
+        parser.assert_not_called()
+
+    def test_a_file_over_the_limit_is_refused_even_when_the_length_was_not_declared(self):
+        with mock.patch("telegram.views.MAX_ARCHIVE", len(ZIP) - 1):
+            response = self.post()
+
+        self.assertEqual(response.status_code, 413)
+        self.sent.assert_not_called()
+
+    def test_a_runaway_script_is_stopped_but_others_could_not_spend_its_limit(self):
+        with mock.patch("telegram.views.PER_HOUR", 3):
+            for _ in range(5):
+                self.post(token="чужой")  # без токена — мимо счёта
+            answers = [self.post().status_code for _ in range(4)]
+
+        self.assertEqual(answers, [200, 200, 200, 429])
+        self.assertEqual(self.sent.call_count, 3)
+
+    def test_with_the_broker_down_the_script_hears_it_at_once(self):
+        self.broker.return_value.__enter__.return_value.ensure_connection.side_effect = OSError("нет Redis")
+        with self.assertLogs("telegram.views", "WARNING"):
+            response = self.post()
+
+        self.assertEqual(response.status_code, 503)
+        self.sent.assert_not_called()
+
+    def test_it_is_for_scripts_only(self):
+        self.assertEqual(self.client.get(reverse("analytics_inbox")).status_code, 405)
 
 
 class FitTests(SimpleTestCase):

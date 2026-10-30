@@ -1,0 +1,7 @@
+{% comment %}
+  Подпись к архиву аналитики со второго сервера (telegram/views.py). Сам архив — вложением.
+{% endcomment %}
+📦 <b>Аналитика</b> · {{ name }} · {{ size }}
+{% if note %}
+<blockquote>{{ note }}</blockquote>
+{% endif %}
