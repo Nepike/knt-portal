@@ -10,6 +10,27 @@ from .widgets import AccentSelect, AccentSelectMultiple
 # галереи, — это всё-таки сообщение в брокере, а не файл на диске.
 MAX_SUPPORT_IMAGE = 5 * 1024 * 1024
 
+
+class CappedImageField(forms.ImageField):
+    """Поле картинки, которое меряет файл ДО того, как его откроет Pillow.
+
+    Обычный ImageField открывает картинку ещё в to_python, а потолок в clean_<поле>
+    срабатывал уже после разбора. Разбор не бесплатен: Pillow 12.2 склеивал блоки
+    комментария GIF за квадратичное время, и такой файл в форме, открытой всему
+    интернету, держал воркер минуту на запрос (отчёт безопасников, 30 окт 2026).
+    Размер загрузки известен до всякого разбора — по нему и отсекаем.
+    """
+
+    def __init__(self, *, max_size, **kwargs):
+        self.max_size = max_size
+        super().__init__(**kwargs)
+
+    def to_python(self, data):
+        if data and getattr(data, "size", 0) > self.max_size:
+            raise forms.ValidationError(f"Картинка больше {human_size(self.max_size)}", code="too_big")
+        return super().to_python(data)
+
+
 SUBJECTS = [
     ("1", "Алгебра"), ("2", "Геометрия"), ("3", "Математический анализ"),
     ("4", "Физика"), ("5", "Программирование"), ("6", "Английский язык"),
@@ -45,7 +66,7 @@ class SupportForm(forms.Form):
 
     topic = forms.ChoiceField(label="Тема", choices=TOPICS, initial="broken", widget=AccentSelect)
     text = forms.CharField(label="Сообщение", max_length=2000, widget=forms.Textarea(attrs={"rows": 8}))
-    image = forms.ImageField(label="Картинка", required=False)
+    image = CappedImageField(label="Картинка", required=False, max_size=MAX_SUPPORT_IMAGE)
     contact = forms.CharField(label="Почта или телеграм для ответа", max_length=100)
 
     def __init__(self, *args, known=False, **kwargs):
@@ -55,12 +76,6 @@ class SupportForm(forms.Form):
         super().__init__(*args, **kwargs)
         if known:
             del self.fields["contact"]
-
-    def clean_image(self):
-        image = self.cleaned_data["image"]
-        if image and image.size > MAX_SUPPORT_IMAGE:
-            raise forms.ValidationError(f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
-        return image
 
 
 class FeedbackForm(forms.Form):
@@ -77,7 +92,7 @@ class FeedbackForm(forms.Form):
     """
 
     text = forms.CharField(label="Вопрос", max_length=2000, widget=forms.Textarea(attrs={"rows": 4}))
-    image = forms.ImageField(label="Картинка", required=False)
+    image = CappedImageField(label="Картинка", required=False, max_size=MAX_SUPPORT_IMAGE)
     name = forms.CharField(label="Как вас зовут", max_length=100)
     contact = forms.CharField(label="Почта, телеграм или ВК для ответа", max_length=100)
 
@@ -88,12 +103,6 @@ class FeedbackForm(forms.Form):
         if known:
             del self.fields["name"]
             del self.fields["contact"]
-
-    def clean_image(self):
-        image = self.cleaned_data["image"]
-        if image and image.size > MAX_SUPPORT_IMAGE:
-            raise forms.ValidationError(f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
-        return image
 
 
 class DemoForm(forms.Form):

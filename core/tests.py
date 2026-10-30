@@ -32,6 +32,7 @@ from django.utils import timezone
 import yaml
 from PIL import Image as PilImage
 
+from attachments.models import human_size
 from attachments.storage import file_storage
 from attachments.uploads import under
 from knt.celery import app as celery_app
@@ -49,6 +50,7 @@ from . import backup, donors, lockdown, nav, runs
 from .context_processors import theme_for
 from .search import by_name
 from .failures import record
+from .forms import MAX_SUPPORT_IMAGE
 from .throttle import client_ip, exhausted, forgive, strike, throttled
 from .markup import render
 from .mail import pack
@@ -599,6 +601,11 @@ def make_image(name="скриншот.png"):
     return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
 
 
+def oversized_upload():
+    """Файл на байт больше потолка открытых форм. Содержимое неважно: до разбора дойти не должно."""
+    return SimpleUploadedFile("x.gif", b"\0" * (MAX_SUPPORT_IMAGE + 1), content_type="image/gif")
+
+
 class PeopleSearchTests(TestCase):
     """Поиск по имени — один на весь сайт, core/search.py."""
 
@@ -1095,6 +1102,14 @@ class ContactsPageTests(TestCase):
 
         self.assertEqual(sent.call_count, 10)
 
+    def test_a_picture_over_the_limit_is_turned_away_before_pillow_opens_it(self):
+        """Разбор картинки не бесплатен, а форма открыта всем (отчёт 30 окт 2026)."""
+        with patch("PIL.Image.open") as opened:
+            response = self.client.post(reverse("contacts"), {"text": "?", "image": oversized_upload()})
+
+        self.assertFormError(response.context["form"], "image", f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
+        opened.assert_not_called()
+
     def test_the_message_says_who_asked_and_how_to_answer(self):
         text = render_to_string("telegram/feedback.html", {
             "author": None, "text": "Есть ли общежитие?", "name": "Абитуриент", "contact": "abit@mail.ru",
@@ -1215,6 +1230,14 @@ class SupportWithoutLoginTests(TestCase):
         context = sent.call_args.args[2]
         self.assertIsNone(context["author"])
         self.assertEqual(context["contact"], "ivan@mipt.ru")
+
+    def test_a_picture_over_the_limit_is_turned_away_before_pillow_opens_it(self):
+        """Разбор картинки не бесплатен, а форма открыта всем (отчёт 30 окт 2026)."""
+        with patch("PIL.Image.open") as opened:
+            response = self.client.post(reverse("support"), {"topic": "other", "text": "?", "image": oversized_upload()})
+
+        self.assertFormError(response.context["form"], "image", f"Картинка больше {human_size(MAX_SUPPORT_IMAGE)}")
+        opened.assert_not_called()
 
     def test_the_message_shows_that_nobody_stands_behind_the_report(self):
         text = render_to_string("telegram/support.html", {
