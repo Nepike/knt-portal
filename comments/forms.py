@@ -36,9 +36,12 @@ class CommentForm(forms.ModelForm):
     def clean_image(self):
         image = self.cleaned_data["image"]
         # Только новую: прежняя картинка — это поле записи, и читать её пришлось бы из хранилища.
-        if isinstance(image, UploadedFile) and (problem := uploads.check_picture(image)):
+        if not isinstance(image, UploadedFile):
+            return image
+        if problem := uploads.check_picture(image):
             raise forms.ValidationError(problem)
-        return image
+        # Комментарий бывает анонимным, а снимок с телефона несёт координаты и модель телефона.
+        return uploads.scrubbed(image)
 
     def clean(self):
         data = super().clean()

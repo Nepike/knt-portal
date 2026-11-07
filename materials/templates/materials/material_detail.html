@@ -58,7 +58,7 @@
     {% endif %}
 
     {% if material.images.all %}
-    {% include "attachments/_images.html" with images=material.images.all %}
+    {% include "attachments/_images.html" with images=material.images.all anonymous=material.hide_uploader %}
     {% endif %}
 
     {% if material.files.all %}

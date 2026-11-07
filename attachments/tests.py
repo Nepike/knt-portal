@@ -33,6 +33,7 @@ from django.db import transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image as PilImage
+from PIL import ImageCms, PngImagePlugin
 
 from core.models import Subject
 from intake.models import MediaJob
@@ -44,6 +45,7 @@ from . import hls
 from .media import MEDIA_CACHE, file_url, hls_key, hls_url, media_key, media_url, redirect_url
 from .models import File
 from .r2 import R2Storage
+from .scrub import Unreadable, scrub
 from .storage import CONTENT_TYPES, content_type, drop_prefix, file_storage, media_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
@@ -1086,6 +1088,142 @@ class PicturePixelTests(SimpleTestCase):
     def test_pillow_itself_has_the_same_ceiling(self):
         """Страховка для кода, который однажды откроет картинку мимо check_picture."""
         self.assertEqual(PilImage.MAX_IMAGE_PIXELS, MAX_PICTURE_PIXELS)
+
+
+# Что выдаёт автора и не должно пережить очистку — ни в метаданных, ни где-то в байтах.
+SECRETS = (b"Pixel 9", b"Ivanov", b"2026:10:12", b"secret")
+XMP = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><dc:creator>Ivanov</dc:creator></x:xmpmeta>'
+GPS = 0x8825
+
+
+def _phone_exif(turn=6):
+    exif = PilImage.Exif()
+    exif[0x0110] = "Pixel 9 Pro"            # модель
+    exif[0x0132] = "2026:10:12 14:30:12"    # время съёмки
+    exif[0x0112] = turn                     # поворот: телефон держали боком
+    gps = exif.get_ifd(GPS)
+    gps[1], gps[2] = "N", (55.0, 45.0, 0.0)
+    return exif
+
+
+def _gradient(mode="RGB"):
+    image = PilImage.new("RGB", (32, 24))
+    image.putdata([(x * 8, y * 10, (x + y) * 4) for y in range(24) for x in range(32)])
+    return image.convert(mode)
+
+
+def _saved(image, kind, **options):
+    buffer = BytesIO()
+    image.save(buffer, kind, **options)
+    return buffer.getvalue()
+
+
+def phone_photo(name="IMG_20261012_143012.jpg"):
+    """Снимок, как его сохраняет телефон: модель, время, координаты, поворот, XMP, комментарий."""
+    data = _saved(_gradient(), "JPEG", exif=_phone_exif(), xmp=XMP, comment=b"secret")
+    return SimpleUploadedFile(name, data, content_type="image/jpeg")
+
+
+def assert_scrubbed(case, data):
+    """Картинка без координат, модели, времени, XMP и комментария."""
+    with PilImage.open(BytesIO(data)) as image:
+        case.assertEqual(dict(image.getexif().get_ifd(GPS)), {})
+        case.assertNotIn("xmp", image.info)
+        case.assertNotIn("comment", image.info)
+    for secret in SECRETS:
+        case.assertNotIn(secret, data)
+
+
+class ScrubTests(SimpleTestCase):
+    """Очистка картинки (attachments/scrub.py): уходит всё, что выдаёт автора, а сама
+    картинка не меняется ни на точку — пиксели не пережимаются."""
+
+    def clean(self, data, kind):
+        clean = scrub(data, kind)
+        with PilImage.open(BytesIO(data)) as before, PilImage.open(BytesIO(clean)) as after:
+            self.assertEqual(before.convert("RGBA").tobytes(), after.convert("RGBA").tobytes())
+        assert_scrubbed(self, clean)
+        return PilImage.open(BytesIO(clean))
+
+    def test_a_phone_photo_keeps_only_its_turn(self):
+        """Без поворота снимок лёг бы на бок: его телефон тоже пишет в EXIF."""
+        after = self.clean(phone_photo().read() + b"secret tail", "JPEG")
+
+        self.assertEqual(dict(after.getexif()), {0x0112: 6})
+
+    def test_an_upright_photo_gets_no_exif_at_all(self):
+        after = self.clean(_saved(_gradient(), "JPEG", exif=_phone_exif(turn=1)), "JPEG")
+
+        self.assertEqual(dict(after.getexif()), {})
+
+    def test_progressive_photos_and_restart_markers_survive(self):
+        for options in ({"progressive": True}, {"restart_marker_blocks": 1}):
+            with self.subTest(**options):
+                self.clean(_saved(_gradient(), "JPEG", exif=_phone_exif(), **options), "JPEG")
+
+    def test_a_cmyk_photo_keeps_its_colours(self):
+        """Сегмент Adobe говорит, как читать цвета CMYK: без него снимок раскрасился бы иначе.
+        Pillow сам на него не смотрит (CMYK у него всегда «как у Adobe»), браузеры — смотрят,
+        поэтому проверяем по байтам."""
+        data = _saved(_gradient("CMYK"), "JPEG", exif=_phone_exif())
+
+        self.clean(data, "JPEG")
+        self.assertIn(b"\xff\xee\x00\x0eAdobe", scrub(data, "JPEG"))
+
+    def test_the_colour_profile_stays(self):
+        profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+        for kind, mode in (("JPEG", "RGB"), ("PNG", "RGBA"), ("WEBP", "RGBA")):
+            with self.subTest(kind):
+                data = _saved(_gradient(mode), kind, exif=_phone_exif(), icc_profile=profile,
+                              **({"lossless": True} if kind == "WEBP" else {}))
+                self.assertEqual(self.clean(data, kind).info.get("icc_profile"), profile)
+
+    def test_an_mpo_keeps_only_the_first_frame(self):
+        """Второй кадр MPO — целый JPEG со своим EXIF после конца первого."""
+        data = _saved(_gradient(), "MPO", save_all=True, append_images=[_gradient()], exif=_phone_exif())
+
+        after = self.clean(data, "MPO")
+
+        self.assertEqual(getattr(after, "n_frames", 1), 1)
+
+    def test_png_text_and_exif_go_and_transparency_stays(self):
+        text = PngImagePlugin.PngInfo()
+        text.add_text("Author", "secret")
+        text.add_itxt("XML:com.adobe.xmp", XMP.decode())
+        rgba = _saved(_gradient("RGBA"), "PNG", pnginfo=text, exif=_phone_exif())
+        palette = _saved(_gradient().convert("P", palette=PilImage.ADAPTIVE), "PNG", transparency=0, pnginfo=text)
+
+        self.assertEqual(dict(self.clean(rgba + b"secret", "PNG").getexif()), {0x0112: 6})
+        self.assertIn("transparency", self.clean(palette, "PNG").info)
+
+    def test_webp_metadata_goes_and_frames_stay(self):
+        simple = _saved(_gradient(), "WEBP", lossless=True)
+        extended = _saved(_gradient("RGBA"), "WEBP", lossless=True, exif=_phone_exif(), xmp=XMP)
+        animated = _saved(_gradient(), "WEBP", lossless=True, save_all=True,
+                          append_images=[_gradient().rotate(90)], exif=_phone_exif(), xmp=XMP)
+
+        self.assertEqual(scrub(simple, "WEBP"), simple)
+        self.assertEqual(dict(self.clean(extended, "WEBP").getexif()), {0x0112: 6})
+        self.assertEqual(self.clean(animated, "WEBP").n_frames, 2)
+
+    def test_gif_comment_goes_and_animation_stays(self):
+        data = _saved(_gradient().convert("P"), "GIF", save_all=True, loop=0, comment=b"secret",
+                      append_images=[_gradient().convert("P").rotate(90)])
+
+        after = self.clean(data + b"secret", "GIF")
+
+        self.assertEqual(after.n_frames, 2)
+        self.assertEqual(after.info.get("loop"), 0)
+
+    def test_a_cut_off_file_is_unreadable_and_refused(self):
+        """Pillow такой открывает (verify не разжимает данные), а очистить его нельзя —
+        и сохранить как есть, с метаданными, тоже. Значит, не берём."""
+        cut = phone_photo().read()[:-30]  # оборван посреди сжатых данных, без конца картинки
+
+        with self.assertRaises(Unreadable):
+            scrub(cut, "JPEG")
+        problem = check_picture(SimpleUploadedFile("обрывок.jpg", cut))
+        self.assertTrue(problem.startswith("«обрывок.jpg» — не получилось прочитать картинку"), problem)
 
 
 class PictureFormatTests(SimpleTestCase):

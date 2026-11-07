@@ -62,6 +62,17 @@ class CommentTests(TestCase):
         self.assertContains(response, "снимок HEIC с айфона сохрани как JPEG")
         self.assertFalse(Comment.objects.exists())
 
+    def test_an_anonymous_photo_keeps_neither_its_exif_nor_its_name(self):
+        """Геометка общежития и «IMG_20261012_143012.jpg» в адресе назвали бы автора."""
+        from attachments.tests import assert_scrubbed, phone_photo
+
+        self.add(text="смотрите", image=phone_photo(), hide_author="on")
+
+        comment = Comment.objects.get()
+        self.assertRegex(comment.image.name, r"^comments/[0-9a-f]{32}/image\.jpg$")
+        with comment.image.open("rb") as stored:
+            assert_scrubbed(self, stored.read())
+
     def test_editing_the_text_does_not_read_the_old_picture_back(self):
         """Прежняя картинка лежит в хранилище: проверять её заново — значит скачивать."""
         self.add(text="было", image=make_image())

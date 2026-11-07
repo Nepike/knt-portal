@@ -44,6 +44,17 @@ class ReviewImageTests(TestCase):
         self.client.post(self.url, {"text": "Доска после пары", "image": make_image(), **extra})
         return Review.objects.get()
 
+    def test_an_anonymous_photo_keeps_neither_its_exif_nor_its_name(self):
+        """Анонимный отзыв о преподавателе со снимком с телефона: геометка и имя файла
+        вида IMG_20261012_143012.jpg сужали круг до одного человека."""
+        from attachments.tests import assert_scrubbed, phone_photo
+
+        review = self.review_with_image(image=phone_photo(), hide_author="on")
+
+        self.assertRegex(review.image.name, r"^reviews/[0-9a-f]{32}/image\.jpg$")
+        with review.image.open("rb") as stored:
+            assert_scrubbed(self, stored.read())
+
     def test_a_review_may_be_a_picture_alone(self):
         review = self.review_with_image(text="")
         self.assertTrue(review.image)

@@ -12,10 +12,12 @@ from django.urls import reverse
 from django.utils import timezone
 
 from django.core.files.storage import FileSystemStorage
+from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image as PilImage
 
 from .media import media_url
 from .models import File, Image, human_size
+from .scrub import Unreadable, scrub
 from .storage import content_type, file_storage, random_key
 
 MB = 1024 * 1024
@@ -193,6 +195,14 @@ def check_picture(upload):
     if pixels > MAX_PICTURE_PIXELS:
         return too_many_pixels(upload.name)
     if kind in PICTURES:
+        # Сохраняется она только очищенной (scrubbed), и раз очистить не вышло — не берём:
+        # оставить метаданные в анонимном отзыве хуже, чем отказать.
+        try:
+            scrub(upload.read(), kind)
+        except Unreadable:
+            return f"«{upload.name}» — {UNREADABLE_PICTURE[0].lower()}{UNREADABLE_PICTURE[1:]}"
+        finally:
+            upload.seek(0)
         return None
     head = upload.read(12)
     upload.seek(0)
@@ -201,6 +211,23 @@ def check_picture(upload):
     if kind is None:
         return f"«{upload.name}» — это не картинка. {PICTURE_HINT}"
     return f"«{upload.name}» — формат {kind} показывают не все браузеры. {PICTURE_HINT}"
+
+
+def scrubbed(upload):
+    """Картинка, какой её увидят другие: без метаданных (attachments/scrub.py) и под безликим
+    именем. Имя файла попадает в ключ хранилища, а ключ читается из адреса картинки: подпись
+    в нём сжата, но не зашифрована — «Иванов_зачётка.jpg» выдал бы автора анонимного отзыва.
+
+    Расширение — по содержимому, а не по имени: по нему объекту назначается тип
+    (storage.CONTENT_TYPES), и снимок, названный «фото.txt», иначе уехал бы браузеру текстом.
+    Зовётся после check_picture: формат уже проверен, и очистка уже однажды прошла.
+    """
+    kind = picture_format(upload)
+    upload.seek(0)
+    name = "image" + PICTURES[kind]
+    clean = SimpleUploadedFile(name, scrub(upload.read(), kind), content_type=content_type(name))
+    upload.seek(0)
+    return clean
 
 
 def check_images(uploads):
@@ -597,14 +624,10 @@ def sync_images(request, owner):
 
     order = len(by_pk)
     for upload in request.FILES.getlist("images"):
-        shown = upload.name
-        # Расширение ключа — по содержимому, а не по имени: по нему объекту назначается
-        # тип (storage.CONTENT_TYPES), и снимок, названный «фото.txt» или «фото.heic»,
-        # иначе уехал бы браузеру текстом или тем, чего тот не показывает.
-        upload.name = Path(shown).stem + PICTURES[picture_format(upload)]
+        # Исходное имя — только подписью в галерее; у анонимного материала его не покажут.
         Image.objects.create(
             **{owner._meta.model_name: owner},
-            name=shown[:150], image=upload, uploader=request.user, order=order,
+            name=upload.name[:150], image=scrubbed(upload), uploader=request.user, order=order,
         )
         order += 1
 

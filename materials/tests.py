@@ -448,14 +448,31 @@ class GalleryTests(TestCase):
         self.assertContains(response, "это не картинка")
         self.assertFalse(Image.objects.exists())
 
-    def test_the_key_takes_its_extension_from_the_content(self):
+    def test_the_key_takes_its_extension_from_the_content_and_not_the_name(self):
         """По расширению ключа объекту назначается тип. Снимок, названный «фото.txt»,
-        иначе уехал бы браузеру текстом — и на его месте был бы пустой квадрат."""
-        self.client.post(reverse("material_new"), self.fields(images=make_image("фото.txt")))
+        иначе уехал бы браузеру текстом — и на его месте был бы пустой квадрат. А имени
+        в ключе нет вовсе: ключ читается из адреса картинки (attachments.uploads.scrubbed)."""
+        self.client.post(reverse("material_new"), self.fields(images=make_image("Иванов_фото.txt")))
 
         image = Image.objects.get()
-        self.assertTrue(image.image.name.endswith("/фото.png"), image.image.name)
-        self.assertEqual(image.name, "фото.txt")  # а человеку показываем то имя, что он дал
+        self.assertTrue(image.image.name.endswith("/image.png"), image.image.name)
+        self.assertNotIn("Иванов", image.image.name)
+        self.assertEqual(image.name, "Иванов_фото.txt")  # подпись в галерее — то имя, что дал человек
+
+    def test_an_anonymous_material_shows_numbers_instead_of_file_names(self):
+        self.client.post(reverse("material_new"), self.fields(
+            images=make_image("Зубров_зачётка.png"), hide_uploader="on",
+        ))
+        material = Material.objects.get()
+        page = self.client.get(reverse("material_detail", args=[material.pk])).content.decode()
+
+        self.assertNotIn("Зубров", page)
+        self.assertIn("Изображение 1", page)
+
+        # Флаг решает в момент показа: снял анонимность — подписи вернулись.
+        Material.objects.filter(pk=material.pk).update(hide_uploader=False)
+        page = self.client.get(reverse("material_detail", args=[material.pk])).content.decode()
+        self.assertIn("Зубров_зачётка.png", page)
 
     def test_huge_image_is_refused(self):
         with mock.patch("attachments.uploads.MAX_IMAGE_SIZE", 10):

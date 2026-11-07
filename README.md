@@ -105,6 +105,13 @@ is how development runs so that it never touches the production bucket. `storage
 is already uploaded between the two. In production nginx serves the bytes and Django only returns
 the header (`MEDIA_ACCEL`).
 
+**Pictures others see are scrubbed on the way in.** Review, comment and gallery images lose EXIF, XMP
+and comments (`attachments/scrub.py`) and are stored as `image.<ext>`: a phone photo carries GPS
+coordinates and the phone model, and the original file name ends up in the key, which is readable
+from the picture's URL — either would unmask the author of an anonymous review. The stripping works
+on the file structure, so pixels are untouched and nothing is decoded into memory; only the
+orientation tag is written back.
+
 **The wall keeps a timelapse.** Board dimensions are capped at 255 because the replay journal
 writes three bytes per event — x, y, colour — and a wider board would not fit that format. A
 partial unique constraint guarantees at most one active board; with none the page answers 404.

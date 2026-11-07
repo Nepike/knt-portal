@@ -1,10 +1,11 @@
 {% load text_extras attachment_extras %}
 {% comment %}
-  Галерея на странице: превью сеткой, по клику — просмотрщик. Ждёт images.
-  Адреса идут через фильтр media — см. attachments/media.py.
+  Галерея на странице: превью сеткой, по клику — просмотрщик. Ждёт images и anonymous.
+  Адреса идут через фильтр media — см. attachments/media.py. У анонимного материала вместо
+  имён файлов — номера: «Иванов_зачётка.jpg» назвал бы автора, а флаг можно поставить и потом.
 {% endcomment %}
 <div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800"
-     x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media|escapejs }}', name: '{{ image.name|escapejs }}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">
+     x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media|escapejs }}', name: '{% if anonymous %}Изображение {{ forloop.counter }}{% else %}{{ image.name|escapejs }}{% endif %}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">
   <h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2">
     {{ images|length }} {{ images|length|plural:"изображение,изображения,изображений" }}
   </h2>
@@ -13,7 +14,7 @@
     {% for image in images %}
     <button type="button" @click="show({{ forloop.counter0 }})"
             class="aspect-square rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 hover:opacity-80 transition">
-      <img src="{{ image.image|media }}" alt="{{ image.name }}" loading="lazy" class="w-full h-full object-cover">
+      <img src="{{ image.image|media }}" alt="{% if anonymous %}Изображение {{ forloop.counter }}{% else %}{{ image.name }}{% endif %}" loading="lazy" class="w-full h-full object-cover">
     </button>
     {% endfor %}
   </div>
