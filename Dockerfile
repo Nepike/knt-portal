@@ -24,6 +24,9 @@ WORKDIR /app
 # в docker-compose.yml: клиент младше сервера снять дамп откажется.
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client-17 && rm -rf /var/lib/apt/lists/*
 
+# Всё выше этой строки сбрасывает кэш pip: правка любой из них — и пакеты ставятся заново,
+# а это минуты на медленном канале (7 ноя 2026 сборка из-за этого не влезла в деплой).
+# Новое, что меняется чаще требований, — ниже, после установки пакетов.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

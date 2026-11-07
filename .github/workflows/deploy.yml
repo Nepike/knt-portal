@@ -12,6 +12,12 @@ env:
   TG_API: https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage
   RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+# Два пуша подряд — два деплоя, и без очереди они шли бы на сервере разом, друг другу
+# поперёк. Второй ждёт первого и не отменяет его: оборванная сборка хуже медленной.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -49,9 +55,16 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
+          # По умолчанию 10 минут, и 7 ноя 2026 сборка с переустановкой пакетов в них не влезла:
+          # действие оборвало сессию, а с ней и сборку. Обычная выкладка идёт из кэша за минуту-две.
+          command_timeout: 30m
+          # Ровно коммит этого прогона, а не последний main: прогоны теперь идут по очереди, и
+          # без этого первый выкатил бы код второго. Старый коммит поверх нового ff-only не
+          # накатит («Already up to date»), так что повтор старого прогона сайт не откатит.
           script: |
             cd /srv/knt
-            git pull --ff-only
+            git fetch origin main
+            git merge --ff-only ${{ github.sha }}
             export KNT_VERSION="$(git log -1 --format='%h · %cs · %s')"
             docker compose up -d --build
             docker image prune -f
