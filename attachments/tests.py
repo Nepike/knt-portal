@@ -6,7 +6,10 @@ import ast
 import json
 import os
 import re
+import struct
 import tempfile
+import warnings
+import zlib
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -41,8 +44,8 @@ from .r2 import R2Storage
 from .storage import CONTENT_TYPES, content_type, drop_prefix, file_storage, media_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
-    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MULTIPART_SALT, PICTURES, UPLOAD_SALT,
-    check_picture, max_upload_size, new_key, part_size,
+    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MAX_PICTURE_PIXELS, MULTIPART_SALT, PICTURES,
+    UPLOAD_SALT, check_picture, max_upload_size, new_key, part_size,
 )
 
 
@@ -928,6 +931,52 @@ def picture(kind="PNG", name=None):
 def heic(name="IMG_5022.HEIC"):
     """Начало файла HEIC, каким его снимает айфон: Pillow такое не открывает."""
     return SimpleUploadedFile(name, b"\x00\x00\x00\x24ftypheic\x00\x00\x00\x00mif1heic" + bytes(64))
+
+
+def _chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+
+def huge_png(width, height, name="огромная.png"):
+    """PNG, чей заголовок обещает width×height точек, а пикселей внутри нет.
+
+    Такой и шлёт нападающий: проверка по заголовку должна отказать до разбора. Настоящая
+    картинка на сотню мегапикселей заняла бы в тесте столько же памяти, от скольких
+    защищает проверка. open и verify его принимают: verify сверяет только суммы кусков.
+    """
+    raw = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 1, 0, 0, 0, 0))
+        + _chunk(b"IDAT", zlib.compress(b"\x00"))
+        + _chunk(b"IEND", b"")
+    )
+    return SimpleUploadedFile(name, raw, content_type="image/png")
+
+
+class PicturePixelTests(SimpleTestCase):
+    """Сколько точек в картинке — до разбора, по заголовку. Зритель разжимает её у себя,
+    и файл в килобайты на сотню мегапикселей роняет ему вкладку."""
+
+    def test_a_phone_photo_fits(self):
+        self.assertIsNone(check_picture(huge_png(7000, 7000)))  # 49 Мп
+
+    def test_too_many_dots_are_refused_by_name(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PilImage.DecompressionBombWarning)
+            problem = check_picture(huge_png(8000, 7000))  # 56 Мп
+
+        self.assertIn("больше 50 мегапикселей", problem)
+
+    def test_one_pillow_will_not_open_is_too_big_rather_than_broken(self):
+        """Свыше вдвое Pillow отказывает сам. Человеку это «слишком большая», а не
+        «это не картинка» — про свой снимок второе только запутало бы."""
+        problem = check_picture(huge_png(20000, 20000))
+
+        self.assertIn("мегапикселей", problem)
+
+    def test_pillow_itself_has_the_same_ceiling(self):
+        """Страховка для кода, который однажды откроет картинку мимо check_picture."""
+        self.assertEqual(PilImage.MAX_IMAGE_PIXELS, MAX_PICTURE_PIXELS)
 
 
 class PictureFormatTests(SimpleTestCase):

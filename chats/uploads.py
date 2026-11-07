@@ -12,10 +12,8 @@ components.js). Миниатюру не делаем здесь Pillow'ом на
 воркера на каждое сообщение, при том что у отправителя картинка уже открыта.
 """
 
-from PIL import Image as PilImage
-
 from attachments.models import File, Image, human_size
-from attachments.uploads import check_name
+from attachments.uploads import MAX_PICTURE_PIXELS, check_name, inspect_picture, too_many_pixels
 
 MAX_FILES = 10  # вложений на одно сообщение
 MAX_PHOTO = 10 * 1024 * 1024
@@ -27,21 +25,21 @@ def limits():
     return {"files": MAX_FILES, "photo": MAX_PHOTO, "doc": MAX_DOC}
 
 
-def _is_picture(upload):
-    """Картинка ли это на самом деле.
+def _picture_problem(upload):
+    """Почему этот файл не годится в фото, или None.
 
     Модельный ImageField содержимое НЕ проверяет — это делает только форма, а сюда
     файлы приходят из request.FILES напрямую. Без проверки «фотографией» стал бы любой
     файл с подходящим расширением, и картинки чата превратились бы в дыру, через
-    которую в бакет кладут что угодно.
+    которую в бакет кладут что угодно. Точки считаем по той же причине, что в галерее:
+    крошечный файл на сотню мегапикселей уронил бы вкладку собеседнику.
     """
-    try:
-        PilImage.open(upload).verify()
-    except Exception:  # noqa: BLE001 — Pillow бросает чем придётся, и всё это «не картинка»
-        return False
-    finally:
-        upload.seek(0)  # verify дочитал файл до конца, а его ещё сохранять
-    return True
+    kind, pixels = inspect_picture(upload)
+    if pixels > MAX_PICTURE_PIXELS:
+        return too_many_pixels(upload.name)
+    if kind is None:
+        return f"«{upload.name}» — это не картинка"
+    return None
 
 
 def problems(photos, previews, docs):
@@ -59,8 +57,8 @@ def problems(photos, previews, docs):
     for picture in [*photos, *previews]:
         if picture.size > MAX_PHOTO:
             found.append(f"«{picture.name}» больше {human_size(MAX_PHOTO)}")
-        elif not _is_picture(picture):
-            found.append(f"«{picture.name}» — это не картинка")
+        elif problem := _picture_problem(picture):
+            found.append(problem)
     for doc in docs:
         if doc.size > MAX_DOC:
             found.append(f"«{doc.name}» больше {human_size(MAX_DOC)}")

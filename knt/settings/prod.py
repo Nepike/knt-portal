@@ -15,7 +15,10 @@ MEDIA_ACCEL = True
 DATABASES = {"default": env.db("DATABASE_URL")}
 
 # Статику раздаёт сам Django через whitenoise (nginx только проксирует + TLS).
-MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # noqa: F405
+# Сразу за SecurityMiddleware, как велит whitenoise, — по имени, а не номером: первым в списке
+# стоит замер медленных запросов.
+MIDDLEWARE.insert(MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1,  # noqa: F405
+                  "whitenoise.middleware.WhiteNoiseMiddleware")
 STORAGES["staticfiles"]["BACKEND"] = "whitenoise.storage.CompressedManifestStaticFilesStorage"  # noqa: F405
 
 EMAIL_HOST = "smtp.gmail.com"

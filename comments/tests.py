@@ -1,3 +1,4 @@
+import warnings
 from unittest import mock
 
 from django.contrib.auth.models import Permission
@@ -6,6 +7,7 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
+from PIL import Image as PilImage
 
 from attachments.media import media_url
 from core.models import Subject
@@ -14,7 +16,7 @@ from materials.models import Material
 from materials.tests import make_image, make_user
 from users.models import User
 
-from .forms import MAX_TEXT
+from .forms import MAX_TEXT, CommentForm
 from .models import Comment
 from .views import thread
 
@@ -189,12 +191,25 @@ class CommentTests(TestCase):
 
         self.assertContains(response, "ответ")
 
-    def test_huge_comment_image_is_refused(self):
-        with mock.patch("attachments.uploads.MAX_IMAGE_SIZE", 10):
+    def test_huge_comment_image_is_refused_before_pillow_opens_it(self):
+        """Вес известен до всякого разбора — по нему и отказываем (core.forms.CappedImageField)."""
+        field = CommentForm.base_fields["image"]
+        with mock.patch.object(field, "max_size", 10), mock.patch("PIL.Image.open") as opened:
             response = self.add(image=make_image())
 
         self.assertFalse(Comment.objects.exists())
         self.assertContains(response, "больше")
+        opened.assert_not_called()
+
+    def test_an_image_with_too_many_dots_is_refused(self):
+        from attachments.tests import huge_png
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PilImage.DecompressionBombWarning)
+            response = self.add(text="смотрите", image=huge_png(8000, 7000))
+
+        self.assertContains(response, "мегапикселей")
+        self.assertFalse(Comment.objects.exists())
 
     def test_failed_reply_stays_in_its_own_branch(self):
         self.add(text="корень")

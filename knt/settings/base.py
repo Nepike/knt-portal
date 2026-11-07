@@ -42,6 +42,8 @@ LOCAL_APPS = [
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # Первым: время и память меряются за весь путь запроса.
+    "core.middleware.SlowRequestMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "core.middleware.HtmxMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

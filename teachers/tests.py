@@ -1,4 +1,6 @@
+import warnings
 from io import BytesIO
+from unittest import mock
 
 from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -9,6 +11,7 @@ from PIL import Image as PilImage
 
 from users.models import User
 
+from .forms import ReviewForm
 from .models import Review, Teacher
 
 
@@ -54,6 +57,26 @@ class ReviewImageTests(TestCase):
 
         response = self.client.post(self.url, {"text": "Доска после пары", "image": heic()})
         self.assertContains(response, "снимок HEIC с айфона сохрани как JPEG")
+        self.assertFalse(Review.objects.exists())
+
+    def test_a_heavy_picture_is_refused_before_pillow_opens_it(self):
+        """Вес известен до всякого разбора — по нему и отказываем (core.forms.CappedImageField)."""
+        field = ReviewForm.base_fields["image"]
+        with mock.patch.object(field, "max_size", 10), mock.patch("PIL.Image.open") as opened:
+            response = self.client.post(self.url, {"text": "Доска после пары", "image": make_image()})
+
+        self.assertContains(response, "больше")
+        opened.assert_not_called()
+        self.assertFalse(Review.objects.exists())
+
+    def test_a_picture_with_too_many_dots_is_refused(self):
+        from attachments.tests import huge_png
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PilImage.DecompressionBombWarning)
+            response = self.client.post(self.url, {"text": "Доска после пары", "image": huge_png(8000, 7000)})
+
+        self.assertContains(response, "мегапикселей")
         self.assertFalse(Review.objects.exists())
 
     def test_an_empty_review_is_still_refused(self):

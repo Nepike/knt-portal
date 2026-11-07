@@ -12,6 +12,7 @@ from django.core.files.base import ContentFile
 
 from PIL import Image as PilImage
 
+from core.forms import CappedImageField
 from core.widgets import AccentSelect, AccentSelectMultiple
 
 from . import journal
@@ -25,6 +26,10 @@ AVATAR_PX = 512
 MAX_AVATAR_DATA = 2 * 1024 * 1024
 # Гифка едет файлом и целиком (см. ProfileForm.photo_file), поэтому лимит ей нужен свой.
 MAX_GIF = 3 * 1024 * 1024
+# Сторона того, что вообще стоит разбирать. Страница присылает ровно AVATAR_PX, а больше
+# вдвое — значит, запрос собран мимо неё: PNG в 17 КБ разворачивается в 144 Мп и гигабайт
+# памяти, а у гифки то же самое разжимал бы браузер каждого, кто увидит аватар.
+AVATAR_SOURCE_MAX = 2 * AVATAR_PX
 DROP = "clear"
 
 
@@ -99,10 +104,19 @@ def _thumbnail(raw):
     Прозрачность бережём: на аватарах её любят, а плоский белый квадрат в тёмной теме
     выглядел бы заплаткой.
     """
+    too_big = ValidationError("Картинка слишком большая — выбери её заново")
     try:
         image = PilImage.open(BytesIO(raw))
+    except PilImage.DecompressionBombError:
+        raise too_big
+    except (OSError, ValueError):
+        raise ValidationError("Не получилось прочитать картинку")
+    # Размер — из заголовка, до разбора: разбор и есть то, что стоит памяти.
+    if max(image.size) > AVATAR_SOURCE_MAX:
+        raise too_big
+    try:
         image.load()
-    except (OSError, ValueError, PilImage.DecompressionBombError):
+    except (OSError, ValueError):
         raise ValidationError("Не получилось прочитать картинку")
 
     alpha = image.mode in ("RGBA", "LA") or "transparency" in image.info
@@ -168,8 +182,8 @@ class ProfileForm(forms.ModelForm):
     photo = AvatarField(required=False)
     # Гифки исключение: канвас забирает из них один кадр, и анимация пропала бы.
     # Такие едут файлом и без кадрирования — тем же центральным квадратом, каким
-    # их и так показывает object-cover.
-    photo_file = forms.ImageField(required=False)
+    # их и так показывает object-cover. Вес — до Pillow (core.forms.CappedImageField).
+    photo_file = CappedImageField(required=False, max_size=MAX_GIF)
 
     class Meta:
         model = User
@@ -198,8 +212,8 @@ class ProfileForm(forms.ModelForm):
         # был порезать сам. Иначе этим полем можно было бы залить что угодно любого размера.
         if upload.image.format != "GIF":
             raise ValidationError("Файлом принимаем только гифки")
-        if upload.size > MAX_GIF:
-            raise ValidationError(f"Гифка тяжелее {MAX_GIF // 1024 // 1024} МБ")
+        if max(upload.image.size) > AVATAR_SOURCE_MAX:
+            raise ValidationError(f"Гифка больше {AVATAR_SOURCE_MAX} точек по стороне — для аватара столько не нужно")
         return upload
 
     def clean_tg_page(self):

@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 from uuid import uuid4
 
@@ -36,6 +37,10 @@ MULTIPART_SALT = "attachments.multipart"
 MULTIPART_MAX_AGE = 24 * 3600
 # Картинки галереи идут обычным multipart и держат воркер — им хватит и десятки.
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
+# Точек в картинке, которую покажут другим. Снимок телефона — 12–48 Мп, а разжимает её
+# у себя каждый зритель: PNG в 17 КБ разворачивается в 144 Мп, и вкладка с ним падает.
+# Этот же предел — общий потолок Pillow (AttachmentsConfig.ready).
+MAX_PICTURE_PIXELS = 50_000_000
 # То, что браузер исполнил бы как страницу, а человек — запустил бы у себя. Рубеж не
 # единственный и не главный: что бы сюда ни проскочило, тип ему назначает закрытый
 # список storage.CONTENT_TYPES, и всё, чего в нём нет, отдаётся потоком байтов.
@@ -109,21 +114,37 @@ UNREADABLE_PICTURE = f"Не получилось прочитать картин
 HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"}
 
 
-def picture_format(upload):
-    """Формат картинки по СОДЕРЖИМОМУ (как его зовёт Pillow) или None, если это не картинка.
+def inspect_picture(upload):
+    """(формат, сколько точек) по СОДЕРЖИМОМУ; формат None — это не картинка.
 
     Не по имени и не по типу из запроса: и то и другое пишет отправитель. А модельный
     ImageField содержимое не проверяет вовсе — это делает только поле формы.
+
+    Пиксели здесь не разжимаются: размер берётся из заголовка, verify проверяет только
+    целостность. Отказ Pillow открыть слишком большую картинку — это не «не картинка»,
+    а «слишком большая», поэтому точек тогда бесконечно много.
     """
     try:
         with PilImage.open(upload) as image:
-            kind = image.format
+            kind, pixels = image.format, image.width * image.height
             image.verify()
+    except PilImage.DecompressionBombError:
+        return None, math.inf
     except Exception:  # noqa: BLE001 — Pillow бросает чем придётся, и всё это «не картинка»
-        return None
+        return None, 0
     finally:
         upload.seek(0)  # файл ещё сохранять
-    return kind
+    return kind, pixels
+
+
+def picture_format(upload):
+    """Формат картинки по содержимому (как его зовёт Pillow) или None."""
+    return inspect_picture(upload)[0]
+
+
+def too_many_pixels(name):
+    return (f"«{name}» больше {MAX_PICTURE_PIXELS // 1_000_000} мегапикселей. "
+            "Уменьши картинку или сохрани её в меньшем разрешении")
 
 
 def check_picture(upload):
@@ -133,7 +154,9 @@ def check_picture(upload):
     в хранилище — а у половины людей на её месте пустой квадрат: так на сайт попал HEIC,
     который умеет один Safari.
     """
-    kind = picture_format(upload)
+    kind, pixels = inspect_picture(upload)
+    if pixels > MAX_PICTURE_PIXELS:
+        return too_many_pixels(upload.name)
     if kind in PICTURES:
         return None
     head = upload.read(12)

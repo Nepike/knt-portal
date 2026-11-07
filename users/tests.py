@@ -31,7 +31,7 @@ from economy.models import BalanceLog
 from economy.services import credit, reclaim, spend
 from materials.models import Material
 
-from .forms import AVATAR_PX, MAX_AVATAR_DATA
+from .forms import AVATAR_PX, AVATAR_SOURCE_MAX, MAX_AVATAR_DATA, ProfileForm
 from . import journal
 from .models import STATUS_MAX, LoginEvent, User, UserSession
 from .sessions import REFRESH, SEEN_KEY
@@ -158,12 +158,12 @@ class ContributionTests(TestCase):
         self.assertEqual(self.stats()["by_term"], [{"label": "Без семестра", "count": 1, "share": 100}])
 
 
-def make_gif(name="аватар.gif", frames=3):
+def make_gif(name="аватар.gif", frames=3, size=(40, 40)):
     """Настоящая анимация: кадры должны РАЗЛИЧАТЬСЯ, одинаковые Pillow схлопнет в один."""
     pages = []
     for step in range(frames):
-        page = PilImage.new("RGB", (40, 40), "black")
-        page.paste(PilImage.new("RGB", (10, 40), "red"), (step * 10, 0))
+        page = PilImage.new("RGB", size, "black")
+        page.paste(PilImage.new("RGB", (10, size[1]), "red"), (step * 10, 0))
         pages.append(page.convert("P"))
 
     buffer = BytesIO()
@@ -206,10 +206,38 @@ class ProfileEditTests(TestCase):
         self.assertEqual(size, (300, 300))
         self.assertEqual(fmt, "JPEG")
 
-    def test_a_huge_photo_is_shrunk_to_the_thumbnail_side(self):
-        self.post(photo=data_url((1500, 1500)))
+    def test_a_big_photo_is_shrunk_to_the_thumbnail_side(self):
+        self.post(photo=data_url((AVATAR_SOURCE_MAX, AVATAR_SOURCE_MAX)))
 
         self.assertEqual(self.saved()[0], (AVATAR_PX, AVATAR_PX))
+
+    def test_a_photo_bigger_than_the_page_sends_is_refused(self):
+        """Страница присылает ровно AVATAR_PX. Больше — запрос собран мимо неё, и такой
+        разбирать незачем."""
+        response = self.post(photo=data_url((AVATAR_SOURCE_MAX + 1, 10)))
+
+        self.assertContains(response, "слишком большая")
+        self.assertFalse(self.person.photo)
+
+    def test_a_bomb_is_refused_before_it_is_unpacked(self):
+        """PNG в килобайты на 25 Мп — сотня мегабайт на разбор. Отказ приходит по заголовку:
+        пикселей у этой подделки нет, и дойди дело до разбора, ответ был бы «не прочитать»."""
+        from attachments.tests import huge_png
+
+        bomb = huge_png(5000, 5000).read()
+        response = self.post(photo="data:image/png;base64," + b64encode(bomb).decode())
+
+        self.assertContains(response, "слишком большая")
+
+    def test_a_bomb_pillow_will_not_open_is_called_too_big_too(self):
+        """144 Мп Pillow не открывает сам (AttachmentsConfig.ready). Человеку это то же
+        «слишком большая», а не «не получилось прочитать»."""
+        from attachments.tests import huge_png
+
+        bomb = huge_png(12000, 12000).read()
+        response = self.post(photo="data:image/png;base64," + b64encode(bomb).decode())
+
+        self.assertContains(response, "слишком большая")
 
     def test_transparency_survives(self):
         # Аватары с дырками — обычное дело, а плоский белый квадрат в тёмной теме
@@ -273,6 +301,23 @@ class ProfileEditTests(TestCase):
         self.post(photo=data_url())
 
         self.assertTrue(self.person.photo.name.endswith(".jpg"))
+
+    def test_a_gif_wider_than_an_avatar_needs_is_refused(self):
+        """Гифку не пережимаем, её разжимает браузер каждого, кто увидит аватар."""
+        response = self.post(photo_file=make_gif(size=(AVATAR_SOURCE_MAX + 1, 40)))
+
+        self.assertContains(response, "точек по стороне")
+        self.assertFalse(self.person.photo)
+
+    def test_a_heavy_gif_is_refused_before_pillow_opens_it(self):
+        """Вес известен до всякого разбора — по нему и отказываем (core.forms.CappedImageField)."""
+        field = ProfileForm.base_fields["photo_file"]
+        with mock.patch.object(field, "max_size", 10), mock.patch("PIL.Image.open") as opened:
+            response = self.post(photo_file=make_gif())
+
+        self.assertContains(response, "больше")
+        opened.assert_not_called()
+        self.assertFalse(self.person.photo)
 
     def test_only_gifs_may_go_through_as_a_file(self):
         # Иначе этим полем заливалась бы любая картинка любого размера, минуя кадрирование.

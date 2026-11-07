@@ -1,5 +1,6 @@
 import copy
 import importlib
+import json
 import re
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
+from django.http import HttpResponse
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import ResolverMatch, get_resolver, reverse
 from django.utils import timezone
@@ -51,6 +53,7 @@ from .context_processors import theme_for
 from .search import by_name
 from .failures import record
 from .forms import MAX_SUPPORT_IMAGE
+from .middleware import SLOW, SWOLLEN, SlowRequestMiddleware
 from .throttle import client_ip, exhausted, forgive, strike, throttled
 from .markup import render
 from .mail import pack
@@ -265,6 +268,16 @@ class DeployTests(SimpleTestCase):
 
         self.assertEqual(command[command.index("--maxmemory") + 1], "256mb")
         self.assertEqual(command[command.index("--maxmemory-policy") + 1], "volatile-lru")
+
+    def test_web_workers_are_renewed_and_do_not_hoard_memory(self):
+        """Воркер web за три дня дорастал до ~580 МБ на машине с 1,9 ГБ (замер 7 ноя 2026),
+        и 3 ноя оба встали разом. Свежий воркер на смену отслужившему и две арены glibc."""
+        dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
+        command = json.loads(re.search(r"^CMD (\[.*\])$", dockerfile, re.M).group(1))
+
+        self.assertIn("--max-requests", command)
+        self.assertIn("--max-requests-jitter", command)
+        self.assertRegex(dockerfile, r"(?m)^ENV .*\bMALLOC_ARENA_MAX=2\b")
 
     def test_the_deploy_action_is_pinned_by_commit(self):
         """Тег автор действия может перевесить на другой код, а шаг держит ключ от сервера."""
@@ -642,6 +655,40 @@ class PeopleSearchTests(TestCase):
 
     def test_an_empty_query_changes_nothing(self):
         self.assertEqual(len(self.found("   ")), User.objects.count())
+
+
+class SlowRequestTests(SimpleTestCase):
+    """Строка в лог о запросе, который шёл долго или раздул память воркера, — и только о таком."""
+
+    def call(self, spent=0.1, peaks=(100_000, 100_000)):
+        middleware = SlowRequestMiddleware(lambda request: HttpResponse(status=201))
+        request = RequestFactory().get("/materials/")
+        request.user = SimpleNamespace(pk=7)
+        with patch("core.middleware.time.monotonic", side_effect=[10.0, 10.0 + spent]), \
+                patch("core.middleware.peak_kb", side_effect=list(peaks)):
+            return middleware(request)
+
+    def test_a_slow_request_is_written_down(self):
+        with self.assertLogs("knt.slow", "WARNING") as log:
+            self.assertEqual(self.call(spent=SLOW + 0.5).status_code, 201)
+
+        self.assertIn("GET /materials/ → 201 за 2.5 с", log.output[0])
+        self.assertIn("человек 7", log.output[0])
+
+    def test_a_request_that_swelled_the_worker_is_written_down(self):
+        with self.assertLogs("knt.slow", "WARNING") as log:
+            self.call(peaks=(100_000, 100_000 + SWOLLEN + 1024))
+
+        self.assertIn("пик памяти +21 МБ", log.output[0])
+
+    def test_an_ordinary_request_leaves_no_trace(self):
+        with self.assertNoLogs("knt.slow"):
+            self.call(spent=SLOW - 0.5, peaks=(100_000, 100_000 + SWOLLEN - 1))
+
+    def test_without_a_memory_meter_only_time_counts(self):
+        """На windows модуля resource нет — разработка не падает и не пишет пустых строк."""
+        with self.assertNoLogs("knt.slow"):
+            self.call(peaks=(None, None))
 
 
 class HtmxVaryTests(TestCase):

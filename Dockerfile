@@ -14,7 +14,10 @@ RUN tailwindcss -i theme/input.css -o core/static/core/css/base.css --minify
 # trixie назван явно: клиент Postgres 17 ниже берётся из его штатных пакетов, и молчаливая
 # смена выпуска Debian под тем же тегом однажды оставила бы сборку без этого пакета.
 FROM python:3.12-slim-trixie
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# MALLOC_ARENA_MAX: glibc заводит память отдельно под каждый поток и почти не отдаёт её
+# назад. Синхронные вьюхи под ASGI идут в пуле потоков, и воркер web за три дня дорастал
+# до ~580 МБ (замер 7 ноя 2026) на машине с 1,9 ГБ. Двух арен процессу хватает.
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 MALLOC_ARENA_MAX=2
 WORKDIR /app
 
 # pg_dump для ночного бэкапа базы (core/backup.py). Версия — та же, что у сервера
@@ -38,4 +41,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 # ASGI: gunicorn остаётся менеджером процессов, но воркеры uvicorn'овские — держат сокеты.
 # Воркеров 2, по числу ядер: они асинхронные, каждый держит много соединений разом,
 # и третий на двухъядерной машине не добавляет пропускной способности, а память ест (~75 МБ).
-CMD ["gunicorn", "knt.asgi:application", "-k", "uvicorn_worker.UvicornWorker", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
+# --max-requests: отслужив порцию, воркер уходит, и gunicorn ставит свежий — память не
+# копится неделями. Порцию берут со случайной добавкой, чтобы оба не ушли разом. Сокеты
+# чата и Стены при этом переподключаются сами, чат догоняет пропущенное по курсору.
+CMD ["gunicorn", "knt.asgi:application", "-k", "uvicorn_worker.UvicornWorker", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "--max-requests", "2000", "--max-requests-jitter", "200"]

@@ -2,7 +2,7 @@ from django import forms
 from django.core.files.uploadedfile import UploadedFile
 
 from attachments import uploads
-from attachments.models import human_size
+from core.forms import CappedImageField
 
 from .models import Comment
 
@@ -13,11 +13,17 @@ MAX_TEXT = 4000  # знаков
 class CommentForm(forms.ModelForm):
     max_text = MAX_TEXT  # его же берёт maxlength поля ввода (_comment_fields.html)
 
+    # Вес меряем до Pillow (core.forms.CappedImageField): картинка идёт обычным multipart
+    # и держит воркер, пока едет, — потолок тот же, что у галереи.
+    image = CappedImageField(
+        label="Картинка", required=False, max_size=uploads.MAX_IMAGE_SIZE,
+        error_messages={"invalid_image": uploads.UNREADABLE_PICTURE},
+    )
+
     class Meta:
         model = Comment
         fields = ["text", "image", "hide_author"]
         labels = {"text": "Комментарий", "hide_author": "Анонимно"}
-        error_messages = {"image": {"invalid_image": uploads.UNREADABLE_PICTURE}}
 
     def clean_text(self):
         # maxlength в поле обходит любой запрос мимо страницы, а текст проходит разметку
@@ -28,11 +34,7 @@ class CommentForm(forms.ModelForm):
         return text
 
     def clean_image(self):
-        # Картинка комментария идёт обычным multipart и держит воркер, пока едет,
-        # — тот же потолок, что и у галереи.
         image = self.cleaned_data["image"]
-        if image and image.size > uploads.MAX_IMAGE_SIZE:
-            raise forms.ValidationError(f"Картинка больше {human_size(uploads.MAX_IMAGE_SIZE)}")
         # Только новую: прежняя картинка — это поле записи, и читать её пришлось бы из хранилища.
         if isinstance(image, UploadedFile) and (problem := uploads.check_picture(image)):
             raise forms.ValidationError(problem)

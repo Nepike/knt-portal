@@ -1,7 +1,53 @@
+import logging
+import time
+
 from django.http import HttpResponse
 from django.utils.cache import patch_vary_headers
 
 from . import lockdown
+
+try:
+    import resource
+except ImportError:  # windows: модуля нет, пиковую память там не узнать
+    resource = None
+
+slow_log = logging.getLogger("knt.slow")
+
+SLOW = 2.0  # секунд на запрос
+SWOLLEN = 20 * 1024  # КБ прироста пиковой памяти процесса
+
+
+def peak_kb():
+    """Пиковая память процесса за всю его жизнь, КБ (Linux), или None."""
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else None
+
+
+class SlowRequestMiddleware:
+    """Строка в лог о запросе, который шёл дольше SLOW или поднял пик памяти на SWOLLEN.
+
+    Полного журнала запросов в логе web нет: опрос агента печати каждые пару секунд
+    заполнил бы его за сутки. А чтобы понять, что раздувает воркер или держит его минуты
+    (3 ноя 2026 оба встали и были убиты по таймауту), хватает этих немногих строк.
+
+    Пик — общий на процесс, а запросы в воркере идут параллельно в потоках: рост мог
+    принести и сосед. Но то, что раз за разом всплывает одним и тем же адресом, и есть ответ.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        started, before = time.monotonic(), peak_kb()
+        response = self.get_response(request)
+        spent = time.monotonic() - started
+        grew = peak_kb() - before if before is not None else 0
+        if spent >= SLOW or grew >= SWOLLEN:
+            user = getattr(getattr(request, "user", None), "pk", None)
+            slow_log.warning(
+                "%s %s → %s за %.1f с, пик памяти +%d МБ, человек %s",
+                request.method, request.path, response.status_code, spent, grew // 1024, user or "-",
+            )
+        return response
 
 
 class HtmxMiddleware:

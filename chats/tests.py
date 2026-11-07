@@ -1678,6 +1678,17 @@ class AttachmentTests(TestCase):
         self.assertFalse(Image.objects.exists())
         self.assertFalse(Message.objects.exists())
 
+    def test_a_photo_with_too_many_dots_is_refused(self):
+        """Килобайты на сотню мегапикселей: разжимать такое пришлось бы браузеру
+        собеседника, и вкладка с чатом у него упала бы."""
+        from attachments.tests import huge_png
+
+        response = self.client.post(self.url, {"photo": huge_png(20000, 20000)})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertContains(response, "мегапикселей", status_code=422)
+        self.assertFalse(Message.objects.exists())
+
     def test_a_preview_that_is_not_a_picture_is_refused(self):
         """Поле у миниатюры своё, а хранилище общее. Без проверки через него в бакет
         уезжал бы файл любого содержимого — «картинкой» он был бы только по имени поля."""
