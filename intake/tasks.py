@@ -23,3 +23,12 @@ def drop_source(key):
     if File.objects.filter(file=key).exists():
         return 0
     return drop_prefix(posixpath.dirname(key))
+
+
+@shared_task
+def watch_bakeries():
+    """Раз в пять минут: записи стоят, а пекарни молчат (intake.health.watch). О своём
+    молчании пекарня сообщить не может — его замечает сайт."""
+    from .health import watch
+
+    return watch()

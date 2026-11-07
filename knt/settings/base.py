@@ -219,6 +219,13 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
         "options": {"expires": 50},
     },
+    # И молчание пекарни — тоже (intake/health.py). Тревога там от получаса ожидания,
+    # так что пяти минут хватает с лихвой.
+    "watch-bakeries": {
+        "task": "intake.tasks.watch_bakeries",
+        "schedule": 300.0,
+        "options": {"expires": 290},
+    },
 }
 
 # Приёмка медиа (docs/media-pipeline.md): по этому токену ходит пекарня. Логин ей

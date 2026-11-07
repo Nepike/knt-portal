@@ -92,6 +92,9 @@ CHUNK = 4 * 1024 * 1024
 # Как часто говорить сайту «жива». Срок задания (`intake.models.CLAIM_TIMEOUT`) идёт
 # от последней вести, и минута из этого часа на весточки — недорого.
 BEAT = 300
+# Меньше этого свободного места — работу не берём: сырьё двухчасовой лекции бывает 16 ГБ,
+# рядом ложится готовый набор, а заканчиваться место должно до задания, а не посреди него.
+MIN_FREE = 40 * 1024 ** 3
 
 
 def say(text=""):
@@ -559,6 +562,51 @@ def encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality,
     return watch(args, about["duration"], beat)
 
 
+# Сколько раз печь заново, если набор вышел битым: сбой разовый, повтор его не повторит.
+REBAKES = 1
+
+
+def damaged(ffmpeg, out, count, seconds, beat=None):
+    """Первая жалоба декодера на испечённый набор, или пустая строка, если жалоб нет.
+
+    16 сен 2026 пекарня залила лекцию с одним битым сегментом (564, «Семинар №2»): ffmpeg
+    отработал без ошибки, а на 1:10:36 декодер спотыкался о кадр. Хром маскировал его
+    артефактом, аппаратный декодер мака вставал, и досмотреть лекцию было нельзя. Сбой был
+    на этой машине — памяти, диска или карты: в бакете лежали ровно те байты, что залили.
+
+    Поэтому каждая дорожка перед заливкой проходит декодер целиком — тот же ffmpeg, с
+    манифеста, как её прочтёт плеер. Ловится то, на чём встаёт декодер: сломанный синтаксис
+    и разметка кусков. Мусор внутри кадра, который декодер молча рисует неверными точками,
+    не виден и отсюда — но и плеер на нём не останавливается.
+    """
+    for index in range(count):
+        playlist = out / str(index) / "index.m3u8"
+        done = watch([ffmpeg, "-hide_banner", "-v", "error", "-nostdin",
+                      "-i", playlist.as_posix(), "-f", "null", "-"], seconds, beat)
+        complaint = done.stderr.strip()
+        if done.returncode or complaint:
+            first = complaint.splitlines()[0] if complaint else f"ffmpeg вышел с кодом {done.returncode}"
+            return f"дорожка {index}: {first}"[:300]
+    return ""
+
+
+def encode_checked(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat=None):
+    """Испечь дорожки и убедиться, что они читаются; битый набор — испечь заново."""
+    for attempt in range(REBAKES + 1):
+        if attempt:
+            for index in range(len(heights)):
+                shutil.rmtree(out / str(index), ignore_errors=True)
+        done = encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat)
+        if done.returncode:
+            raise SystemExit(f"ffmpeg не справился:\n{done.stderr.strip()}")
+        say("  проверяю набор декодером…")
+        problem = damaged(ffmpeg, out, len(heights), about["duration"], beat)
+        if not problem:
+            return
+        say(f"  набор вышел битым ({problem}){' — пеку заново' if attempt < REBAKES else ''}")
+    raise SystemExit(f"набор выходит битым и после повтора: {problem}")
+
+
 def _attributes(line):
     """Разбор `#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="a,b"` — запятые внутри кавычек
     делить нельзя, поэтому вручную, а не split(',')."""
@@ -641,9 +689,7 @@ def bake_lecture(ffmpeg, encoder, source, name, ladder, out, denoise, beat=None)
     say(f"  дорожки:    {', '.join(f'{h}p' for h in heights)}"
         f"{'' if about['audio'] else ' (звука в исходнике нет)'}")
 
-    done = encode_ladder(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat)
-    if done.returncode:
-        raise SystemExit(f"ffmpeg не справился:\n{done.stderr.strip()}")
+    encode_checked(ffmpeg, source, out, ladder, heights, about, encoder, quality, denoise, beat)
 
     poster = out / spec.POSTER
     # Не первым кадром, в отличие от косметики: там постер — подложка под то же видео
@@ -839,11 +885,36 @@ def upload(site, token, job_token, folder):
     return done, weight
 
 
-def serve_once(site, token, ffmpeg, encoder, denoise, known):
-    """Взять одно задание и довести до конца. False — пора передохнуть: работы не было
-    или оборвалась связь."""
-    answer = talk(site, token, "/intake/claim/", {"worker": socket.gethostname()})
+def checkup(ffmpeg, encoder, place=None):
+    """Что мешает печь прямо сейчас, или пустая строка. Перед каждым походом за работой.
+
+    8 ноя 2026 NVENC на М4 не работал неизвестно сколько: система обновила библиотеки
+    драйвера, а модуль в ядре остался старым до перезагрузки. Демон проверил карту при
+    запуске, 30 сен, и честно ждал работы, — а любую сданную лекцию уронил бы отказом.
+    Узнали об этом по чужой задаче. Теперь проба — перед каждым заданием, а беда уходит
+    сайту вместе с запросом за работой (intake.health), и уже он сообщает людям.
+    """
+    try:
+        if encoder == NVENC and (trouble := nvenc_problem(ffmpeg)):
+            return f"видеокарта недоступна: {trouble}"
+        free = shutil.disk_usage(place or tempfile.gettempdir()).free
+    except OSError as error:
+        return f"самопроверка не удалась: {error}"
+    if free < MIN_FREE:
+        return f"на рабочем диске свободно {human(free)}, нужно хотя бы {human(MIN_FREE)}"
+    return ""
+
+
+def serve_once(site, token, ffmpeg, encoder, denoise, known, problem=""):
+    """Взять одно задание и довести до конца. False — пора передохнуть: работы не было,
+    оборвалась связь или печь сейчас нельзя (`problem`, его же узнаёт сайт)."""
+    answer = talk(site, token, "/intake/claim/", {"worker": socket.gethostname(), "problem": problem})
     job = answer.get("job")
+    if job and problem:
+        # Сайт старше пекарни и про неполадку не знает — взятое возвращаем сразу же:
+        # лекция подождёт в очереди, а не упадёт отказом, который снимают только руками.
+        tell(site, token, "/intake/release/", {"token": job["token"]})
+        return False
     if not job:
         return False
 
@@ -934,10 +1005,16 @@ def serve(args, ffmpeg, encoder, denoise, known, site, token):
         raise SystemExit("для очереди нужны INTAKE_URL и INTAKE_TOKEN")
     say(f"пекарня ждёт работы: {site}, опрос раз в {args.every} с")
     say(f"кодировщик: {encoder_name(encoder)}")
+    complained = ""
     try:
         while True:
+            problem = checkup(ffmpeg, encoder)
+            # В журнал — только смену: беда, стоящая сутки, иначе дала бы полторы тысячи строк.
+            if problem != complained:
+                say(f"  не беру работу: {problem}" if problem else "  снова в порядке, беру работу")
+                complained = problem
             try:
-                worked = serve_once(site, token, ffmpeg, encoder, denoise, known)
+                worked = serve_once(site, token, ffmpeg, encoder, denoise, known, problem)
             # Приёмка недоступна — не повод умирать. Мало `SystemExit`: в него `talk`
             # заворачивает только ОТВЕТЫ сайта, а «сайт не отвечает вовсе» приезжает
             # сырым URLError, то есть OSError, и мимо этой ветки убивало демона.

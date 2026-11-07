@@ -52,11 +52,17 @@
 
   <div class="panel p-4 flex flex-col gap-1.5">
     <div class="flex items-center gap-2">
-      <span class="h-2.5 w-2.5 rounded-full {% if bakery.failed %}bg-amber-500{% else %}bg-emerald-500{% endif %}" aria-hidden="true"></span>
+      <span class="h-2.5 w-2.5 rounded-full {% if bakery_silent or bakery_broken %}bg-rose-500{% elif bakery.failed %}bg-amber-500{% else %}bg-emerald-500{% endif %}" aria-hidden="true"></span>
       <span class="font-semibold">Пекарня</span>
       <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">{% if bakery.waiting or bakery.baking %}ждёт {{ bakery.waiting }} · печётся {{ bakery.baking }}{% else %}очередь пуста{% endif %}</span>
     </div>
     <p class="text-xs text-slate-500 dark:text-slate-400">готово {{ bakery.done }} · не вышло {{ bakery.failed }}{% if bakery.claimed %} · последний раз брала работу {{ bakery.claimed|date:"j E, H:i" }}{% endif %}</p>
+    {% if bakery_silent %}<p class="text-xs text-rose-600 dark:text-rose-400">Записи ждут, а пекарня не выходит на связь</p>{% endif %}
+    {% for one in bakeries %}
+    <p class="text-xs {% if one.problem %}text-rose-600 dark:text-rose-400{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+      {{ one.name }} · на связи {{ one.seen_at|date:"j E, H:i" }}{% if one.problem %} · {{ one.problem }}{% endif %}
+    </p>
+    {% endfor %}
     <a href="{% url 'admin:intake_mediajob_changelist' %}" class="mt-auto text-xs text-accent hover:underline">очередь выпечки →</a>
   </div>
 

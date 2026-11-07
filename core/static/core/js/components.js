@@ -1541,6 +1541,29 @@ document.addEventListener("alpine:init", () => {
     try { localStorage.setItem(QUALITY, height); } catch { /* приватный режим */ }
   };
 
+  // Стрелки — на 10 секунд, как привыкли по YouTube. Без этого в хроме стрелки после клика
+  // по полосе перемотки двигают её ползунок на сотую долю длины: на полуторачасовой лекции
+  // это почти минута, и у каждой лекции своя (жалобы 8 ноя 2026). Перехватить эти нажатия
+  // нельзя — родная полоса съедает их, до страницы не доходит ни одно событие. Поэтому после
+  // перемотки, пуска и паузы фокус возвращается на само видео, а там стрелки уже наши.
+  const SEEK_STEP = 10;
+  const keepFocus = (video) => {
+    // Только если фокус и так внутри плеера: перемотка кнопкой гарнитуры, пока человек пишет
+    // комментарий, не должна выдёргивать его из поля ввода.
+    if (document.activeElement === video) video.focus({ preventScroll: true });
+  };
+  const seekByKeys = (video, event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!Number.isFinite(video.duration)) return;
+    // Иначе родное управление сдвинуло бы ещё и на свой шаг (в файрфоксе — по keypress,
+    // а его отменённый keydown не порождает).
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
+    video.currentTime = Math.min(Math.max(video.currentTime + step, 0), video.duration);
+  };
+
   // Выбор страниц на печать: превью нажимается, поле «1-3,7» и сетка показывают одно
   // и то же. Разбор — копия printing.pricing.pages_of, а печатает сервер по своему
   // разбору; сумма здесь — прикидка для человека, в задание идёт расчёт сервера.
@@ -1660,6 +1683,10 @@ document.addEventListener("alpine:init", () => {
 
       async init() {
         const video = this.$refs.video;
+        video.addEventListener("keydown", (event) => seekByKeys(video, event), true);
+        for (const type of ["seeked", "play", "pause"]) {
+          video.addEventListener(type, () => keepFocus(video));
+        }
 
         // Библиотеку тянем, только если её есть на чём запускать: на айфоне MediaSource
         // нет вовсе (там любой браузер — Safari внутри), hls.js бесполезен, и полмегабайта

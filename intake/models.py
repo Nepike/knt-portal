@@ -85,6 +85,30 @@ class MediaJob(models.Model):
         )
 
 
+class Bakery(models.Model):
+    """Машина-пекарня, какой её видит сайт: когда выходила на связь и что с ней не так.
+
+    Пишется с каждого запроса пекарни (intake.health.heard). Свою неполадку пекарня
+    приносит сама — самопроверкой перед заданием (`tools/bake.checkup`); о молчании
+    сказать не может, его замечает сайт (intake.tasks.watch_bakeries). Машин бывает
+    несколько — серверная и домашняя, — у каждой своя строка.
+    """
+
+    name = models.CharField("машина", max_length=100, unique=True)
+    seen_at = models.DateTimeField("на связи", default=timezone.now)
+    problem = models.CharField("неполадка", max_length=300, blank=True)
+    # О чём уже сказано в чат: пишем только при смене, как у принтеров.
+    alert = models.CharField("сказано в чат", max_length=300, blank=True)
+
+    class Meta:
+        verbose_name = "пекарня"
+        verbose_name_plural = "пекарни"
+        ordering = ["-seen_at"]
+
+    def __str__(self):
+        return self.name
+
+
 def sweep(prefix):
     """Снять папку готового — но только если на неё не смотрит ни одна лекция.
 

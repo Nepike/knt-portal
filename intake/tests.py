@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from django.conf import settings
+from django.core.cache import cache
 from django.contrib import admin
 from django.core import signing
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -32,9 +33,9 @@ from materials.models import Material
 from tools import bake
 from users.models import User
 
-from . import mp4, spec, views
+from . import health, mp4, spec, views
 from .admin import MediaJobAdmin
-from .models import CLAIM_TIMEOUT, MAX_TRIES, MediaJob
+from .models import CLAIM_TIMEOUT, MAX_TRIES, Bakery, MediaJob
 from .spec import MASTER, POSTER
 from .tasks import drop_source
 
@@ -332,6 +333,84 @@ class LectureFilterTests(SimpleTestCase):
         self.assertNotIn("hqdn3d", bake.lecture_filter([720], 30, 30, ""))
 
 
+class DamageCheckTests(SimpleTestCase):
+    """Испечённый набор проходит декодер до заливки (bake.damaged): 16 сен 2026 лекция 564
+    уехала на сайт с битым сегментом, и на маке её нельзя было досмотреть."""
+
+    BROKEN = ("[h264 @ 0x62f18fe06140] left block unavailable for requested intra4x4 mode -1\n"
+              "[h264 @ 0x62f18fe06140] error while decoding MB 0 26, bytestream 14665\n")
+
+    def setUp(self):
+        self.out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.out, ignore_errors=True)
+        patcher = mock.patch.object(bake, "say")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def decoded(self, *complaints):
+        """Подменить декодер: по жалобе на каждую дорожку, пустая — дорожка цела."""
+        answers = [subprocess.CompletedProcess([], 0, "", text) for text in complaints]
+        return mock.patch.object(bake, "watch", side_effect=answers)
+
+    def test_a_clean_set_passes_and_every_rendition_is_read_from_its_manifest(self):
+        with self.decoded("", "") as watch:
+            self.assertEqual(bake.damaged("ffmpeg", self.out, 2, 60.0), "")
+
+        read = [call.args[0][call.args[0].index("-i") + 1] for call in watch.call_args_list]
+        self.assertEqual(read, [(self.out / "0" / "index.m3u8").as_posix(), (self.out / "1" / "index.m3u8").as_posix()])
+
+    def test_the_first_complaint_names_the_rendition(self):
+        with self.decoded("", self.BROKEN):
+            problem = bake.damaged("ffmpeg", self.out, 2, 60.0)
+
+        self.assertEqual(problem, "дорожка 1: [h264 @ 0x62f18fe06140] left block unavailable for requested intra4x4 mode -1")
+
+    def checked(self, problems, code=0):
+        (self.out / "0").mkdir()
+        (self.out / "0" / "seg00000.m4s").write_bytes(b"old")
+        encoded = subprocess.CompletedProcess([], code, "", "ffmpeg упал")
+        with mock.patch.object(bake, "encode_ladder", return_value=encoded) as encode, \
+                mock.patch.object(bake, "damaged", side_effect=problems) as check:
+            bake.encode_checked("ffmpeg", Path("z.mkv"), self.out, spec.RECIPES["lecture"], [720],
+                                {"duration": 60.0, "fps": 30, "audio": True}, bake.NVENC, 30, "")
+        return encode, check
+
+    def test_a_broken_set_is_baked_once_more_from_scratch(self):
+        """Сбой разовый: второй заход его не повторит. Старые куски убраны перед ним."""
+        encode, _ = self.checked(["дорожка 0: битый кадр", ""])
+
+        self.assertEqual(encode.call_count, 2)
+        self.assertFalse((self.out / "0" / "seg00000.m4s").exists())
+
+    def test_a_set_broken_again_fails_the_job_with_the_reason(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.checked(["дорожка 0: битый кадр"] * (bake.REBAKES + 1))
+
+        self.assertIn("дорожка 0: битый кадр", str(caught.exception))
+
+    def test_a_failed_encode_is_not_checked_at_all(self):
+        with mock.patch.object(bake, "damaged") as check, self.assertRaises(SystemExit) as caught:
+            with mock.patch.object(bake, "encode_ladder",
+                                   return_value=subprocess.CompletedProcess([], 1, "", "ffmpeg упал")):
+                bake.encode_checked("ffmpeg", Path("z.mkv"), self.out, spec.RECIPES["lecture"], [720],
+                                    {"duration": 60.0, "fps": 30, "audio": True}, bake.NVENC, 30, "")
+
+        self.assertIn("ffmpeg не справился", str(caught.exception))
+        check.assert_not_called()
+
+    def test_a_lecture_is_baked_through_the_check(self):
+        """Битый набор не доходит ни до обложки, ни тем более до заливки."""
+        about = {"height": 720, "width": 1280, "duration": 60.0, "fps": 30, "audio": True}
+        with mock.patch.object(bake, "source_info", return_value=about), \
+                mock.patch.object(bake, "encode_ladder", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                mock.patch.object(bake, "damaged", return_value="дорожка 0: битый кадр"), \
+                mock.patch.object(bake, "run", return_value=subprocess.CompletedProcess([], 1, "", "нет")), \
+                self.assertRaises(SystemExit) as caught:
+            bake.bake_lecture("ffmpeg", bake.NVENC, Path("z.mkv"), "lecture", spec.RECIPES["lecture"], self.out, "")
+
+        self.assertIn("дорожка 0: битый кадр", str(caught.exception))
+
+
 class ManifestAttributeTests(SimpleTestCase):
     def test_a_comma_inside_quotes_does_not_split_the_line(self):
         line = '#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"'
@@ -402,6 +481,12 @@ class FakeFFmpeg:
 
 class BakeryTests(SimpleTestCase):
     """Пекарня без ffmpeg: то, что можно проверить, не запуская кодировщик."""
+
+    def setUp(self):
+        # Самопроверка перед заданием зовёт настоящий ffmpeg (проба NVENC); у неё свои тесты.
+        patcher = mock.patch.object(bake, "checkup", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_recipe_can_be_named_short(self):
         self.assertEqual(bake.pick(spec.RECIPES, "background")[0], "cosmetic-background")
@@ -845,6 +930,211 @@ def stored(prefix, manifest):
         keys.add(f"{prefix}/{index}/{rendition['init']}")
         keys |= {f"{prefix}/{index}/seg{n:05d}.m4s" for n in range(rendition["segments"])}
     return keys
+
+
+class CheckupTests(SimpleTestCase):
+    """Самопроверка пекарни перед каждым походом за работой (bake.checkup): 8 ноя 2026 NVENC
+    на М4 не работал неизвестно сколько, а демон честно ждал заданий."""
+
+    ROOMY = mock.Mock(free=500 * 1024 ** 3)
+
+    def test_a_dead_card_is_named(self):
+        with mock.patch.object(bake, "nvenc_problem", return_value="No capable devices found"), \
+                mock.patch.object(bake.shutil, "disk_usage", return_value=self.ROOMY):
+            self.assertEqual(bake.checkup("ffmpeg", bake.NVENC), "видеокарта недоступна: No capable devices found")
+
+    def test_the_processor_bakery_does_not_probe_the_card(self):
+        with mock.patch.object(bake, "nvenc_problem") as probe, \
+                mock.patch.object(bake.shutil, "disk_usage", return_value=self.ROOMY):
+            self.assertEqual(bake.checkup("ffmpeg", "libx264"), "")
+        probe.assert_not_called()
+
+    def test_a_full_disk_is_named_before_a_job_runs_into_it(self):
+        with mock.patch.object(bake, "nvenc_problem", return_value=None), \
+                mock.patch.object(bake.shutil, "disk_usage", return_value=mock.Mock(free=bake.MIN_FREE - 1)):
+            problem = bake.checkup("ffmpeg", bake.NVENC)
+
+        self.assertIn("на рабочем диске свободно", problem)
+
+    def test_a_check_that_cannot_run_is_a_problem_too(self):
+        """Нет ffmpeg вовсе — это не «всё хорошо», а самая неисправная пекарня из возможных."""
+        with mock.patch.object(bake, "nvenc_problem", side_effect=FileNotFoundError("ffmpeg")):
+            self.assertIn("самопроверка не удалась", bake.checkup("ffmpeg", bake.NVENC))
+
+    def test_a_troubled_bakery_reports_and_takes_nothing(self):
+        told = {}
+        job = {"id": 3, "recipe": "lecture", "token": "подпись", "source": "https://r2/get", "name": "z.mkv"}
+
+        def talk(site, token, where, body):
+            told[where] = body
+            return {"job": job} if where == "/intake/claim/" else {}  # сайт старый — дал работу
+
+        with mock.patch.object(bake, "talk", talk), mock.patch.object(bake, "say"), \
+                mock.patch.object(bake, "fetch_source") as fetched:
+            worked = bake.serve_once("https://knt-mipt.ru", "tok", "ffmpeg", bake.NVENC, "", spec.RECIPES,
+                                     "видеокарта недоступна: No capable devices found")
+
+        self.assertFalse(worked)
+        self.assertEqual(told["/intake/claim/"]["problem"], "видеокарта недоступна: No capable devices found")
+        self.assertEqual(told["/intake/release/"], {"token": "подпись"})  # взятое — назад в очередь
+        fetched.assert_not_called()
+
+    def test_the_journal_hears_about_a_problem_once_and_about_the_fix(self):
+        """Беда, стоящая сутки, дала бы в journalctl полторы тысячи одинаковых строк."""
+        lines = []
+        args = argparse.Namespace(once=False, every=60)
+        problems = ["нет карты", "нет карты", "нет карты", ""]
+        with mock.patch.object(bake, "checkup", side_effect=problems), \
+                mock.patch.object(bake, "serve_once", return_value=False) as once, \
+                mock.patch.object(bake.time, "sleep", side_effect=[None, None, None, KeyboardInterrupt]), \
+                mock.patch.object(bake, "say", lines.append):
+            bake.serve(args, "ffmpeg", bake.NVENC, "", spec.RECIPES, "https://knt-mipt.ru", "tok")
+
+        self.assertEqual([line for line in lines if "работу" in line],
+                         ["  не беру работу: нет карты", "  снова в порядке, беру работу"])
+        # И каждый поход за работой несёт сайту свежий итог проверки.
+        self.assertEqual([call.args[-1] for call in once.call_args_list], problems)
+
+
+@override_settings(INTAKE_TOKEN=TOKEN)
+class BakeryHealthTests(TestCase):
+    """Сайт о пекарне (intake/health.py): её неполадка и её молчание — в чат admin при смене
+    и в журнал сбоев каждый раз."""
+
+    def setUp(self):
+        cache.clear()
+        self.notify = mock.patch("intake.health.notify").start()
+        self.addCleanup(mock.patch.stopall)
+        self.job = MediaJob.objects.create(recipe="lecture", source="uploads/abc/zapis.mkv")
+        mock.patch("intake.views.sign_download", return_value="https://r2/get").start()
+
+    def claim(self, problem=""):
+        return self.client.post(
+            reverse("intake_claim"), json.dumps({"worker": "m4", "problem": problem}),
+            content_type="application/json", headers={"Authorization": f"Bearer {TOKEN}"},
+        ).json()["job"]
+
+    def told(self):
+        return [call.args[2] for call in self.notify.call_args_list]
+
+    def test_a_troubled_bakery_gets_no_work_and_the_chat_hears_once(self):
+        self.assertIsNone(self.claim("видеокарта недоступна"))
+        self.assertIsNone(self.claim("видеокарта недоступна"))
+
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, MediaJob.Status.WAITING)  # ждёт, а не падает отказом
+        self.assertEqual(Bakery.objects.get().problem, "видеокарта недоступна")
+        self.assertEqual(len(self.told()), 1)
+        self.assertEqual(self.told()[0]["problem"], "видеокарта недоступна")
+        failure = Failure.objects.get()
+        self.assertEqual((failure.source, failure.text, failure.times),
+                         (Failure.Source.BAKERY, "m4: видеокарта недоступна", 2))
+
+    def test_a_fixed_bakery_says_so_and_gets_work_again(self):
+        self.claim("видеокарта недоступна")
+
+        self.assertIsNotNone(self.claim())
+
+        self.assertEqual(len(self.told()), 2)
+        self.assertEqual((self.told()[1]["problem"], self.told()[1]["was"]), ("", "видеокарта недоступна"))
+        self.assertEqual(Bakery.objects.get().problem, "")
+
+    def test_a_healthy_bakery_is_not_news(self):
+        self.claim()
+        self.claim()
+
+        self.assertEqual(self.told(), [])
+        self.assertEqual(Failure.objects.count(), 0)
+
+    def test_a_long_job_keeps_the_bakery_on_the_air(self):
+        """За долгим заданием пекарня работу не спрашивает — стучит её работа (`alive`)."""
+        token = self.client.post(
+            reverse("intake_claim"), json.dumps({"worker": "m4"}),
+            content_type="application/json", headers={"Authorization": f"Bearer {TOKEN}"},
+        ).json()["job"]["token"]
+        Bakery.objects.update(seen_at=timezone.now() - timedelta(hours=1))
+
+        self.client.post(reverse("intake_alive"), json.dumps({"token": token}),
+                         content_type="application/json", headers={"Authorization": f"Bearer {TOKEN}"})
+
+        self.assertLess(timezone.now() - Bakery.objects.get().seen_at, timedelta(minutes=1))
+
+    def stale(self, minutes):
+        MediaJob.objects.filter(pk=self.job.pk).update(created=timezone.now() - timedelta(minutes=minutes))
+
+    def test_a_silent_bakery_with_work_waiting_is_news_once(self):
+        self.stale(31)
+
+        self.assertTrue(health.watch())
+        self.assertTrue(health.watch())
+
+        self.assertEqual(len(self.told()), 1)
+        self.assertTrue(self.told()[0]["silent"])
+        self.assertTrue(health.silent())
+
+    def test_the_silence_ends_when_the_bakery_comes_back(self):
+        self.stale(31)
+        health.watch()
+
+        health.heard("m4")
+        self.assertFalse(health.watch())
+
+        self.assertFalse(self.told()[-1]["silent"])
+        self.assertFalse(health.silent())
+
+    def test_an_empty_queue_or_a_fresh_job_is_no_alarm(self):
+        """Выключенный на ночь домашний компьютер — не повод: работа не стоит."""
+        self.assertFalse(health.watch())  # запись свежая
+        self.job.delete()
+        self.stale(120)
+        self.assertFalse(health.watch())  # и записей нет вовсе
+
+        self.assertEqual(self.told(), [])
+
+    def test_a_bakery_on_the_air_is_no_alarm_even_with_a_queue(self):
+        self.stale(31)
+        health.heard("m4")
+
+        self.assertFalse(health.watch())
+
+    def test_a_job_lost_mid_bake_counts_as_stuck(self):
+        """Машина умерла посреди задания: оно «печётся», но вестей о нём давно нет."""
+        MediaJob.objects.filter(pk=self.job.pk).update(
+            status=MediaJob.Status.BAKING, claimed_at=timezone.now() - timedelta(minutes=40),
+        )
+
+        self.assertTrue(health.watch())
+
+    def test_the_messages_read_as_meant(self):
+        from django.template.loader import render_to_string
+
+        bakery = Bakery(name="m4")
+        broke = render_to_string("telegram/bakery.html", {"bakery": bakery, "problem": "нет <карты>", "waiting": 2})
+        fixed = render_to_string("telegram/bakery.html", {"bakery": bakery, "problem": "", "was": "нет карты"})
+        quiet = render_to_string("telegram/bakery_silent.html", {"silent": True, "waiting": 1, "last": None})
+        back = render_to_string("telegram/bakery_silent.html", {"silent": False})
+
+        self.assertIn("<b>Пекарня m4</b>: нет &lt;карты&gt;", broke)  # текст беды — чужой, экранируем
+        self.assertIn("ждут 2 записи", broke)
+        self.assertIn("снова в порядке (было: нет карты)", fixed)
+        self.assertIn("1 запись стоит в очереди", quiet)
+        self.assertIn("не выходила ни разу", quiet)
+        self.assertIn("снова на связи", back)
+
+    def test_pulse_shows_the_trouble(self):
+        from pulse import summary
+
+        self.claim("видеокарта недоступна")
+        item = next(one for one in summary.attention(timezone.now() - timedelta(days=7)) if one["text"] == "Пекарня")
+
+        self.assertEqual(item["tone"], "bad")
+        self.assertIn("m4: видеокарта недоступна", item["state"])
+
+        root = User.objects.create_superuser("root@t.local", "Анна", "Главная", password="pass12345")
+        self.client.force_login(root)
+        page = self.client.get(reverse("pulse_system"))
+        self.assertContains(page, "m4 · на связи")
+        self.assertContains(page, "видеокарта недоступна")
 
 
 @override_settings(INTAKE_TOKEN=TOKEN)

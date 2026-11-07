@@ -12,7 +12,8 @@ from comments.models import Comment
 from core.models import Failure, Lockdown, Moderated
 from core.templatetags.text_extras import plural
 from economy.models import BalanceLog
-from intake.models import MediaJob
+from intake import health
+from intake.models import Bakery, MediaJob
 from lectorium.models import Playlist
 from library.models import Book
 from materials.models import Material
@@ -136,7 +137,12 @@ def attention(edge, now=None):
     state = f"в очереди {jobs['queued']}" if jobs["queued"] else "очередь пуста"
     if jobs["failed"]:
         state += f" · не вышло {jobs['failed']}"
-    items.append({"tone": "warn" if jobs["failed"] else "ok", "text": "Пекарня", "state": state,
+    # Своя неполадка пекарни и её молчание — важнее счёта заданий: работа из-за них стоит.
+    troubles = [f"{name}: {problem}" for name, problem in Bakery.objects.exclude(problem="").values_list("name", "problem")]
+    if health.silent():
+        troubles.append("молчит, а записи ждут")
+    tone = "bad" if troubles else "warn" if jobs["failed"] else "ok"
+    items.append({"tone": tone, "text": "Пекарня", "state": " · ".join(troubles) or state,
                   "href": reverse("admin:intake_mediajob_changelist")})
 
     failures = dict(

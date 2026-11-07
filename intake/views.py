@@ -21,6 +21,7 @@ from attachments.storage import content_type
 from attachments.uploads import sign_download, sign_put, under
 from core import agents
 
+from .health import heard
 from .models import MediaJob, failed_bake, sweep, take
 from .spec import MASTER, POSTER, RECIPES, check_ladder, payload
 from .tasks import drop_source
@@ -98,7 +99,15 @@ def claim(request):
     if refusal := guard(request):
         return refusal
 
-    job = take(str(agents.body(request).get("worker", "пекарня")))
+    body = agents.body(request)
+    worker = str(body.get("worker") or "пекарня")
+    # Пекарня проверяет себя перед каждым заданием (tools/bake.checkup) и с бедой работу
+    # не берёт: лекция, отданная ей сейчас, упала бы отказом, который снимают только руками.
+    problem = str(body.get("problem") or "")
+    heard(worker, problem)
+    if problem:
+        return JsonResponse({"job": None})
+    job = take(worker)
     if job is None:
         return JsonResponse({"job": None})
     return JsonResponse({"job": {
@@ -246,6 +255,7 @@ def alive(request):
     if job is None:
         return _gone()
     _still_here(job)
+    heard(job.claimed_by)  # за долгим заданием пекарня работу не спрашивает — и не молчит
     return JsonResponse({"ok": True})
 
 

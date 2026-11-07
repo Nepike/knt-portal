@@ -12,7 +12,8 @@ from core import backup, runs
 from core.lockdown import PASS
 from core.models import Failure, Lockdown
 from core.tasks import backup_database, ping
-from intake.models import MediaJob
+from intake import health
+from intake.models import Bakery, MediaJob
 from knt.celery import app as celery_app
 from printing.models import Printer
 
@@ -29,6 +30,7 @@ LABELS = {
     "sweep-journals": "Уборка журналов",
     "sweep-storage": "Уборка бакета",
     "watch-printers": "Присмотр за принтерами",
+    "watch-bakeries": "Присмотр за пекарней",
 }
 PING_WAIT = 5  # секунд ждём ответа воркера; дольше держать запрос незачем
 
@@ -71,9 +73,13 @@ def services(now=None):
         claimed=Max("claimed_at"),
     )
     mail = Failure.objects.filter(source=Failure.Source.MAIL).order_by("-last_at").first()
+    bakeries = list(Bakery.objects.all())
     return {
         "printers": list(Printer.objects.filter(active=True)),
         "bakery": jobs,
+        "bakeries": bakeries,
+        "bakery_silent": health.silent(),
+        "bakery_broken": any(one.problem for one in bakeries),
         "redis": redis_memory(),
         "mail": mail,
         "backup": runs.last(backup_database.name),

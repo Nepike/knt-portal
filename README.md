@@ -79,9 +79,10 @@ delivery backend for one that prints to the console — the message still travel
 through the queue.
 
 **A `beat` container is the alarm clock.** It runs no work of its own, it only drops scheduled
-tasks into the same queue (`CELERY_BEAT_SCHEDULE`). Today that is two jobs: a nightly database
-backup, and a nightly `clean_uploads --apply` that sweeps abandoned uploads and lecture folders
-nothing points at. Its state file lives in the container's `/tmp` on purpose — the only thing
+tasks into the same queue (`CELERY_BEAT_SCHEDULE`): the nightly database backup and sweeps
+(print files, login and failure journals, abandoned uploads and lecture folders nothing points at),
+plus two watchers — the print agent every minute and the bakery every five, because a machine that
+went silent cannot say so itself. Its state file lives in the container's `/tmp` on purpose — the only thing
 persisting it would buy is a catch-up run after a restart; a missed sweep has nothing to catch up
 on, and a missed backup is made by hand with `manage.py backup`.
 
@@ -151,7 +152,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1711 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1747 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

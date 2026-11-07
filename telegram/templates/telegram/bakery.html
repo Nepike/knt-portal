@@ -1,0 +1,2 @@
+{% load text_extras %}{% if problem %}🔥 <b>Пекарня {{ bakery.name }}</b>: {{ problem }}
+Работу не берёт, пока это не починят{% if waiting %} — ждут {{ waiting }} {{ waiting|plural:"запись,записи,записей" }}{% endif %}.{% else %}✅ <b>Пекарня {{ bakery.name }}</b> снова в порядке{% if was %} (было: {{ was }}){% endif %}{% endif %}
