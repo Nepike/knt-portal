@@ -46,9 +46,26 @@ GitHub Actions
 
 ## Notes on the parts that are not obvious
 
-**Deployment is a push.** `git push` to `main` triggers a workflow that SSHes to the server, pulls,
-and runs `docker compose up -d --build`. Telegram gets three messages — started (with the commit
-list), finished with the elapsed time, or failed with a link to the run log.
+**Deployment is a push.** `git push` to `main` triggers a workflow that SSHes to the server,
+fast-forwards to exactly that commit, runs `docker compose up -d --build` and then waits up to two
+minutes for `/healthz/` to answer with the new commit hash (`tools/wait_healthy.sh`) — `up -d`
+reports success even when the web container falls straight into a restart loop. Runs queue up
+instead of overlapping. Telegram gets three messages — started (with the commit list), finished
+with the elapsed time, or failed with a link to the run log. The run log of a public repository is
+readable by anyone signed in to GitHub, so nothing secret may reach it: the build proxy is passed
+only as Docker's predefined `HTTPS_PROXY`, which the build never prints.
+
+**The suite also runs on the server, once a month.** Tests are run locally before a push; on the
+1st of each month `.github/workflows/selftest.yml` runs the whole suite inside the production image
+on the production machine (`tools/selftest.sh`) and posts the result to Telegram, so a drift between
+the server and development shows up. The run is walled off: its own throwaway Postgres on its own
+network, dev settings, no `.env` — it cannot see the production database, bucket or chats. By hand:
+`cd /srv/knt && sh tools/selftest.sh [test labels]`, or Run workflow in the Actions tab.
+
+**A request that fails with a 500 lands in the failure journal** (`core.Failure`, source «сайт»),
+next to failed mail, print jobs and queue tasks; the Pulse summary shows the count. The entry
+carries the URL pattern, not the path, so one bug across many objects is one row with a counter.
+Error pages (400/403/404/500 and the CSRF one) are Russian and stand alone, without `base.html`.
 
 **Redis does four jobs on four databases.** 0 is the Channels bus, 1 the Celery queue, 2 its result
 backend, 3 the cache that rate limiters live on. Separate numbers so that flushing one does not
@@ -71,8 +88,8 @@ on, and a missed backup is made by hand with `manage.py backup`.
 **The database is dumped every night.** At 03:40 the worker runs `pg_dump` (the client is installed
 in the image and must match the server's major version) and stores the dump in the bucket as
 `backups/knt-YYYY-MM-DD.dump`, then drops what is no longer needed: the last 14 dumps and the last
-8 Sunday ones stay. Nothing announces a failure — it is in the worker log, and
-`manage.py backup --list` shows what is actually there. Uploaded files are not part of the backup.
+8 Sunday ones stay. A failure lands in the worker log and in the failure journal, which the Pulse
+summary shows; `manage.py backup --list` shows what is actually there. Uploaded files are not part of the backup.
 To restore, on the server:
 
 ```bash
@@ -127,7 +144,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1696 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1711 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

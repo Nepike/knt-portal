@@ -1,0 +1,55 @@
+{% load static %}
+{% comment %}
+  Общая раскладка страниц ошибок (core/templates/400.html, 403.html, 403_csrf.html, 404.html,
+  500.html). Сама по себе, как страница закрытия, и без base.html намеренно: 500 рисуется, когда
+  что-то уже сломалось, и не должна упасть второй раз на меню, счётчиках и рамке аватара.
+  Остальные — той же раскладкой: ошибки выглядят одинаково и на домене файлов, где меню сайта
+  всё равно никуда не ведёт. Django рисует 500 и 400 вовсе без контекста — поэтому здесь ни user,
+  ни request, только static и url. Скина тоже нет: страница ошибки не место для подтёков.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>{% block title %}{% endblock %} - КНТ МФТИ</title>
+  <link rel="icon" href="{% static 'core/img/favicon.ico' %}" type="image/x-icon">
+
+  {# Тот же ключ и тот же класс, что в base.html: тема остаётся той, какую человек выбрал #}
+  <script>
+    (function () {
+      const t = localStorage.getItem("color-scheme");
+      if (t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.classList.add("dark");
+      }
+    })();
+  </script>
+
+  <link href="{% static 'core/css/base.css' %}" rel="stylesheet">
+</head>
+
+<body class="min-h-dvh flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+  <main class="flex-1 flex flex-col justify-center w-full max-w-xl mx-auto px-4 sm:px-6 py-10">
+    <a href="{% url 'home' %}" class="flex items-center gap-2.5 self-start">
+      <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-11 aspect-square shrink-0 dark:brightness-0 dark:invert">
+      <span>
+        <span class="block font-bold text-2xl leading-none">КНТ</span>
+        <span class="block text-[12px] font-medium text-slate-400 leading-none">Студенческий сайт</span>
+      </span>
+    </a>
+
+    <p class="mt-8 text-sm font-semibold text-slate-400">Ошибка {% block code %}{% endblock %}</p>
+    <h1 class="mt-1 text-3xl font-bold">{% block heading %}{% endblock %}</h1>
+
+    <div class="mt-5 space-y-3 leading-relaxed text-slate-600 dark:text-slate-400">
+      {% block text %}{% endblock %}
+    </div>
+
+    <div class="mt-8 flex flex-wrap gap-2">
+      <button type="button" class="btn btn-primary" onclick="history.back()">Назад</button>
+      <a href="{% url 'home' %}" class="btn btn-secondary">На главную</a>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{% extends "core/error.html" %}
+{% block title %}Нет доступа{% endblock %}
+{% block code %}403{% endblock %}
+{% block heading %}Сюда нельзя{% endblock %}
+{% block text %}
+<p>У вашей учётной записи нет доступа к этой странице.</p>
+<p>Если доступ нужен по делу — напишите в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>.</p>
+{% endblock %}

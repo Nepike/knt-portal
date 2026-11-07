@@ -1,0 +1,8 @@
+{% extends "core/error.html" %}
+{% block title %}Ошибка на сайте{% endblock %}
+{% block code %}500{% endblock %}
+{% block heading %}Что-то сломалось{% endblock %}
+{% block text %}
+<p>Ошибка на нашей стороне, а не у вас. Она уже записана, мы её посмотрим.</p>
+<p>Попробуйте обновить страницу через минуту. Если не проходит — напишите в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>, что вы делали.</p>
+{% endblock %}

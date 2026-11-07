@@ -1,0 +1,8 @@
+{% extends "core/error.html" %}
+{% block title %}Страница не найдена{% endblock %}
+{% block code %}404{% endblock %}
+{% block heading %}Такой страницы нет{% endblock %}
+{% block text %}
+<p>Возможно, её удалили, или в адресе опечатка.</p>
+<p>Если вы пришли по ссылке с этого сайта — напишите в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>, поправим.</p>
+{% endblock %}

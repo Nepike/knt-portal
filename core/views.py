@@ -1,8 +1,12 @@
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required
-from django.http import Http404
+from django.db import DatabaseError, connection
+from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_safe
 
 from telegram.notify import FEEDBACK, SUPPORT, notify
 
@@ -23,6 +27,26 @@ def home(request):
     if not request.user.is_authenticated:
         return redirect("about")
     return redirect("material_list")
+
+
+@login_not_required
+@never_cache
+@require_safe
+def healthz(request):
+    """Жив ли сайт. Деплой (tools/wait_healthy.sh) ждёт здесь хеш своего коммита: старый
+    контейнер, оставшийся отвечать, тоже сказал бы «ok».
+
+    Трогает базу — без неё сайт не работает. Redis не трогает: без него страницы
+    открываются, ждут только чат и очередь, и валить из-за этого выкладку не за что.
+    Хеш не секрет — код открыт.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except DatabaseError:
+        return HttpResponse("база не отвечает\n", status=503, content_type="text/plain; charset=utf-8")
+    version = settings.SITE_VERSION.partition(" ")[0]
+    return HttpResponse(f"ok {version}".rstrip() + "\n", content_type="text/plain; charset=utf-8")
 
 
 @login_not_required

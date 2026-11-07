@@ -13,6 +13,7 @@ urlpatterns = [
     path("contacts/", views.contacts, name="contacts"),
     path("support/", views.support, name="support"),
     path("closed/", views.closed, name="lockdown"),
+    path("healthz/", views.healthz, name="healthz"),
 ]
 
 # Витрина полей и кнопок — она же стенд, на котором их и проверяют. Наружу не выставляем:

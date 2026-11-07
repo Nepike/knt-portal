@@ -3,8 +3,11 @@ FROM debian:bookworm-slim AS debian
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG TAILWIND_VERSION=4.3.1
-ARG PROXY
-RUN curl -SL --connect-timeout 30 ${PROXY:+-x $PROXY} \
+# Прокси curl берёт сам из HTTPS_PROXY (docker-compose.yml). Не `ARG PROXY` и не `-x $PROXY`:
+# строку RUN сборка печатает с подставленными значениями — даже взятую из кэша, — и адрес
+# прокси с паролем с 1 авг по 7 ноя 2026 лежал в логе каждого деплоя на GitHub.
+# Предопределённый HTTPS_PROXY доходит до команды окружением и в лог не попадает.
+RUN curl -SL --connect-timeout 30 \
     https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWIND_VERSION}/tailwindcss-linux-x64 \
     -o /usr/local/bin/tailwindcss && chmod +x /usr/local/bin/tailwindcss
 COPY . .

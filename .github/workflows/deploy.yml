@@ -61,12 +61,17 @@ jobs:
           # Ровно коммит этого прогона, а не последний main: прогоны теперь идут по очереди, и
           # без этого первый выкатил бы код второго. Старый коммит поверх нового ff-only не
           # накатит («Already up to date»), так что повтор старого прогона сайт не откатит.
+          #
+          # После выкладки — ждём, что сайт ответил новой версией: `up -d` рапортует успех, даже
+          # если web тут же падает. Хеш тот же, что в KNT_VERSION (%h). Каждая сложная команда —
+          # одной строкой и в своём файле: script_stop проверяет код после каждой строки.
           script: |
             cd /srv/knt
             git fetch origin main
             git merge --ff-only ${{ github.sha }}
             export KNT_VERSION="$(git log -1 --format='%h · %cs · %s')"
             docker compose up -d --build
+            sh tools/wait_healthy.sh "$(git log -1 --format=%h)"
             docker image prune -f
 
       - name: Telegram — успех

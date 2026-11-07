@@ -5,9 +5,11 @@
 import ast
 import json
 import os
+import pickle
 import re
 import struct
 import tempfile
+import threading
 import warnings
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -623,6 +625,37 @@ class R2StorageTests(SimpleTestCase):
     @override_settings(R2_BUCKET="knt-files")
     def test_this_is_the_storage_the_site_runs_on(self):
         self.assertIsInstance(media_storage(), R2Storage)
+
+    def test_every_thread_shares_one_connection(self):
+        """Под ASGI каждый запрос — свой новый поток. Соединение на поток значило сессию
+        boto3 на каждую картинку: ~240 мс процессора и воркер web с 130 до ~360 МБ за пару
+        часов (замер 7 ноя 2026)."""
+        storage = r2_storage()
+        seen, links = [], []
+
+        def request(n):
+            seen.append(storage.connection)
+            links.append(storage.url(f"cosmetics/{n}/frame.png"))
+
+        threads = [threading.Thread(target=request, args=(n,)) for n in range(5)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(seen), 5)
+        self.assertEqual(len({id(connection) for connection in seen}), 1)
+        for link in links:
+            self.assertIn("X-Amz-Signature=", link)
+
+    def test_the_storage_still_pickles(self):
+        """Соединение boto3 не сериализуется; родитель выбрасывает своё, мы — своё."""
+        storage = r2_storage()
+        storage.connection
+
+        copy = pickle.loads(pickle.dumps(storage))
+
+        self.assertIn("X-Amz-Signature=", copy.url("cosmetics/1/frame.png"))
 
 
 # Встроенные переменные nginx, которые раздача берёт как есть. Всё остальное обязано

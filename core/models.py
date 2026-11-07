@@ -310,6 +310,7 @@ class Failure(models.Model):
         TASK = "task", "задача очереди"
         PRINTING = "printing", "печать"
         BAKERY = "bakery", "пекарня"
+        WEB = "web", "сайт"
 
     source = models.CharField("где", max_length=10, choices=Source.choices, db_index=True)
     text = models.CharField("что случилось", max_length=500)

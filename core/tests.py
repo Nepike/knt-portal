@@ -15,21 +15,23 @@ from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.apps import apps as django_apps
 from django.conf import settings
+from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.models import Group, Permission
 from django.contrib.sessions.models import Session
 from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.loader import render_to_string
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
+from django.db import OperationalError
 from django.http import HttpResponse
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
-from django.urls import ResolverMatch, get_resolver, reverse
+from django.urls import ResolverMatch, get_resolver, path, reverse
 from django.utils import timezone
 
 import yaml
@@ -38,6 +40,7 @@ from PIL import Image as PilImage
 from attachments.models import human_size
 from attachments.storage import file_storage
 from attachments.uploads import under
+from knt import urls as site_urls
 from knt.celery import app as celery_app
 from core.models import Failure, Funding, Lockdown, Supporter, Team
 from intake import urls as intake_urls
@@ -282,12 +285,60 @@ class DeployTests(SimpleTestCase):
 
     def test_the_deploy_action_is_pinned_by_commit(self):
         """Тег автор действия может перевесить на другой код, а шаг держит ключ от сервера."""
-        workflow = (settings.BASE_DIR / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-        used = re.findall(r"^\s*uses:\s*(\S+)", workflow, re.M)
+        used = []
+        for workflow in (settings.BASE_DIR / ".github" / "workflows").glob("*.yml"):
+            # И `uses:` вторым ключом шага, и `- uses:` первым.
+            used += re.findall(r"^\s*(?:-\s+)?uses:\s*(\S+)", workflow.read_text(encoding="utf-8"), re.M)
 
         self.assertTrue(used)
         for action in used:
             self.assertRegex(action, r"@[0-9a-f]{40}$")
+
+    def test_the_proxy_password_stays_out_of_the_build_log(self):
+        """Строку RUN сборка печатает с подставленными аргументами, даже взятую из кэша. Так адрес
+        прокси с паролем три месяца лежал в логе каждого деплоя, а лог Actions открытого
+        репозитория читает любой вошедший на GitHub. Предопределённые аргументы Docker доходят
+        до команды окружением и в лог не попадают — но только если их не объявить через ARG."""
+        dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
+        args = self.services["migrate"]["build"]["args"]
+        predefined = {"HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY"}
+
+        self.assertIn("HTTPS_PROXY", args)
+        for name in args:
+            if "PROXY" in name.upper():
+                self.assertIn(name.upper(), predefined)
+        self.assertNotRegex(dockerfile, r"(?im)^\s*ARG\s+\w*PROXY")
+
+    def test_a_deploy_waits_for_the_new_version_to_answer(self):
+        """`up -d` рапортует успех, даже если web тут же уходит в цикл перезапусков."""
+        workflow = yaml.safe_load(
+            (settings.BASE_DIR / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+        )
+        script = next(
+            step["with"]["script"] for step in workflow["jobs"]["deploy"]["steps"] if "script" in step.get("with", {})
+        )
+        lines = [line.strip() for line in script.splitlines()]
+
+        up = lines.index("docker compose up -d --build")
+        check = next(i for i, line in enumerate(lines) if line.startswith("sh tools/wait_healthy.sh "))
+        self.assertGreater(check, up)
+        self.assertTrue((settings.BASE_DIR / "tools" / "wait_healthy.sh").is_file())
+
+    def test_the_monthly_selftest_is_walled_off_from_production(self):
+        """Тесты в боевом образе на боевом сервере (tools/selftest.sh): с файлом окружения
+        сервера или в сети compose они дотянулись бы до боевой базы, бакета и чатов."""
+        script = (settings.BASE_DIR / "tools" / "selftest.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn("--env-file", script)
+        self.assertNotIn("env_file", script)
+        # Своя сеть, а не сеть compose (knt_default): там по имени db живёт боевая база.
+        net = re.search(r"(?m)^net=(\S+)$", script).group(1)
+        self.assertFalse(net.startswith("knt_"), net)
+        self.assertEqual(set(re.findall(r"--network\s+(\S+)", script)), {'"$net"'})
+        self.assertIn("-e R2_BUCKET= ", script)
+        self.assertIn("DJANGO_SETTINGS_MODULE=knt.settings.dev", script)
+        # Та же версия Postgres, что у боевой базы: иначе прогон проверял бы не то.
+        self.assertIn(f" {self.services['db']['image']} ", script)
 
 
 class BackupTests(TestCase):
@@ -2135,6 +2186,112 @@ class FailureJournalTests(TestCase):
 
         self.assertContains(self.client.get(reverse("admin:core_failure_changelist")), "кому a@t.local: отказ во входе")
         self.assertEqual(self.client.get(reverse("admin:core_failure_add")).status_code, 403)
+
+
+class HealthzTests(TestCase):
+    """Ручка здоровья: по ней деплой узнаёт, что поднялась именно новая версия (tools/wait_healthy.sh)."""
+
+    @override_settings(SITE_VERSION="0b26bbb · 2026-11-07 · Deploy epta")
+    def test_a_guest_gets_the_running_commit_fresh(self):
+        response = self.client.get(reverse("healthz"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), "ok 0b26bbb\n")
+        # Закешированный ответ старого контейнера выдал бы мёртвый сайт за живой.
+        self.assertIn("no-store", response["Cache-Control"])
+
+    @override_settings(SITE_VERSION="")
+    def test_without_a_version_it_is_just_ok(self):
+        self.assertEqual(self.client.get(reverse("healthz")).content.decode(), "ok\n")
+
+    def test_it_answers_while_the_site_is_closed(self):
+        """Иначе выкладка во время закрытия считалась бы упавшей."""
+        close_site()
+
+        self.assertEqual(self.client.get(reverse("healthz")).status_code, 200)
+
+    def test_a_dead_database_is_a_503(self):
+        with patch("core.views.connection") as connection:
+            connection.cursor.side_effect = OperationalError("нет связи")
+            response = self.client.get(reverse("healthz"))
+
+        self.assertEqual(response.status_code, 503)
+
+
+def _crash(request, pk):
+    raise KeyError("files")
+
+
+def _forbidden(request):
+    raise PermissionDenied
+
+
+class CrashUrls:
+    """Настоящие адреса сайта и два своих: страницы ошибок ссылаются на главную и поддержку."""
+
+    urlpatterns = [
+        path("crash/<int:pk>/", login_not_required(_crash)),
+        path("forbidden/", login_not_required(_forbidden)),
+        *site_urls.urlpatterns,
+    ]
+
+
+@override_settings(ROOT_URLCONF=CrashUrls)
+class ErrorPageTests(TestCase):
+    """Пятисотки — в журнал сбоев, страницы ошибок — по-русски и сами по себе."""
+
+    def setUp(self):
+        # Как на проде: исключение превращается в страницу 500, а не летит в тест.
+        self.client = Client(raise_request_exception=False)
+
+    def test_a_crash_lands_in_the_journal_once_per_route(self):
+        """Шаблоном адреса, а не путём: одна ошибка на разных материалах — одна строка."""
+        self.client.get("/crash/7/")
+        self.client.get("/crash/8/")
+
+        failure = Failure.objects.get()
+        self.assertEqual(failure.source, Failure.Source.WEB)
+        self.assertEqual(failure.text, "GET /crash/<int:pk>/: KeyError: 'files'")
+        self.assertEqual(failure.times, 2)
+
+    def test_the_500_page_speaks_russian_and_stands_alone(self):
+        response = self.client.get("/crash/7/")
+
+        self.assertContains(response, "Что-то сломалось", status_code=500)
+        self.assertTemplateUsed(response, "core/error.html")
+        # Страница беды не должна упасть второй раз на шапке, меню и счётчиках.
+        self.assertTemplateNotUsed(response, "core/base.html")
+
+    def test_a_broken_journal_still_gives_the_500_page(self):
+        with patch("core.failures.record", side_effect=RuntimeError("журнал сломан")), \
+                self.assertLogs("core.failures", "ERROR"):
+            response = self.client.get("/crash/7/")
+
+        self.assertContains(response, "Что-то сломалось", status_code=500)
+
+    def test_a_missing_page_is_not_a_failure(self):
+        """Сканеры перебирают /wp-admin/ и прочее — журнал от них засорился бы за день."""
+        response = self.client.get("/wp-admin/setup.php")
+
+        self.assertContains(response, "Такой страницы нет", status_code=404)
+        self.assertTemplateNotUsed(response, "core/base.html")
+        self.assertEqual(Failure.objects.count(), 0)
+
+    def test_a_refusal_is_explained_and_not_a_failure(self):
+        response = self.client.get("/forbidden/")
+
+        self.assertContains(response, "Сюда нельзя", status_code=403)
+        self.assertEqual(Failure.objects.count(), 0)
+
+    def test_a_stale_form_says_what_to_do(self):
+        """Обычный случай — форма, открытая до входа в другой вкладке: вход сменил ключ."""
+        client = Client(enforce_csrf_checks=True)
+        client.cookies["csrftoken"] = "a" * 32
+
+        response = client.post(reverse("support"), {"csrfmiddlewaretoken": "b" * 32})
+
+        self.assertContains(response, "Форма устарела", status_code=403)
+        self.assertContains(response, "обновите страницу", status_code=403)
 
 
 class JournalSweepTests(TestCase):

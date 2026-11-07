@@ -1,0 +1,81 @@
+name: selftest
+
+# Раз в месяц весь набор тестов в боевом образе на сервере (tools/selftest.sh), итог — в телеграм.
+# Перед пушем тесты гоняются локально; этот прогон ловит то, чем сервер разошёлся с разработкой.
+# Руками — кнопкой Run workflow во вкладке Actions.
+#
+# GitHub выключает расписание в открытом репозитории, где 60 дней не было коммитов: после долгого
+# перерыва включить заново там же, во вкладке Actions.
+on:
+  schedule:
+    - cron: "17 2 1 * *"   # 1-го числа в 05:17 по Москве: после ночных задач (до 04:20), сайт пуст
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TG_TOKEN: ${{ secrets.TG_TOKEN }}
+  TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+  TG_TOPIC_ID: ${{ secrets.TG_TOPIC_ID }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Обычный ssh, а не appleboy/ssh-action, как в деплое: тому вывод не забрать, а переданные
+      # ему переменные он вписывает в саму команду — токен бота весь прогон висел бы в `ps`
+      # на сервере. Здесь вывод ложится в файл на раннере и в публичный лог прогона не попадает.
+      - name: Тесты на сервере
+        id: run
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          set +e
+          ssh -i ~/.ssh/key -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ServerAliveInterval=60 \
+            "$SSH_USER@$SSH_HOST" 'cd /srv/knt && sh tools/selftest.sh' > selftest.log 2>&1
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Telegram — итог
+        if: always()
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+          touch selftest.log
+          # `|| true`: шаг идёт под bash -e -o pipefail, а строки «Ran …» в оборванном прогоне нет.
+          IMAGE=$(sed -n 's/^Образ: //p' selftest.log | head -n 1 | esc || true)
+          RAN=$(grep -E '^Ran [0-9]+ tests? in ' selftest.log | tail -n 1 | esc || true)
+          VERDICT=$(grep -E '^(OK|FAILED)( \(.*\))?$' selftest.log | tail -n 1 | esc || true)
+          case "$CODE" in
+            0)   HEAD='✅ <b>Тесты на сервере прошли</b>' ;;
+            1)   HEAD='❌ <b>Тесты на сервере упали</b>' ;;
+            137) HEAD='❌ <b>Прогон тестов убит: не хватило памяти</b>' ;;
+            255) HEAD='❌ <b>Не получилось зайти на сервер</b>' ;;
+            *)   HEAD="❌ <b>Прогон тестов не состоялся</b> (код ${CODE:-нет})" ;;
+          esac
+          TEXT=$(
+            printf '%s\n' "$HEAD"
+            if [ -n "$IMAGE" ]; then printf '<b>Образ:</b> <code>%s</code>\n' "$IMAGE"; fi
+            if [ -n "$RAN" ]; then printf '<code>%s — %s</code>\n' "$RAN" "${VERDICT:-?}"; fi
+            printf '\n<a href="%s">Прогон</a>' "$RUN_URL"
+          )
+          curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" -d message_thread_id="$TG_TOPIC_ID" \
+            -d parse_mode=HTML -d disable_web_page_preview=true \
+            --data-urlencode "text=$TEXT" > /dev/null
+          # Весь вывод — файлом, когда есть что читать: упавшие тесты, обрыв, нехватка памяти.
+          if [ "$CODE" != 0 ] && [ -s selftest.log ]; then
+            curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendDocument" \
+              -F chat_id="$TG_CHAT_ID" -F message_thread_id="$TG_TOPIC_ID" \
+              -F "document=@selftest.log;filename=selftest-$(date +%Y-%m-%d).txt" > /dev/null
+          fi
+          # Прогон в Actions — того же цвета, что и итог.
+          [ "$CODE" = 0 ]
