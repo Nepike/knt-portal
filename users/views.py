@@ -306,11 +306,16 @@ def _passwordless(user):
 
 
 def _welcome(request, user):
-    """Приглашение — то же письмо восстановления пароля, только другим текстом."""
+    """Приглашение — то же письмо восстановления пароля, только другим текстом.
+
+    use_https обязателен: без него ссылка собирается как http, и у нового человека, чей
+    браузер ещё не знает HSTS сайта, первый запрос с токеном шёл бы по сети открытым текстом.
+    """
     mail = PasswordResetForm({"email": user.email})
     mail.is_valid()
     mail.save(
         request=request,
+        use_https=request.is_secure(),
         email_template_name="users/welcome_email.txt",
         subject_template_name="users/welcome_subject.txt",
     )

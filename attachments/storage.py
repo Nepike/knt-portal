@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage
+from django.db import transaction
 
 
 # Длина FileField по умолчанию. Ключ обязан влезать: иначе запись не сохранится вовсе,
@@ -181,10 +182,25 @@ _BLOB_FIELDS = {}
 
 
 def _drop_blobs(sender, instance, **kwargs):
+    """Снять блобы удалённой записи — после коммита, а не сразу.
+
+    Удаление обычно идёт внутри транзакции (rewards.remove, каскады), и сразу снятый блоб
+    не вернуть: сбой R2 на третьем файле откатил бы базу, а первые два были бы уже стёрты.
+    robust — ошибка хранилища после коммита уходит в лог, а не в 500 на удавшемся удалении;
+    в бакете тогда остаётся сирота, и это дешевле потерянного файла.
+    """
     for name in _BLOB_FIELDS[sender]:
         blob = getattr(instance, name)
         if blob:
-            blob.delete(save=False)
+            transaction.on_commit(_dropper(blob.storage, blob.name), robust=True)
+
+
+def _dropper(storage, key):
+    """Функция, а не partial: ловя сбой robust-колбэка, Django пишет в лог его __qualname__,
+    а у partial его нет — и сама страховка падала бы AttributeError."""
+    def drop_blob():
+        storage.delete(key)
+    return drop_blob
 
 
 def connect_blob_cleanup():

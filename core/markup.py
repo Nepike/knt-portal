@@ -6,7 +6,7 @@ HTML из исходника НАСКВОЗЬ. Поэтому чистим уж�
 """
 
 import re
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from xml.etree.ElementTree import Element
 
 import markdown
@@ -41,17 +41,28 @@ EXTENSIONS = [
     "pymdownx.arithmatex",
 ]
 EXTENSION_CONFIGS = {"pymdownx.arithmatex": {"generic": True}}
+# Куда своя картинка может вести: раздача картинок (attachments.media_image) и статика.
+IMAGE_PATHS = ("/img/", "/static/")
 
 
 def _ours(url):
-    """Адрес на нашем сайте. Чужая картинка грузится у читателя сама и выдаёт её хозяину
-    адрес каждого, кто открыл материал, — поэтому в тексте остаются только свои."""
+    """Своя картинка: адрес на нашем сайте, и путь — к картинке. Чужая грузится у читателя
+    сама и выдаёт её хозяину адрес каждого, кто открыл материал, — поэтому в тексте
+    остаются только свои.
+
+    Своего домена мало. `![](/f/…)` у каждого читателя «скачивал» бы файл автора, а
+    скачивания приносят токены (economy.rewards): накрутка без единого настоящего скачивания.
+    """
     # Браузер выкидывает из адреса табы и переводы строк, а «\» читает как «/».
     url = re.sub(r"[\t\r\n]", "", url).strip().replace("\\", "/")
-    if url.startswith("/"):
-        return not url.startswith("//")
+    if url.startswith("//"):
+        return False
     parts = urlsplit(url)
-    return parts.scheme in ("http", "https") and parts.hostname in settings.ALLOWED_HOSTS
+    if not url.startswith("/") and not (parts.scheme in ("http", "https") and parts.hostname in settings.ALLOWED_HOSTS):
+        return False
+    # Путь — каким его поймёт браузер: «..» и «%2e%2e» он схлопывает, и /img/../f/… стал бы /f/….
+    segments = unquote(parts.path).split("/")
+    return parts.path.startswith(IMAGE_PATHS) and not {".", ".."} & set(segments)
 
 
 class _ForeignImages(Treeprocessor):

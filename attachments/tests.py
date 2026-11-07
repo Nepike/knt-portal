@@ -10,7 +10,7 @@ import struct
 import tempfile
 import warnings
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +27,7 @@ from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image as PilImage
@@ -44,8 +45,9 @@ from .r2 import R2Storage
 from .storage import CONTENT_TYPES, content_type, drop_prefix, file_storage, media_storage, random_key
 from .tasks import sweep_storage
 from .uploads import (
-    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MAX_PICTURE_PIXELS, MULTIPART_SALT, PICTURES,
-    UPLOAD_SALT, check_picture, max_upload_size, new_key, part_size,
+    MAX_DIRECT_SIZE, MAX_FILE_SIZE, MAX_LECTURE_SIZE, MAX_MATERIAL_SIZE, MAX_PARTS, MAX_PICTURE_PIXELS,
+    MULTIPART_SALT, PART_SIZE, PICTURES, PUT_MAX_AGE, QUOTA_DAYS, UPLOAD_SALT, WEEKLY_QUOTA, check_picture,
+    max_upload_size, new_key, part_size, quota_left,
 )
 
 
@@ -99,6 +101,29 @@ class PresignTests(TestCase):
         self.assertEqual(payload["name"], "Зорич том 1.pdf")
         # Ключ выбирает сервер: свой прислать нельзя, а имя остаётся читаемым.
         self.assertRegex(payload["key"], r"^uploads/[0-9a-f]{32}/Зорич том 1\.pdf$")
+
+    def test_the_put_link_lives_an_hour_not_six(self):
+        """Подпись S3 многоразовая: пока ссылка жива, по ней можно залить другие байты
+        в уже принятый, а то и одобренный файл. Токен формы при этом живёт дольше."""
+        storage = fake_storage()
+        self.ask(storage=storage)
+
+        self.assertEqual(storage.connection.meta.client.generate_presigned_url.call_args.kwargs["ExpiresIn"], PUT_MAX_AGE)
+        self.assertLessEqual(PUT_MAX_AGE, 3600)
+
+    def test_a_file_over_the_week_quota_gets_no_link(self):
+        with mock.patch("attachments.views.quota_left", return_value=100):
+            response = self.ask(size=1024)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("недельную квоту", response.json()["error"])
+
+    def test_too_many_links_an_hour_are_refused(self):
+        cache.clear()
+        with mock.patch("attachments.views.SIGNS_PER_HOUR", 2):
+            codes = [self.ask().status_code for _ in range(3)]
+
+        self.assertEqual(codes, [200, 200, 429])
 
     def test_the_type_is_ours_and_the_browser_is_told_which(self):
         """Тип объекта выбирает сервер и отдаёт браузеру: тот обязан прислать ровно его."""
@@ -718,11 +743,14 @@ class MultipartTests(TestCase):
 
     def setUp(self):
         self.user = make_user()
+        # Гигабайты частями льёт тот, кто сдаёт лекции: у остальных потолок файла 500 МБ.
+        self.user.user_permissions.add(Permission.objects.get(codename="add_playlist"))
         self.client.force_login(self.user)
         self.storage = fake_storage()
         self.api = self.storage.connection.meta.client
         self.api.create_multipart_upload.return_value = {"UploadId": "u-1"}
         self.api.list_parts.return_value = {"Parts": [], "IsTruncated": False}
+        self.api.head_object.return_value = {"ContentLength": 1}  # собранное влезает
         self.patch = mock.patch("attachments.uploads.file_storage", return_value=self.storage)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -732,6 +760,38 @@ class MultipartTests(TestCase):
 
     def start(self, size=1024 ** 3, **extra):
         return self.call("upload_start", name="lecture.mkv", size=size, **extra).json()
+
+    def test_no_more_part_links_than_the_declared_size_needs(self):
+        """Иначе под токен на мегабайт набирались бы ссылки на десять тысяч частей."""
+        token = self.start(size=2 * PART_SIZE)["token"]
+
+        urls = self.call("upload_parts", token=token, numbers=[0, 1, 2, 3, MAX_PARTS]).json()["urls"]
+
+        self.assertEqual(sorted(urls), ["1", "2"])
+
+    def test_an_upload_begun_before_sizes_were_kept_still_gets_its_parts(self):
+        """Токены живут сутки: начатая до выкладки загрузка не должна начинаться заново."""
+        token = signing.dumps({"key": "uploads/x/lecture.mkv", "name": "lecture.mkv", "id": "u-1"}, salt=MULTIPART_SALT)
+
+        self.assertEqual(sorted(self.call("upload_parts", token=token, numbers=[1, 500]).json()["urls"]), ["1", "500"])
+
+    def test_an_assembled_object_bigger_than_declared_is_dropped(self):
+        """Вес в подписи частей не участвует: объявить можно мегабайт, а залить гигабайты."""
+        token = self.start(size=PART_SIZE)["token"]
+        self.api.head_object.return_value = {"ContentLength": PART_SIZE + 1}
+
+        answer = self.call("upload_finish", token=token, parts={"1": '"a"'})
+
+        self.assertEqual(answer.status_code, 400)
+        self.assertIn("больше, чем было объявлено", answer.json()["error"])
+        self.api.delete_object.assert_called_once()
+
+    def test_json_that_is_not_an_object_is_refused_rather_than_crashing(self):
+        """`null` и `5` — тоже JSON; проверка полей на них падала бы пятисоткой."""
+        for body in ("null", "5", "[]"):
+            with self.subTest(body):
+                response = self.client.post(reverse("upload_parts"), body, content_type="application/json")
+                self.assertEqual(response.status_code, 400)
 
     def test_a_big_file_gets_a_multipart_upload(self):
         answer = self.start()
@@ -854,8 +914,24 @@ class UploadLimitTests(TestCase):
         self.user = make_user()
 
     def test_an_ordinary_person_keeps_the_ordinary_ceiling(self):
+        """Самый большой файл материала на проде — 319 МБ (7 ноя 2026), а было 4 ГБ на файл."""
         with mock.patch("attachments.uploads.direct_upload", return_value=True):
-            self.assertEqual(max_upload_size(self.user), MAX_DIRECT_SIZE)
+            self.assertEqual(max_upload_size(self.user), MAX_MATERIAL_SIZE)
+
+    def test_the_week_quota_counts_only_the_last_week(self):
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
+        File.objects.create(book=book, name="свежий", file=ContentFile(b"x", name="a.pdf"),
+                            size=WEEKLY_QUOTA - 100, uploader=self.user)
+        File.objects.create(book=book, name="давний", file=ContentFile(b"x", name="b.pdf"), size=10 ** 9,
+                            uploader=self.user, created=datetime.now(timezone.utc) - timedelta(days=QUOTA_DAYS + 1))
+
+        self.assertEqual(quota_left(self.user), 100)
+
+    def test_lectures_have_no_week_quota(self):
+        """Одна запись лекции — уже гигабайты, а сдают их немногие по отдельному праву."""
+        self.user.user_permissions.add(Permission.objects.get(codename="add_playlist"))
+
+        self.assertEqual(quota_left(User.objects.get(pk=self.user.pk)), float("inf"))
 
     def test_whoever_may_add_lectures_may_upload_a_lecture(self):
         self.user.user_permissions.add(Permission.objects.get(codename="add_playlist"))
@@ -1064,6 +1140,14 @@ class DownloadCountTests(TestCase):
 
         self.assertEqual(self.count(), 2)
 
+    def test_a_picture_tag_pulling_the_file_is_not_a_download(self):
+        """`<img>` с адресом файла тянет его у каждого, кто открыл страницу с ним. Это не
+        скачивание, и платить за него автору не за что."""
+        response = self.client.get(file_url(self.file), REMOTE_ADDR="10.0.0.7", headers={"Sec-Fetch-Dest": "image"})
+
+        self.assertEqual(response.status_code, 302)  # отдаём, но не считаем
+        self.assertEqual(self.count(), 0)
+
     def test_another_file_from_the_same_address_counts_too(self):
         other = File.objects.create(book=self.file.book, name="y.pdf", file=ContentFile(b"pdf", name="y.pdf"))
         self.download()
@@ -1252,13 +1336,28 @@ class AdoptUploadTests(TestCase):
         self.assertFalse(File.objects.exists())
         self.assertFalse(Book.objects.exists())
 
-    def test_oversized_object_stops_the_save(self):
+    def test_oversized_object_stops_the_save_and_leaves_the_bucket(self):
+        """Объявить при подписи можно мало, а положить сколько угодно. Такой объект ничей
+        и платный — его снимаем сразу, а не ночной уборкой."""
         key = self.put(body=b"x" * 100)
-        with mock.patch("attachments.uploads.MAX_DIRECT_SIZE", 10):
+        with mock.patch("attachments.uploads.max_upload_size", return_value=10):
             response = self.create(uploaded=self.token(key))
         self.assertContains(response, "больше")
         self.assertFalse(Book.objects.exists())
         self.assertFalse(File.objects.exists())
+        self.assertFalse(file_storage().exists(key))
+
+    def test_the_same_upload_sent_twice_makes_one_row(self):
+        """Двойное «Сохранить» или «Назад → Сохранить»: две записи на один ключ, и удаление
+        любой из них сняло бы блоб у обеих."""
+        key = self.put()
+        token = self.token(key)
+        self.create(uploaded=token)
+        book = Book.objects.get()
+
+        self.client.post(reverse("book_edit", args=[book.pk]), {"title": "Механика", "uploaded": token})
+
+        self.assertEqual(File.objects.filter(file=key).count(), 1)
 
     def test_order_follows_the_rows_on_screen(self):
         book = Book.objects.create(title="Фихтенгольц", status=Book.Status.APPROVED, uploader=self.author)
@@ -1403,7 +1502,8 @@ class BlobCleanupTests(TestCase):
         file = File.objects.create(book=book, name="скан.pdf", file=ContentFile(b"pdf", name="скан.pdf"))
         key = file.file.name
 
-        file.delete()
+        with self.captureOnCommitCallbacks(execute=True):  # блоб снимается после коммита
+            file.delete()
         self.assertFalse(self.storage.exists(key))
 
     def test_photo_of_a_user_is_dropped(self):
@@ -1413,15 +1513,55 @@ class BlobCleanupTests(TestCase):
         self.user.save()
         key = self.user.photo.name
 
-        self.user.delete()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.user.delete()
         self.assertFalse(self.storage.exists(key))
 
     def test_cascade_drops_the_blob_too(self):
         book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
         key = File.objects.create(book=book, name="скан.pdf", file=ContentFile(b"pdf", name="скан.pdf")).file.name
 
-        book.delete()  # файл уезжает каскадом, сигнал обязан сработать и на нём
+        with self.captureOnCommitCallbacks(execute=True):
+            book.delete()  # файл уезжает каскадом, сигнал обязан сработать и на нём
         self.assertFalse(self.storage.exists(key))
+
+    def book_with_file(self):
+        book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
+        file = File.objects.create(book=book, name="скан.pdf", file=ContentFile(b"pdf", name="скан.pdf"))
+        return book, file.file.name
+
+    def test_the_blob_waits_for_the_commit(self):
+        book, key = self.book_with_file()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            book.delete()
+            self.assertTrue(self.storage.exists(key))  # база ещё может откатиться
+
+        self.assertFalse(self.storage.exists(key))
+
+    def test_a_rolled_back_delete_keeps_the_blob(self):
+        """Сбой на третьем файле откатывает базу. Стёртые раньше коммита первые два
+        остались бы записями без файлов — восстановить их было бы нечем."""
+        book, key = self.book_with_file()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                book.delete()
+                raise RuntimeError("хранилище не ответило на следующем файле")
+
+        self.assertTrue(File.objects.filter(file=key).exists())
+        self.assertTrue(self.storage.exists(key))
+
+    def test_a_storage_failure_after_the_commit_is_logged_not_raised(self):
+        """Удаление в базе уже случилось: сирота в бакете дешевле пятисотки на удавшемся."""
+        book, key = self.book_with_file()
+
+        with mock.patch.object(type(self.storage), "delete", side_effect=OSError("R2 не ответил")), \
+                self.assertLogs(level="ERROR") as log, self.captureOnCommitCallbacks(execute=True):
+            book.delete()
+
+        self.assertFalse(Book.objects.filter(pk=book.pk).exists())
+        self.assertIn("R2 не ответил", "\n".join(log.output))
 
     def test_key_fits_the_database_field(self):
         # Ключ длиннее поля не сохранился бы вовсе: DataError на вставке.

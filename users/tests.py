@@ -591,6 +591,18 @@ class SessionForCommandTests(TestCase):
         self.run_command(self.person.email, "--minutes", "5")
         self.assertLess(Session.objects.get().expire_date, timezone.now() + timedelta(minutes=6))
 
+    def test_using_it_does_not_stretch_its_life(self):
+        """Срок — момент, а не бездействие: отметка активности пишет в сессию на каждом
+        заходе, и при сроке бездействия «полчаса» длились бы, пока ею пользуются."""
+        key = self.key_from(self.run_command(self.person.email))
+        born = Session.objects.get().expire_date
+        self.client.cookies[settings.SESSION_COOKIE_NAME] = key
+
+        with mock.patch("django.utils.timezone.now", return_value=timezone.now() + timedelta(minutes=10)):
+            self.assertEqual(self.client.get(reverse("profile", args=[self.person.pk])).status_code, 200)
+
+        self.assertEqual(Session.objects.get().expire_date, born)
+
     def test_it_takes_an_id_as_well_as_an_email(self):
         self.assertIn(self.person.email, self.run_command(str(self.person.pk)))
 
@@ -866,6 +878,15 @@ class RegisterOneTests(TestCase):
         self.assertFalse(student.must_change_password)  # пароль он задаёт сам, по ссылке
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("password/reset/", mail.outbox[0].body)
+
+    def test_the_invitation_link_is_https_on_a_secure_site(self):
+        """Иначе первый запрос с токеном установки пароля шёл бы по сети открытым текстом:
+        браузер нового человека ещё не знает HSTS сайта."""
+        self.client.post(reverse("user_new"), {
+            "surname": "Сёмин", "name": "Георгий", "email": "egor@t.local", "team": self.team.pk,
+        }, secure=True)
+
+        self.assertRegex(mail.outbox[0].body, r"https://\S+/password/reset/")
 
     def test_the_page_is_closed_to_those_who_may_not_register_anyone(self):
         self.client.force_login(make_user("student@t.local"))

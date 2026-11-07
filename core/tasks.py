@@ -55,12 +55,21 @@ def backup_database():
 
 @shared_task
 def sweep_journals():
-    """Снять из журналов входов и сбоев всё старше JOURNAL_DAYS."""
+    """Снять из журналов входов и сбоев всё старше JOURNAL_DAYS, а с ними просроченные сессии.
+
+    Сессии Django сам не удаляет: строка с истёкшим сроком лежит, пока её не снимет
+    clearsessions, а с ней лежит и приписка «моих устройств» (UserSession уходит только
+    каскадом). К 7 ноя 2026 таких было 500 из 745.
+    """
+    from django.contrib.sessions.models import Session
+
     from users.models import LoginEvent
 
     from .models import Failure
 
-    edge = timezone.now() - timedelta(days=JOURNAL_DAYS)
+    now = timezone.now()
+    edge = now - timedelta(days=JOURNAL_DAYS)
     logins, _ = LoginEvent.objects.filter(created__lt=edge).delete()
     failures, _ = Failure.objects.filter(last_at__lt=edge).delete()
-    return f"входов снято: {logins}, сбоев: {failures}"
+    _, gone = Session.objects.filter(expire_date__lt=now).delete()
+    return f"входов снято: {logins}, сбоев: {failures}, сессий: {gone.get('sessions.Session', 0)}"

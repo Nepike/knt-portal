@@ -430,11 +430,12 @@ class BookEditTests(TestCase):
         book = Book.objects.get(title="Механика")
         old, extra = book.files.all()
 
-        self.client.post(reverse("book_edit", args=[book.pk]), self.fields(
-            title="Механика, 5-е издание",
-            **{f"name-{old.pk}": "Ландау том 1", f"delete-{extra.pk}": "on"},
-            files=[upload("Добавка.pdf")],
-        ))
+        with self.captureOnCommitCallbacks(execute=True):  # блоб снимается после коммита
+            self.client.post(reverse("book_edit", args=[book.pk]), self.fields(
+                title="Механика, 5-е издание",
+                **{f"name-{old.pk}": "Ландау том 1", f"delete-{extra.pk}": "on"},
+                files=[upload("Добавка.pdf")],
+            ))
         book.refresh_from_db()
         self.assertEqual(book.title, "Механика, 5-е издание")
         self.assertEqual([f.name for f in book.files.all()], ["Ландау том 1", "Добавка.pdf"])
@@ -465,7 +466,9 @@ class BookEditTests(TestCase):
         book = Book.objects.get(title="Механика")
         blob = book.files.first().file
 
-        response = self.client.post(reverse("book_delete", args=[book.pk]))
+        # Блоб снимается после коммита (attachments.storage._drop_blobs), а тест весь в транзакции.
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(reverse("book_delete", args=[book.pk]))
         self.assertRedirects(response, reverse("book_list"))
         self.assertFalse(Book.objects.exists())
         self.assertFalse(File.objects.exists())

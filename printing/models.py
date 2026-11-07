@@ -245,7 +245,8 @@ class PrinterReading(models.Model):
     class Meta:
         verbose_name = "показание принтера"
         verbose_name_plural = "показания принтеров"
-        ordering = ["-at"]
+        # id — на случай одной метки времени у двух показаний: иначе их порядок случаен.
+        ordering = ["-at", "-id"]
 
     def __str__(self):
         return f"{self.printer} {self.at:%d.%m %H:%M}"

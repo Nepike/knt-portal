@@ -24,7 +24,7 @@ from teachers.models import Review, Teacher
 from users.models import User
 from wall.models import WallProfile
 
-from . import rewards
+from . import rewards, services
 from .admin import GrantForm
 from .models import BalanceLog, Wallet
 from .services import NotEnoughFunds, credit, reclaim, recount, spend, wallet_of
@@ -128,6 +128,18 @@ class RecountTests(TestCase):
 
     def test_empty_wallet_counts_as_zero(self):
         self.assertEqual(recount(wallet_of(make_user())), (0, 0))
+
+    def test_recount_takes_the_same_lock_as_every_operation(self):
+        """Иначе покупка между подсчётом журнала и записью баланса пропала бы из кэша.
+        Настоящую гонку внутри одной транзакции теста не поставить — проверяем замок."""
+        user = make_user()
+        credit(user, 100, MANUAL)
+        break_cache(user, 7)
+
+        with mock.patch("economy.services.lock", wraps=services.lock) as taken:
+            self.assertEqual(recount(wallet_of(user)), (7, 100))
+
+        taken.assert_called_once_with(user)
 
     def test_dry_run_reports_but_does_not_fix(self):
         user = make_user()

@@ -54,7 +54,10 @@ def live_session(user, seen):
 
 
 def logs(obj):
-    return list(LogEntry.objects.filter(object_id=str(obj.pk)).values_list("change_message", flat=True))
+    """Свежие сверху. По id, а не по времени: два действия подряд получают одну метку
+    (часы на windows тикают ~15 мс), и порядок по action_time выходил случайным."""
+    entries = LogEntry.objects.filter(object_id=str(obj.pk)).order_by("-id")
+    return list(entries.values_list("change_message", flat=True))
 
 
 class AccessTests(TestCase):

@@ -13,7 +13,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils.cache import patch_vary_headers
 from django.views.decorators.http import require_POST, require_http_methods
 
-from core.throttle import client_ip
+from core.throttle import client_ip, throttled
 from economy import rewards
 
 from .hls import MANIFEST_TYPE, manifest
@@ -21,8 +21,9 @@ from .media import MEDIA_CACHE, file_pk, hls_key, media_key
 from .models import File, human_size
 from .storage import content_type, file_storage
 from .uploads import (
-    MAX_DIRECT_SIZE, MAX_PARTS, abort_multipart, begin_multipart, check_name, direct_upload,
-    finish_multipart, max_upload_size, multipart, part_size, part_urls, sign_upload, uploaded_parts,
+    MAX_DIRECT_SIZE, MAX_PARTS, QUOTA_DAYS, SIGNS_PER_HOUR, WEEKLY_QUOTA, Oversized, abort_multipart, begin_multipart,
+    check_name, direct_upload, finish_multipart, max_upload_size, multipart, part_size, part_urls, parts_for,
+    quota_left, sign_upload, uploaded_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,8 +119,10 @@ def download(request, token, name):
 
     file = get_object_or_404(File, pk=pk)
     # Просмотрщик pdf дочитывает книгу кусками по тому же адресу — считаем только
-    # первый запрос, иначе одно открытие давало бы десяток «скачиваний».
-    if "Range" not in request.headers and _first_today(request, pk):
+    # первый запрос, иначе одно открытие давало бы десяток «скачиваний». А запрос за
+    # картинкой — не скачивание вовсе: так файл тянул бы <img>, вставленный в чужую страницу.
+    counted = "Range" not in request.headers and request.headers.get("Sec-Fetch-Dest") != "image"
+    if counted and _first_today(request, pk):
         File.objects.filter(pk=pk).update(downloads=F("downloads") + 1)
         # Пересчёт зовём не на каждое скачивание, а только когда набралась порция:
         # он стоит несколько запросов, а раздача файлов — самый горячий путь на сайте.
@@ -217,7 +220,8 @@ def _asked(request, *fields):
         payload = json.loads(request.body)
     except ValueError:
         return None
-    return payload if all(field in payload for field in fields) else None
+    # `null` или `5` — тоже JSON, но проверка полей на них падала бы TypeError, то есть пятисоткой.
+    return payload if isinstance(payload, dict) and all(field in payload for field in fields) else None
 
 
 def _named(payload):
@@ -239,6 +243,18 @@ def _refuse(request, name, size):
     limit = max_upload_size(request.user)
     if size > limit:
         return f"«{name}» больше {human_size(limit)}"
+    left = quota_left(request.user)
+    if size > left:
+        return (f"«{name}» не влезает в недельную квоту: осталось {human_size(left)} "
+                f"из {human_size(WEEKLY_QUOTA)}. Место освобождается через {QUOTA_DAYS} дней после загрузки")
+    return None
+
+
+def _too_often(request):
+    """Ответ-отказ, если подписей за час слишком много. Ссылка на загрузку — это место
+    в платном бакете, а ночная уборка снимает брошенное только через сутки."""
+    if throttled(f"upload:sign:{request.user.pk}", SIGNS_PER_HOUR):
+        return JsonResponse({"error": "Слишком много загрузок за час — попробуй позже"}, status=429)
     return None
 
 
@@ -255,6 +271,8 @@ def upload_url(request):
 
     if problem := _refuse(request, name, size):
         return JsonResponse({"error": problem}, status=400)
+    if refusal := _too_often(request):
+        return refusal
     if size > MAX_DIRECT_SIZE:
         return JsonResponse({"error": f"«{name}» не влезет одним куском"}, status=400)
 
@@ -283,13 +301,15 @@ def upload_start(request):
 
     if problem := _refuse(request, name, size):
         return JsonResponse({"error": problem}, status=400)
+    if refusal := _too_often(request):
+        return refusal
 
     # Продолжаем, только если присланный токен наш И такая загрузка в хранилище жива.
     # Иначе начинаем заново: отдать браузеру мёртвый номер — значит дать ему залить
     # гигабайты в никуда и узнать об этом на самом последнем шаге.
     started = multipart(payload.get("resume") or "")
     done = uploaded_parts(started) if started else None
-    token = payload["resume"] if done is not None else begin_multipart(name)
+    token = payload["resume"] if done is not None else begin_multipart(name, size)
     return JsonResponse({"token": token, "partSize": part_size(size), "done": done or {}})
 
 
@@ -308,7 +328,10 @@ def upload_parts(request):
         numbers = [int(number) for number in payload["numbers"]][:MAX_PARTS]
     except (TypeError, ValueError):
         return HttpResponseBadRequest("numbers — это список номеров частей")
-    return JsonResponse({"urls": part_urls(started, numbers)})
+    # Ровно столько частей, сколько нужно объявленному размеру: иначе под токен на мегабайт
+    # можно было бы набрать ссылок на десять тысяч частей по пять гигабайт.
+    last = parts_for(started)
+    return JsonResponse({"urls": part_urls(started, [number for number in numbers if 1 <= number <= last])})
 
 
 @require_POST
@@ -326,7 +349,11 @@ def upload_finish(request):
         return HttpResponseBadRequest("parts — это {номер части: etag}")
     if not parts:
         return JsonResponse({"error": "Нечего собирать: ни одной части"}, status=400)
-    return JsonResponse({"token": finish_multipart(started, parts)})
+    try:
+        token = finish_multipart(started, parts, limit=max_upload_size(request.user))
+    except Oversized:
+        return JsonResponse({"error": f"«{started['name']}» больше, чем было объявлено при начале загрузки"}, status=400)
+    return JsonResponse({"token": token})
 
 
 @require_POST

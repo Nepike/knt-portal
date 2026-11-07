@@ -1,12 +1,15 @@
 import json
 import math
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core import signing
+from django.db.models import Sum
 from django.urls import reverse
+from django.utils import timezone
 
 from django.core.files.storage import FileSystemStorage
 from PIL import Image as PilImage
@@ -51,6 +54,18 @@ UPLOAD_SALT = "attachments.direct-upload"
 # вместе с уборкой печати.
 PREFIX = "uploads"
 UPLOAD_MAX_AGE = 6 * 3600  # столько живёт токен между подписью и отправкой формы
+# А столько — сама ссылка на запись. Подпись S3 многоразовая: пока ссылка жива, по ней
+# можно залить другие байты в уже принятый, а то и одобренный модератором файл. Одним PUT
+# браузер шлёт только то, что меньше MULTIPART_FROM (печать — до 50 МБ), и часа хватает
+# даже на медленной связи. Собранную многочастную загрузку не дописать вовсе.
+PUT_MAX_AGE = 3600
+# Потолок файла материала и книги при прямой загрузке. Самый большой на проде — 319 МБ
+# (7 ноя 2026); бакет платный, а сайт живёт на сборе.
+MAX_MATERIAL_SIZE = 500 * 1024 * 1024
+# Сколько человек заливает за неделю. Самая большая неделя на проде — 4,8 ГБ (7 ноя 2026).
+WEEKLY_QUOTA = 5 * 1024 * 1024 * 1024
+QUOTA_DAYS = 7
+SIGNS_PER_HOUR = 60  # подписей ссылок на загрузку в час на человека
 
 
 def direct_upload():
@@ -58,14 +73,34 @@ def direct_upload():
     return bool(settings.R2_BUCKET)
 
 
-def max_upload_size(user=None):
-    """Потолок для этого человека. Право берём строкой, а не импортом модели: приложение
+def _lecturer(user):
+    """Сдаёт записи лекций. Право берём строкой, а не импортом модели: приложение
     вложений не должно зависеть от лектория, а строка — это просто настройка."""
+    return user is not None and user.has_perm("lectorium.add_playlist")
+
+
+def max_upload_size(user=None):
+    """Потолок одного файла для этого человека."""
     if not direct_upload():
         return MAX_FILE_SIZE
-    if user is not None and user.has_perm("lectorium.add_playlist"):
-        return MAX_LECTURE_SIZE
-    return MAX_DIRECT_SIZE
+    return MAX_LECTURE_SIZE if _lecturer(user) else MAX_MATERIAL_SIZE
+
+
+def quota_left(user):
+    """Сколько ещё можно залить на этой неделе, байт. Лекторию квоты нет: одна запись —
+    это уже гигабайты, и сдаёт их немного людей по отдельному праву."""
+    if _lecturer(user):
+        return math.inf
+    since = timezone.now() - timedelta(days=QUOTA_DAYS)
+    spent = File.objects.filter(uploader=user, created__gte=since).aggregate(total=Sum("size"))["total"] or 0
+    return max(WEEKLY_QUOTA - spent, 0)
+
+
+def parts_for(payload):
+    """Сколько частей нужно файлу этой многочастной загрузки. У токена без размера —
+    начатого до того, как размер стали в нём хранить, — по-старому, сколько попросят."""
+    size = payload.get("size")
+    return -(-size // part_size(size)) if size else MAX_PARTS
 
 
 def upload_limits(user=None):
@@ -243,7 +278,7 @@ def sign_upload(name, folder=PREFIX):
     url = storage.connection.meta.client.generate_presigned_url(
         "put_object",
         Params={"Bucket": storage.bucket_name, "Key": _prefixed(storage, key), "ContentType": kind},
-        ExpiresIn=UPLOAD_MAX_AGE,
+        ExpiresIn=PUT_MAX_AGE,
     )
     return url, adopt_token(key, name), kind
 
@@ -354,15 +389,17 @@ def part_size(size):
     return max(PART_SIZE, -(-need // MB) * MB)
 
 
-def begin_multipart(name):
-    """Начать многочастную загрузку. Возвращает токен, в котором ключ и номер загрузки."""
+def begin_multipart(name, size):
+    """Начать многочастную загрузку. Возвращает токен с ключом, номером загрузки и
+    объявленным размером: по нему ограничивается число частей и сверяется собранное."""
     key = new_key(name)
     storage = file_storage()
     # Тип у собранного объекта — тот, с которым загрузку начали; части его не несут.
     started = storage.connection.meta.client.create_multipart_upload(
         Bucket=storage.bucket_name, Key=_prefixed(storage, key), ContentType=content_type(key),
     )
-    return signing.dumps({"key": key, "name": name, "id": started["UploadId"]}, salt=MULTIPART_SALT)
+    payload = {"key": key, "name": name, "id": started["UploadId"], "size": size}
+    return signing.dumps(payload, salt=MULTIPART_SALT)
 
 
 def multipart(token):
@@ -419,8 +456,17 @@ def uploaded_parts(payload):
         marker = answer["NextPartNumberMarker"]
 
 
-def finish_multipart(payload, parts):
-    """Собрать объект из частей. Возвращает токен как у обычной загрузки."""
+class Oversized(Exception):
+    """Собранный объект тяжелее объявленного или потолка — и уже снят из хранилища."""
+
+
+def finish_multipart(payload, parts, limit=math.inf):
+    """Собрать объект из частей. Возвращает токен как у обычной загрузки.
+
+    Настоящий вес виден только теперь: в подписи частей он не участвует. Больше
+    объявленного при начале или потолка человека — объект ничей и платный, снимаем сразу,
+    не дожидаясь, прикрепят ли его к чему-нибудь.
+    """
     client, bucket, key = _client(payload)
     client.complete_multipart_upload(
         Bucket=bucket, Key=key, UploadId=payload["id"],
@@ -428,6 +474,10 @@ def finish_multipart(payload, parts):
             {"PartNumber": number, "ETag": tag} for number, tag in sorted(parts.items())
         ]},
     )
+    size = client.head_object(Bucket=bucket, Key=key)["ContentLength"]
+    if size > min(limit, payload.get("size") or math.inf):
+        client.delete_object(Bucket=bucket, Key=key)
+        raise Oversized(size)
     return adopt_token(payload["key"], payload["name"])
 
 
@@ -488,10 +538,14 @@ def check_pending(request):
             errors.append("Один из файлов не доехал до хранилища — загрузи его заново.")
             continue
         size = _stored_size(request, payload["key"])
+        limit = max_upload_size(request.user)
         if size is None:
             errors.append(f"«{payload['name']}» не доехал до хранилища — загрузи заново.")
-        elif size > MAX_DIRECT_SIZE:
-            errors.append(f"«{payload['name']}» больше {human_size(MAX_DIRECT_SIZE)}")
+        elif size > limit:
+            # Вес в подписи не участвует: объявить можно мало, а положить сколько угодно.
+            # Такой объект ничей и платный — снимаем сразу, а не ждём ночной уборки.
+            file_storage().delete(payload["key"])
+            errors.append(f"«{payload['name']}» больше {human_size(limit)}")
     return errors
 
 
@@ -504,9 +558,16 @@ def pending_uploads(request):
 
 def _adopt(token, owner, request, order, name=""):
     """Файл уже в хранилище — заводим на него запись. Что он туда доехал и влезает
-    в лимит, проверил check_pending: сюда доходят только целые загрузки."""
+    в лимит, проверил check_pending: сюда доходят только целые загрузки.
+
+    Ключ, на который запись уже есть, второй раз не берём: токен живёт часы, и двойное
+    нажатие «Сохранить» или «Назад → Сохранить» давало две записи на один блоб. Удаление
+    любой из них снимает блоб (post_delete), и у второй файл молча пропадал.
+    """
     payload = _unsign(token)
-    size = _stored_size(request, payload["key"]) if payload else None
+    if payload is None or File.objects.filter(file=payload["key"]).exists():
+        return None
+    size = _stored_size(request, payload["key"])
     if size is None:
         return None
 

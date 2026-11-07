@@ -84,8 +84,14 @@ def mismatched():
     return [(wallet, wallet.journal or 0) for wallet in wallets if wallet.balance != (wallet.journal or 0)]
 
 
+@transaction.atomic
 def recount(wallet):
-    """Привести кэш к журналу. Возвращает, что было и что стало."""
+    """Привести кэш к журналу. Возвращает, что было и что стало.
+
+    Под той же блокировкой, что и любая операция: покупка между подсчётом журнала и
+    записью баланса иначе пропала бы из кэша.
+    """
+    wallet = lock(wallet.user)
     total = wallet.entries.aggregate(total=Sum("amount"))["total"] or 0
     was = wallet.balance
     if was != total:

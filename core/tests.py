@@ -16,6 +16,7 @@ from channels.testing import WebsocketCommunicator
 from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth.models import Group, Permission
+from django.contrib.sessions.models import Session
 from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
@@ -42,7 +43,7 @@ from core.models import Failure, Funding, Lockdown, Supporter, Team
 from intake import urls as intake_urls
 from printing import urls as printing_urls
 from teachers.models import Review, Teacher
-from users.models import LoginEvent, User
+from users.models import LoginEvent, User, UserSession
 
 from chats.consumers import ChatConsumer
 from chats.models import Chat
@@ -555,6 +556,26 @@ class MarkupImageTests(SimpleTestCase):
         for url in lookalikes:
             with self.subTest(url):
                 self.assertNotIn("<img", render(f"![обман]({url})"))
+
+    def test_an_address_of_ours_that_is_not_a_picture_becomes_a_link(self):
+        """`![](/f/…)` у каждого читателя «скачивал» бы файл автора, а скачивания приносят
+        токены: накрутка без единого настоящего скачивания."""
+        for url in ("/f/abc/конспект.pdf", "https://files.inbicst.ru/f/abc/x.pdf",
+                    "https://knt-mipt.ru/hls/abc/seg.m4s", "/materials/1/"):
+            with self.subTest(url):
+                html = render(f"![файл]({url})")
+                self.assertNotIn("<img", html)
+                self.assertIn(">файл</a>", html)
+
+    def test_dots_in_the_path_do_not_lead_out_of_the_pictures(self):
+        """Браузер схлопывает «..» и «%2e%2e», и /img/../f/… у него стал бы /f/…."""
+        for url in ("/img/../f/abc/x.pdf", "/img/%2e%2e/f/abc/x.pdf", "/static/./../f/x",
+                    "https://files.inbicst.ru/img/%2E%2E/f/x"):
+            with self.subTest(url):
+                self.assertNotIn("<img", render(f"![обход]({url})"))
+
+    def test_a_raw_picture_of_ours_that_is_not_a_picture_loses_its_address(self):
+        self.assertNotIn("src=", render('<img src="/f/abc/x.pdf">'))
 
     def test_a_picture_written_as_raw_html_loses_its_address(self):
         # Такая в дерево markdown не попадает — её ловит уже чистка готового HTML.
@@ -2131,6 +2152,21 @@ class JournalSweepTests(TestCase):
 
         self.assertEqual(list(LoginEvent.objects.all()), [fresh_login])
         self.assertEqual(list(Failure.objects.all()), [recurring])
+
+    def test_expired_sessions_go_with_their_device_rows(self):
+        """Django сам просроченные сессии не удаляет, и приписки «моих устройств» копились
+        за ними: к 7 ноя 2026 на проде просрочены были 500 из 745."""
+        person = make_user("sessions@x.ru")
+        now = timezone.now()
+        old = Session.objects.create(session_key="old", session_data="", expire_date=now - timedelta(hours=1))
+        live = Session.objects.create(session_key="live", session_data="", expire_date=now + timedelta(days=1))
+        UserSession.objects.create(session=old, user=person)
+        UserSession.objects.create(session=live, user=person)
+
+        self.assertIn("сессий: 1", sweep_journals())
+
+        self.assertEqual(list(Session.objects.values_list("session_key", flat=True)), ["live"])
+        self.assertEqual(list(UserSession.objects.values_list("session_id", flat=True)), ["live"])
 
 
 class RunMarkTests(TestCase):

@@ -6,6 +6,7 @@
 """
 
 import logging
+from datetime import timedelta
 from importlib import import_module
 
 from django.conf import settings
@@ -30,7 +31,9 @@ def mint(user, minutes, agent=AGENT):
     store[SESSION_KEY] = str(user.pk)
     store[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
     store[HASH_SESSION_KEY] = user.get_session_auth_hash()
-    store.set_expiry(minutes * 60)
+    # timedelta, а не число секунд: число Django понимает как срок бездействия, и отметка
+    # активности (users/sessions.py) продлевала бы сессию, пока ею пользуются.
+    store.set_expiry(timedelta(minutes=minutes))
     store.create()
     # Приписку заводим и здесь, хотя сигнала входа не было: иначе выданная сессия
     # не попадёт в список «мои устройства» и хозяин аккаунта её не увидит.
