@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 from datetime import date, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -15,11 +16,12 @@ from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.apps import apps as django_apps
 from django.conf import settings
+from django.contrib.admin.models import LogEntry
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.models import Group, Permission
 from django.contrib.sessions.models import Session
 from django.contrib.staticfiles import finders
-from django.core import mail
+from django.core import mail, signing
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
@@ -42,7 +44,7 @@ from attachments.storage import file_storage
 from attachments.uploads import under
 from knt import urls as site_urls
 from knt.celery import app as celery_app
-from core.models import Failure, Funding, Lockdown, Supporter, Team
+from core.models import Failure, Funding, Inquiry, Lockdown, Supporter, Team
 from intake import urls as intake_urls
 from printing import urls as printing_urls
 from teachers.models import Review, Teacher
@@ -52,16 +54,16 @@ from chats.consumers import ChatConsumer
 from chats.models import Chat
 from wall.models import Board
 
-from . import backup, donors, lockdown, nav, runs
+from . import backup, donors, lockdown, nav, runs, spam
 from .context_processors import theme_for
 from .search import by_name
 from .failures import record
-from .forms import MAX_SUPPORT_IMAGE
+from .forms import MAX_SUPPORT_IMAGE, FeedbackForm, StampedForm, SupportForm
 from .middleware import SLOW, SWOLLEN, SlowRequestMiddleware
 from .throttle import client_ip, exhausted, forgive, strike, throttled
 from .markup import render
 from .mail import pack
-from .tasks import JOURNAL_DAYS, MAIL_RETRIES, backup_database, ping, send_email, sweep_journals
+from .tasks import INQUIRY_DAYS, JOURNAL_DAYS, MAIL_RETRIES, backup_database, ping, send_email, sweep_journals
 
 
 class CeleryTests(SimpleTestCase):
@@ -1184,7 +1186,7 @@ class ContactsPageTests(TestCase):
 
     def test_a_question_reaches_the_feedback_chat_and_not_support(self):
         """Разные чаты не для порядка: про поступление и про сломанный сайт отвечают разные люди."""
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("contacts"), {
                 "text": "До какого числа подают документы?",
                 "name": "Абитуриент", "contact": "abit@mail.ru",
@@ -1198,7 +1200,7 @@ class ContactsPageTests(TestCase):
         self.assertEqual(context["contact"], "abit@mail.ru")
 
     def test_without_a_name_and_a_contact_there_is_nowhere_to_answer(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("contacts"), {"text": "Вопрос"})
 
         self.assertEqual(response.status_code, 200)
@@ -1215,7 +1217,7 @@ class ContactsPageTests(TestCase):
 
     def test_a_flood_stops_reaching_the_chat(self):
         payload = {"text": "спам", "name": "спам", "contact": "spam@x.ru"}
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             for _ in range(14):
                 self.client.post(reverse("contacts"), payload)
 
@@ -1269,7 +1271,7 @@ class SupportFormTests(TestCase):
         self.client.force_login(self.user)
 
     def test_a_report_reaches_the_support_chat(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("support"), {
                 "topic": "broken", "text": "Не открывается книга",
             })
@@ -1281,7 +1283,7 @@ class SupportFormTests(TestCase):
         self.assertEqual(context["topic"], "Что-то не работает")
 
     def test_an_empty_report_is_not_sent(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("support"), {"topic": "broken", "text": ""})
         self.assertEqual(response.status_code, 200)
         sent.assert_not_called()
@@ -1317,7 +1319,7 @@ class SupportFormTests(TestCase):
         self.assertNotIn("vk.com", text)
 
     def test_a_picture_rides_along_with_the_report(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             self.client.post(reverse("support"), {
                 "topic": "broken", "text": "вот так это выглядит", "image": make_image(),
             })
@@ -1334,14 +1336,14 @@ class SupportWithoutLoginTests(TestCase):
         self.assertEqual(self.client.get(reverse("support")).status_code, 200)
 
     def test_without_a_contact_there_would_be_nowhere_to_answer(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("support"), {"topic": "account", "text": "Не приходит письмо"})
         self.assertEqual(response.status_code, 200)
         self.assertFormError(response.context["form"], "contact", "Обязательное поле.")
         sent.assert_not_called()
 
     def test_a_visitor_with_a_contact_gets_through(self):
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             response = self.client.post(reverse("support"), {
                 "topic": "account", "text": "Не приходит письмо", "contact": "ivan@mipt.ru",
             })
@@ -1369,7 +1371,7 @@ class SupportWithoutLoginTests(TestCase):
     def test_a_flood_stops_reaching_the_chat(self):
         # Форма открыта всему интернету: без ограничителя чат завалило бы за вечер.
         payload = {"topic": "other", "text": "спам", "contact": "spam@x.ru"}
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             for _ in range(14):
                 self.client.post(reverse("support"), payload)
         self.assertEqual(sent.call_count, 10)
@@ -1378,10 +1380,333 @@ class SupportWithoutLoginTests(TestCase):
         """Счёт шёл по первому адресу из X-Forwarded-For, а его пишет сам клиент:
         новый заголовок на каждый запрос — и ограничителя нет."""
         payload = {"topic": "other", "text": "спам", "contact": "spam@x.ru"}
-        with patch("core.views.notify") as sent:
+        with patch("core.inquiries.notify") as sent:
             for number in range(14):
                 self.client.post(reverse("support"), payload, headers={"x-forwarded-for": f"10.1.1.{number}"})
         self.assertEqual(sent.call_count, 10)
+
+
+def stamp(ago):
+    """Метка формы, открытой `ago` секунд назад."""
+    return signing.dumps(time.time() - ago, salt=StampedForm.SALT)
+
+
+class SpamScoreTests(SimpleTestCase):
+    """Штрафные баллы гостю (core/spam.py): каждый признак отдельно и примеры целиком."""
+
+    def score(self, text, name="", contact="", seconds=40):
+        return spam.score(text, name, contact, seconds)
+
+    def signs(self, *args, **kwargs):
+        return dict(self.score(*args, **kwargs)[1])
+
+    def test_a_plain_question_scores_nothing(self):
+        self.assertEqual(self.score("Есть ли общежитие?"), (0, []))
+
+    def test_markup_alone_is_enough(self):
+        """Живой человек в простом поле не пишет <a href> — так пишет рассыльщик под форум."""
+        self.assertEqual(self.signs("<b>B2B-Lab</b> — лаборатория")["HTML-разметка"], 20)
+        self.assertIn("HTML-разметка", self.signs("[url=http://x.ru]тут[/url]"))
+        self.assertGreaterEqual(self.score("<a href=https://x.ru>кухни</a>")[0], spam.THRESHOLD)
+
+    def test_links_to_other_sites_add_up_to_a_ceiling(self):
+        self.assertEqual(self.signs("Смотри https://example.com/page"), {"чужая ссылка": 6})
+        self.assertEqual(self.signs("https://a.ru и https://b.ru"), {"чужих ссылок: 2": 9})
+        self.assertEqual(self.signs("вот https://a.ru https://b.ru https://c.ru https://d.ru"), {"чужих ссылок: 4": 12})
+
+    def test_a_link_without_https_is_still_a_link(self):
+        """«psee.io/8rkbf9» телеграм сам превращает в ссылку — значит, и мы её видим."""
+        self.assertEqual(self.signs("Жми сюда psee.io/8rkbf9"), {"чужая ссылка": 6, "сокращённая ссылка": 4})
+
+    def test_our_own_places_are_not_suspicious(self):
+        text = "Смотри https://knt-mipt.ru/lectures/31/ и https://mipt.ru/education/, пиши в vk.com/knt_mipt или t.me/ivan, олимпиады — olimpiada.ru"
+        self.assertEqual(self.score(text), (0, []))
+
+    def test_an_address_or_an_abbreviation_is_not_a_link(self):
+        self.assertEqual(self.score("Пишите на ivan.petrov@mail.ru, т.е. в г.Долгопрудный к 9.30"), (0, []))
+
+    def test_latin_letters_inside_russian_words(self):
+        """«Здравcтвyйте» с латинскими c и y обходит фильтры по словам; «PDFка» так пишут живые."""
+        self.assertEqual(self.signs("Здравcтвyйте, у нас скидки"), {"латинские буквы внутри русских слов": 8})
+        self.assertEqual(self.score("Не открывается PDFка, и ITшник не помог"), (0, []))
+
+    def test_no_russian_at_all(self):
+        self.assertEqual(self.signs("Hello"), {"ни одной русской буквы": 4})
+
+    def test_a_dictionary_group_counts_once_and_groups_add_up(self):
+        self.assertEqual(self.signs("Продвижение сайта и SEO, продвижение бизнеса"), {"словарь: реклама и SEO": 8})
+        self.assertEqual(self.score("SEO и казино")[0], 16)
+        self.assertEqual(self.score("SEO, казино, биткоин и НДС")[0], 16)
+
+    def test_what_students_and_applicants_say_is_not_in_the_dictionary(self):
+        for text in (
+            "Ваш сайт не работает, на вашем сайте не открываются билеты",
+            "Где посмотреть посещаемость лекций и продвинутый курс по криптографии?",
+            "Куда отправить чеки об оплате общежития?",
+            "Извините за спам, пишу третий раз: не приходит письмо",
+            "Как отписаться от рассылки сайта?",
+            "Через VPN и Tor сайт не открывается, есть зеркало?",
+            "Есть ли образовательный кредит и сколько стоит обучение?",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.score(text), (0, []))
+        self.assertEqual(self.signs("I study electron spin resonance and want to invest my time in physics"),
+                         {"ни одной русской буквы": 4})
+
+    def test_a_phone_in_the_text(self):
+        self.assertEqual(self.signs("Перезвоните: +7 916 123-45-67"), {"телефон в тексте": 2})
+
+    def test_a_name_from_a_mailing_robot(self):
+        for name in ("JosephWeism", "RobertoGeorm", "Robert77", "XRumer23Slife", "GermanSlife"):
+            with self.subTest(name=name):
+                self.assertEqual(len(self.signs("Вопрос", name=name)), 1)
+                self.assertEqual(self.score("Вопрос", name=name)[0], 5)
+        # Одно имя латиницей — так пишет и иностранный абитуриент.
+        for name in ("Alexander", "Markus", "Иван", "Елена Викторовна", "Sara Merritt"):
+            with self.subTest(name=name):
+                self.assertEqual(self.score("Вопрос", name=name), (0, []))
+
+    def test_where_to_answer(self):
+        cases = {
+            "ivan@mail.ru": 1,
+            "anna.ivanova2008@mail.ru": 1,
+            "k.eithy2art.e.rbe.rr@gmail.com": 4,     # точки gmail — один ящик на сотню адресов
+            "alinaall232323@gmail.com": 4,
+            "@ivan_p": -5,
+            "тг evelaveta": -5,
+            "Telegram: @mathphy": -5,
+            "vk.com/id1": -5,
+            "Pgkvs Lzw Bh": 4,
+            "KW": 4,
+            "Australia": 0,
+            "+79161234567": 0,
+            "": 0,
+        }
+        for contact, points in cases.items():
+            with self.subTest(contact=contact):
+                self.assertEqual(self.score("Вопрос", contact=contact)[0], points)
+
+    def test_how_fast_the_form_was_filled(self):
+        self.assertEqual(self.signs("Вопрос", seconds=None), {"нет метки времени формы": 6})
+        self.assertEqual(self.signs("Вопрос", seconds=2), {"отправлено за 2 с": 6})
+        self.assertEqual(self.score("Вопрос", seconds=spam.FAST), (0, []))
+
+    # Присланные в ноябре 2026 — пересказом, с выдуманными контактами
+    SPAM = [
+        ("Экономическая эффективность — главный аргумент в пользу аутсорсинга https://лдбух.рф/page1.html "
+         "Содержание штатного бухгалтера https://лдбух.рф/poster", "RobertoGeorm", "liza.rudneva.2023@mail.ru"),
+        ("Мы предлагаем авточехлы на заказ https://интерьер-авто52.рф/product/a/ "
+         "https://интерьер-авто52.рф/product/b/", "Brothers", "x@mail.ru"),
+        ("Your last spin could change everything. Why risk waiting?! Play Now Here => psee.io/8rkbf9",
+         "Leighsh", "rohanuy49@zohomail.eu"),
+        ("Hey there, this note came in through your contact form. Test it yourself: https://ultraleadgeneration.com "
+         "Not for you? Opt out here: https://ultraleadgeneration.com/unsubscribe", "Sara Merritt", "Australia"),
+        ('Drug dosage <a href=""> https://outreachhs.org/ativan-online.php </a>', "Dennisvon", "k.eithy@gmail.com"),
+        ("<a href=https://wheelouttogame.online>белорусские кухни в москве</a>", "JosephWeism", "d@wheelouttogame.online"),
+        ("While looking into a <a href=https://haircolorideas.top>hair color simulator</a> I started", "Ethanneab", "g@x.com"),
+        ("webbankir займ на карту <a href=https://creditmain.ru/>Микрозаймы онлайн</a>", "Aleksandrbag", "alex1@yandex.ru"),
+        ("Доброго времени суток. <b>B2B-Lab</b> — лаборатория цифровых продуктов", "Wesleygreft", "w@gmx.com"),
+        ("Ready to spin, bet, and win? With https://lkqs.cc/403d21 you're not just betting", "Josephalite", "f@gmail.com"),
+        ("Feeling confident about your picks? Cement that feeling with 1Win! https://lkqs.cc/403d21", "Kellycoarf", "f@gmail.com"),
+    ]
+    GUESTS = [
+        ("Здравствуйте! Подскажите, какие проходные баллы были на КНТ и дают ли общежитие?", "Анна", "anna.ivanova2008@mail.ru"),
+        ("Сын хочет поступать к вам. Перезвоните, пожалуйста: +7 916 123-45-67", "Елена Викторовна", "+79161234567"),
+        ("Hello! I am an international applicant from Kazakhstan. Is there a dormitory?", "Alexander", "alex.smith@gmail.com"),
+        ("Ne mogu voiti na sait, parol ne podhodit", "", "nikita2007@mail.ru"),
+        ("Тут написано другое: https://mipt.ru/education/ — кому верить?", "Олег", "oleg@mail.ru"),
+        ("Не открываются файлы, скрин: https://disk.yandex.ru/i/abc", "Маша", "masha@yandex.ru"),
+        ("Подскажите, когда день открытых дверей?", "Лиза", "тг evelaveta"),
+    ]
+
+    def test_the_spam_that_came_in_november_is_stopped(self):
+        for text, name, contact in self.SPAM:
+            with self.subTest(text=text[:40]):
+                self.assertGreaterEqual(self.score(text, name, contact)[0], spam.THRESHOLD)
+
+    def test_people_who_write_for_real_get_through(self):
+        for text, name, contact in self.GUESTS:
+            with self.subTest(text=text[:40]):
+                self.assertLess(self.score(text, name, contact)[0], spam.THRESHOLD)
+
+
+class StampedFormTests(SimpleTestCase):
+    """Сколько заполняли форму: подписанная метка в скрытом поле, без скриптов."""
+
+    def test_a_fresh_form_carries_a_signed_stamp(self):
+        html = str(FeedbackForm(known=True)["started"])
+
+        self.assertIn('type="hidden"', html)
+        value = re.search(r'value="([^"]+)"', html).group(1)
+        self.assertLessEqual(FeedbackForm({"started": value}, known=True).seconds(), 1)
+
+    def test_seconds_run_from_the_opening(self):
+        self.assertEqual(SupportForm({"started": stamp(40)}).seconds(), 40)
+
+    def test_a_missing_or_foreign_stamp_is_none(self):
+        for value in (None, "", "1731150000", signing.dumps(time.time() - 40, salt="чужая"), stamp(40) + "x"):
+            with self.subTest(value=value):
+                data = {} if value is None else {"started": value}
+                self.assertIsNone(FeedbackForm(data, known=True).seconds())
+
+    def test_a_stamp_from_the_future_is_zero(self):
+        self.assertEqual(FeedbackForm({"started": stamp(-30)}, known=True).seconds(), 0)
+
+    def test_the_stamp_survives_a_form_with_errors(self):
+        """Вернулась форма с ошибкой — время считается от первого открытия, а не заново."""
+        value = stamp(40)
+        form = FeedbackForm({"started": value, "text": ""})
+
+        self.assertFalse(form.is_valid())
+        self.assertIn(f'value="{value}"', str(form["started"]))
+
+
+class InquiryTests(TestCase):
+    """Обращения из поддержки и контактов: каждое в таблице, гостя проверяют баллы."""
+
+    def setUp(self):
+        cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
+
+    def ask(self, text="Есть ли общежитие?", ago=40, page="contacts", **extra):
+        data = {"text": text, "started": stamp(ago), "name": "Аня", "contact": "anna@mail.ru", "topic": "account", **extra}
+        with patch("core.inquiries.notify") as sent:
+            response = self.client.post(reverse(page), data)
+        self.assertRedirects(response, reverse(page))
+        return sent
+
+    def test_both_forms_carry_the_stamp(self):
+        for page in ("contacts", "support"):
+            with self.subTest(page=page):
+                self.assertContains(self.client.get(reverse(page)), 'name="started"')
+
+    def test_a_question_from_a_guest_is_written_down_and_sent(self):
+        sent = self.ask()
+
+        inquiry = Inquiry.objects.get()
+        self.assertEqual(inquiry.verdict, Inquiry.Verdict.SENT)
+        self.assertEqual(inquiry.source, Inquiry.Source.CONTACTS)
+        self.assertEqual((inquiry.name, inquiry.contact, inquiry.text), ("Аня", "anna@mail.ru", "Есть ли общежитие?"))
+        self.assertEqual((inquiry.score, inquiry.reasons), (1, [["почта для ответа", 1]]))
+        self.assertIn(inquiry.seconds, (40, 41))
+        self.assertEqual(inquiry.ip, "127.0.0.1")
+        chat, template, context = sent.call_args.args
+        self.assertEqual((chat, template), ("feedback", "telegram/feedback.html"))
+        self.assertEqual(context["inquiry"], inquiry)
+
+    def test_spam_from_a_guest_is_kept_but_goes_nowhere(self):
+        """И бот видит то же «Спасибо»: подсказывать, на чём он попался, незачем."""
+        with patch("core.inquiries.notify") as sent:
+            response = self.client.post(reverse("contacts"), {
+                "text": "<a href=https://x.ru>кухни</a>", "name": "JosephWeism", "contact": "d@x.ru", "started": stamp(40),
+            }, follow=True)
+
+        sent.assert_not_called()
+        self.assertContains(response, "Спасибо, вопрос ушёл")
+        inquiry = Inquiry.objects.get()
+        self.assertEqual(inquiry.verdict, Inquiry.Verdict.SPAM)
+        self.assertEqual(inquiry.score, 32)
+        self.assertIn(["HTML-разметка", 20], inquiry.reasons)
+
+    def test_the_same_text_from_a_logged_in_person_is_not_checked(self):
+        self.client.force_login(make_user("reader@x.ru"))
+
+        sent = self.ask("<b>срочно</b> https://x.ru")
+
+        sent.assert_called_once()
+        inquiry = Inquiry.objects.get()
+        self.assertEqual((inquiry.verdict, inquiry.score, inquiry.reasons), (Inquiry.Verdict.SENT, 0, []))
+        self.assertIsNotNone(inquiry.author)
+
+    def test_a_form_sent_too_fast_tips_the_scale(self):
+        text = "Не открываются файлы, скрин: https://disk.yandex.ru/i/abc"
+
+        self.ask(text, ago=40).assert_called_once()
+        self.ask(text, ago=1).assert_not_called()
+
+        self.assertEqual(list(Inquiry.objects.order_by("created").values_list("score", "verdict")),
+                         [(7, "sent"), (13, "spam")])
+
+    def test_exactly_the_threshold_is_already_stopped(self):
+        """Одна группа словаря и почта для ответа: 8 + 1 = 9."""
+        self.ask("Предлагаем продвижение сайта недорого").assert_not_called()
+
+        self.assertEqual(Inquiry.objects.get().score, spam.THRESHOLD)
+
+    def test_support_from_a_guest_is_checked_too(self):
+        self.ask("Купить SEO-продвижение сайта недорого", page="support", contact="baza@gmail.com", ago=1).assert_not_called()
+
+        inquiry = Inquiry.objects.get()
+        self.assertEqual((inquiry.source, inquiry.topic, inquiry.verdict), ("support", "account", "spam"))
+
+    def test_the_picture_of_a_caught_message_goes_nowhere(self):
+        self.ask("<b>Скидки</b>", image=make_image()).assert_not_called()
+
+        self.assertTrue(Inquiry.objects.get().had_image)
+
+    def test_the_chat_sees_the_points_of_a_guest(self):
+        sent = self.ask("Не открываются файлы, скрин: https://disk.yandex.ru/i/abc")
+
+        text = render_to_string(*sent.call_args.args[1:])
+        self.assertIn("Баллы: 7 — чужая ссылка +6, почта для ответа +1", text)
+
+    def test_a_logged_in_message_has_no_points_line(self):
+        self.client.force_login(make_user("reader@x.ru"))
+
+        sent = self.ask("Не открывается книга", page="support")
+
+        self.assertNotIn("Баллы", render_to_string(*sent.call_args.args[1:]))
+
+    def test_over_the_limit_nothing_is_even_written_down(self):
+        """Бот, долбящий с одного адреса, иначе завалил бы таблицу строками."""
+        with patch("core.inquiries.notify") as sent:
+            for _ in range(14):
+                self.client.post(reverse("contacts"), {"text": "?", "name": "Аня", "contact": "@anya", "started": stamp(40)})
+
+        self.assertEqual(sent.call_count, 10)
+        self.assertEqual(Inquiry.objects.count(), 10)
+
+
+class InquiryAdminTests(TestCase):
+    """Отсеянное смотрят и возвращают в чат из админки."""
+
+    def setUp(self):
+        self.root = User.objects.create_superuser("root@t.local", "Анна", "Главная", password="pass12345")
+        self.client.force_login(self.root)
+        self.caught = Inquiry.objects.create(
+            source=Inquiry.Source.CONTACTS, verdict=Inquiry.Verdict.SPAM, text="Пришлю диплом: https://disk.yandex.ru/i/abc",
+            name="Markus", contact="markus@gmail.com", score=11, had_image=True,
+            reasons=[["чужая ссылка", 6], ["ни одной русской буквы", 4], ["почта для ответа", 1]],
+        )
+        self.sent = Inquiry.objects.create(source=Inquiry.Source.SUPPORT, verdict=Inquiry.Verdict.SENT, text="Не работает")
+
+    def release(self):
+        with patch("core.inquiries.notify") as sent:
+            self.client.post(reverse("admin:core_inquiry_changelist"), {
+                "action": "release", "_selected_action": [self.caught.pk, self.sent.pk],
+            })
+        return sent
+
+    def test_the_list_and_a_card_open(self):
+        self.assertContains(self.client.get(reverse("admin:core_inquiry_changelist")), "Markus · markus@gmail.com")
+        self.assertContains(self.client.get(reverse("admin:core_inquiry_change", args=[self.caught.pk])), "чужая ссылка +6")
+
+    def test_a_caught_message_is_released_into_the_chat(self):
+        sent = self.release()
+
+        sent.assert_called_once()
+        self.caught.refresh_from_db()
+        self.assertEqual(self.caught.verdict, Inquiry.Verdict.RELEASED)
+        text = render_to_string(*sent.call_args.args[1:])
+        self.assertIn("Пришлю диплом", text)
+        self.assertIn("переслано вручную", text)
+        self.assertIn("картинка была, но не сохранилась", text)
+        self.assertEqual(LogEntry.objects.get().change_message, "Не спам — переслано в чат")
+
+    def test_what_was_not_caught_is_left_alone(self):
+        self.release()
+
+        self.sent.refresh_from_db()
+        self.assertEqual(self.sent.verdict, Inquiry.Verdict.SENT)
 
 
 class ClientIpTests(SimpleTestCase):
@@ -1762,7 +2087,7 @@ class LockdownTests(TestCase):
     def test_a_form_sent_to_a_closed_site_goes_nowhere(self):
         close_site()
 
-        with patch("core.views.notify") as notify:
+        with patch("core.inquiries.notify") as notify:
             self.assertShut(self.client.post(reverse("contacts"), {"text": "Когда откроетесь?", "contact": "@me"}))
         notify.assert_not_called()
 
@@ -2309,6 +2634,17 @@ class JournalSweepTests(TestCase):
 
         self.assertEqual(list(LoginEvent.objects.all()), [fresh_login])
         self.assertEqual(list(Failure.objects.all()), [recurring])
+
+    def test_inquiries_live_a_year(self):
+        """Дольше журналов: по ним подкручивают фильтр спама, и сезон поступления нужен целиком."""
+        now = timezone.now()
+        Inquiry.objects.create(source="contacts", verdict="spam", text="давнее", created=now - timedelta(days=INQUIRY_DAYS + 1))
+        kept = Inquiry.objects.create(source="contacts", verdict="sent", text="прошлой весной",
+                                      created=now - timedelta(days=JOURNAL_DAYS + 1))
+
+        self.assertIn("обращений: 1", sweep_journals())
+
+        self.assertEqual(list(Inquiry.objects.all()), [kept])
 
     def test_expired_sessions_go_with_their_device_rows(self):
         """Django сам просроченные сессии не удаляет, и приписки «моих устройств» копились

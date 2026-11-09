@@ -1,0 +1,53 @@
+{% load notification_tags text_extras %}
+{% comment %}
+  Одна строка уведомления — и в панели под колокольчиком, и на странице «Все уведомления».
+  Ведёт через notification_open: та отмечает прочитанным и отправляет к месту.
+  Кто модератор, не пишем: решение — модерации, а не человека.
+{% endcomment %}
+<a href="{% url 'notification_open' n.pk %}"
+   class="flex items-start gap-3 px-4 py-3 hover:bg-slate-100 dark:hover:bg-slate-800 {% if not n.read_at %}bg-accent/10{% endif %}">
+  <span class="mt-0.5 w-8 h-8 shrink-0 rounded-[22%] grid place-items-center text-sm
+               {% if n.kind == 'rejected' or n.kind == 'bake_failed' %}bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400
+               {% elif n.kind == 'approved' or n.kind == 'baked' %}bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400
+               {% elif n.kind == 'announcement' %}bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400
+               {% else %}bg-accent/15 text-accent{% endif %}" aria-hidden="true">
+    <i class="fa-solid {% if n.kind == 'comment' %}fa-comment{% elif n.kind == 'reply' %}fa-reply{% elif n.kind == 'approved' %}fa-check{% elif n.kind == 'rejected' %}fa-xmark{% elif n.kind == 'baked' %}fa-video{% elif n.kind == 'announcement' %}fa-bullhorn{% else %}fa-triangle-exclamation{% endif %}"></i>
+  </span>
+  <span class="min-w-0 flex-1 text-sm">
+    <span class="block {% if not n.read_at %}font-medium{% endif %}">
+      {% if n.kind == "comment" %}
+        {% if n.times > 1 %}{{ n.times }} {{ n.times|plural:"новый комментарий,новых комментария,новых комментариев" }}{% else %}Новый комментарий{% endif %}
+        под {% if n.lecture_id %}лекцией{% else %}материалом{% endif %} «{{ n.thing.title }}»
+      {% elif n.kind == "reply" %}
+        {% if n.times > 1 %}{{ n.times }} {{ n.times|plural:"ответ,ответа,ответов" }} на ваши комментарии{% else %}Ответ на ваш комментарий{% endif %}
+        под «{{ n.thing.title }}»
+      {% elif n.kind == "approved" %}
+        {% if n.thing_kind == "book" %}Книга опубликована{% elif n.thing_kind == "playlist" %}Курс опубликован{% else %}Материал опубликован{% endif %}: «{{ n.thing.title }}»
+      {% elif n.kind == "rejected" %}
+        {% if n.thing_kind == "book" %}Книга отклонена{% elif n.thing_kind == "playlist" %}Курс отклонён{% else %}Материал отклонён{% endif %}: «{{ n.thing.title }}»
+      {% elif n.kind == "baked" %}
+        Лекция готова: «{{ n.thing.title }}»
+      {% elif n.kind == "announcement" %}
+        Объявление: {{ n.announcement.text|markdown|striptags|truncatechars:140 }}
+      {% else %}
+        Лекция не обработалась: «{{ n.thing.title }}»
+      {% endif %}
+    </span>
+    <span class="mt-0.5 block text-slate-500 dark:text-slate-400 line-clamp-2 break-words">
+      {% if n.kind == "comment" or n.kind == "reply" %}
+        {% if n.anonymous %}Аноним{% elif n.actor %}{{ n.actor.full_name }}{% else %}Удалённый аккаунт{% endif %}{% if n.comment %}: {% if n.comment.text %}«{{ n.comment.text|truncatechars:120 }}»{% else %}картинка{% endif %}{% endif %}
+      {% elif n.kind == "rejected" %}
+        {% if n.note %}Причина: {{ n.note }}{% else %}Причину модератор не написал{% endif %}
+      {% elif n.kind == "baked" %}
+        Курс «{{ n.lecture.playlist.title }}»
+      {% elif n.kind == "bake_failed" %}
+        Загрузите запись ещё раз или напишите в поддержку{% if n.note %} · {{ n.note }}{% endif %}
+      {% elif n.kind == "announcement" %}
+        {% if n.actor %}{{ n.actor.full_name }}{% else %}Команда сайта{% endif %} · целиком — по нажатию
+      {% else %}
+        Теперь это видят все
+      {% endif %}
+    </span>
+  </span>
+  <time datetime="{{ n.created|date:'c' }}" class="shrink-0 text-xs text-slate-400 whitespace-nowrap">{{ n.created|ago }}</time>
+</a>

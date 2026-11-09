@@ -1,0 +1,9 @@
+{% comment %}
+  Хвост сообщений поддержки и контактов: сколько баллов набрал гость в фильтре спама
+  (core/spam.py) и за что — чтобы почти пойманное было видно и веса было что подкручивать.
+  У вошедшего баллов нет, хвоста тоже.
+{% endcomment %}{% if inquiry.verdict == "released" %}
+
+<i>Задержано фильтром ({{ inquiry.score }} баллов), переслано вручную{% if inquiry.had_image %}; картинка была, но не сохранилась{% endif %}: {{ inquiry.reasons_text }}</i>{% elif inquiry.reasons %}
+
+<i>Баллы: {{ inquiry.score }} — {{ inquiry.reasons_text }}</i>{% endif %}

@@ -84,6 +84,17 @@
     {% if mail %}<p class="line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ mail.text }}</p>{% endif %}
   </div>
 
+  {# Поддержка и контакты: сколько пришло и сколько отсеял фильтр спама (core/spam.py) #}
+  <div class="panel p-4 flex flex-col gap-1.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full bg-slate-400" aria-hidden="true"></span>
+      <span class="font-semibold">Обращения</span>
+      <span class="ml-auto text-xs text-slate-500 dark:text-slate-400">за сутки {{ inquiries.day }}, отсеяно {{ inquiries.day_spam }}</span>
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">за неделю {{ inquiries.week }}, отсеяно {{ inquiries.week_spam }} — поддержка и контакты; гостей проверяют штрафные баллы</p>
+    <a href="{% url 'admin:core_inquiry_changelist' %}" class="mt-auto text-xs text-accent hover:underline">все обращения →</a>
+  </div>
+
   <div class="panel p-4 flex flex-col gap-1.5" x-data>
     <div class="flex items-center gap-2">
       <span class="h-2.5 w-2.5 rounded-full {% if backup and backup.ok %}bg-emerald-500{% elif backup %}bg-rose-500{% else %}bg-slate-400{% endif %}" aria-hidden="true"></span>

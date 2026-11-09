@@ -195,5 +195,8 @@ def _give_up(job):
 
 def failed_bake(job):
     """В журнал сбоев: запись, которую пекарня не испекла."""
+    from notifications import services as notifications  # внутри: уведомления знают про лекции, а те — про очередь
+
     what = f"«{job.lecture.title}»" if job.lecture else job.source
     record(Failure.Source.BAKERY, f"{what}: {job.note}")
+    notifications.bake_failed(job)

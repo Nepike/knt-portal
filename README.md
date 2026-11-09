@@ -27,7 +27,7 @@ GitHub Actions
 | App | What it holds |
 |---|---|
 | `users` | Custom user model, sessions with a last-seen marker, forced password change on first login, the people directory |
-| `core` | Shared base: `Moderated` abstract model, subjects, terms, teams, name search, list filtering, sidebar sections, mail, throttling, HTMX middleware |
+| `core` | Shared base: `Moderated` abstract model, subjects, terms, teams, name search, list filtering, sidebar sections, mail, throttling, support and contact messages with their spam score, HTMX middleware |
 | `wall` | A pixel canvas in the spirit of r/place — boards, pixels, placements, protected areas, live over WebSockets |
 | `chats` | Chats with membership, messages, reactions and attachments, live over WebSockets |
 | `materials` | Uploaded study materials, going through moderation |
@@ -43,6 +43,7 @@ GitHub Actions
 | `moderation` | The review queue over everything that inherits `Moderated` |
 | `printing` | Printing on the faculty printer: jobs, a weekly page limit, cost per page, the queue a print agent on the faculty server works from (`docs/printing.md`) |
 | `telegram` | Bot: notifications into configurable chats and topics |
+| `notifications` | The bell in the header: comments under your things, replies to you, moderation decisions, baked lectures, announcements from Pulse |
 
 ## Notes on the parts that are not obvious
 
@@ -67,6 +68,30 @@ next to failed mail, print jobs and queue tasks; the Pulse summary shows the cou
 carries the URL pattern, not the path, so one bug across many objects is one row with a counter.
 Error pages (400/403/404/500 and the CSRF one) are Russian and stand alone, without `base.html`.
 
+**Support and contact forms keep every message and score the guests.** Both forms are open to
+the whole internet and post into Telegram, so each message is stored in `core.Inquiry` (kept a
+year) and a guest's one is scored by `core/spam.py`: a foreign link, HTML markup, Latin letters
+inside Russian words, a dictionary of ad, casino and tax-scheme phrases, a mailing robot's name,
+a junk reply address and a form sent faster than three seconds (a signed timestamp in a hidden
+field, no scripts) each add points; a Telegram or VK handle to reply to takes some off. Nine
+points and the message stays in the table instead of the chat, and the visitor sees the same
+«thank you». The weights were fitted on the old site's 820 labelled messages: 89% of its spam
+stopped, none of the 56 real ones. A caught message goes back to the chat from the admin
+(«Не спам — переслать в чат»); the Pulse system tab shows how many came and how many were caught.
+Signed-in people are not scored.
+
+**The bell is called, not signalled.** A notification is created by an explicit call from the
+place where the thing happened (`notifications/services.py`: a new comment, a moderator's decision,
+a lecture baked or failed), not by a `post_save` signal — a save does not know who made it or why,
+and an edit or an admin change must not ring anyone. Nobody is told about their own doing. Unread
+comments on one thing gather into one line with a counter; opening the thing reads its
+notifications. Every change rings the person's personal group on the chat socket after commit
+(`chats.events.notify_notifications`); the tab redraws the number with a plain request, the same
+"reason, not markup" pattern the chat uses. The panel loads on every opening. Kept 90 days.
+Announcements come from the Pulse «Объявления» tab (sending and withdrawing are rights of their own):
+to everyone, to courses or to groups — every recipient gets an ordinary notification row pointing
+at the announcement, so a few hundred rows per announcement, gone with it or after 90 days.
+
 **Redis does four jobs on four databases.** 0 is the Channels bus, 1 the Celery queue, 2 its result
 backend, 3 the cache that rate limiters live on. Separate numbers so that flushing one does not
 take out the others. In development none of it is required: the channel layer falls back to the
@@ -80,7 +105,8 @@ through the queue.
 
 **A `beat` container is the alarm clock.** It runs no work of its own, it only drops scheduled
 tasks into the same queue (`CELERY_BEAT_SCHEDULE`): the nightly database backup and sweeps
-(print files, login and failure journals, abandoned uploads and lecture folders nothing points at),
+(print files, login and failure journals, notifications, year-old support messages, abandoned uploads
+and lecture folders nothing points at),
 plus two watchers — the print agent every minute and the bakery every five, because a machine that
 went silent cannot say so itself. Its state file lives in the container's `/tmp` on purpose — the only thing
 persisting it would buy is a catch-up run after a restart; a missed sweep has nothing to catch up
@@ -152,7 +178,7 @@ saying whom to write to — an e-mail address in it becomes a link.
 
 ## Tests
 
-1747 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
+1844 tests. A custom runner (`core/test_runner.py`) points every `FileField` at a temporary
 directory before anything runs, so a newly added file field can never write into the live bucket
 by accident; it also makes Celery eager and pins the seasonal skin to the plain look, so the
 suite checks the same thing in October as in any other month. One test builds the static files

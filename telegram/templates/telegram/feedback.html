@@ -9,4 +9,4 @@
 
 <blockquote>{{ text }}</blockquote>
 
-<b>От:</b> {% if author %}<a href="{{ profile_url }}">{{ author.full_name }}</a>{% else %}{{ name }} · {{ contact }}{% endif %}
+<b>От:</b> {% if author %}<a href="{{ profile_url }}">{{ author.full_name }}</a>{% else %}{{ name }} · {{ contact }}{% endif %}{% include "telegram/_inquiry_score.html" %}

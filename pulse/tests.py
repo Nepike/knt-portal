@@ -14,13 +14,14 @@ from django.utils import timezone
 
 from chats.models import Chat, Membership, Message
 from comments.models import Comment
-from core.models import Failure, Lockdown, Moderated, Subject
+from core.models import Failure, Inquiry, Lockdown, Moderated, Subject, Team
 from economy import rewards
 from cosmetics.models import CaseOpening, UserItem
 from cosmetics.tests import make_case, make_frame
 from economy.models import BalanceLog, Wallet
 from economy.services import credit, spend
 from materials.models import Material
+from notifications.models import Announcement, Notification
 from printing.models import PrintAccount, PrintJob
 from printing.tests import make_job, make_printer
 from teachers.models import Review, Teacher
@@ -626,6 +627,61 @@ class WallTabTests(TestCase):
         self.assertContains(self.client.get(reverse("pulse_wall")), "Открытой доски нет")
 
 
+class AnnouncementTabTests(TestCase):
+    """«Объявления»: смотреть даёт Пульс, рассылать и снимать — свои права."""
+
+    def setUp(self):
+        self.sender = make_admin("sender@t.local", "notifications.add_announcement", "notifications.delete_announcement")
+        self.students = [make_user(f"s{n}@t.local") for n in range(3)]
+        self.client.force_login(self.sender)
+
+    def send(self, **data):
+        return self.client.post(reverse("pulse_announcement_send"), {"text": "Завтра субботник", **data}, follow=True)
+
+    def test_it_is_sent_and_written_down(self):
+        response = self.send()
+
+        self.assertContains(response, "Объявление ушло: 3 человека")
+        announcement = Announcement.objects.get()
+        self.assertEqual(Notification.objects.filter(announcement=announcement).count(), 3)
+        self.assertEqual(logs(announcement), ["Пульс: объявление разослано, получили 3"])
+        self.assertContains(self.client.get(reverse("pulse_announcements")), "получили 3 · прочитали 0")
+
+    def test_seeing_pulse_is_not_enough_to_send(self):
+        self.client.force_login(make_admin("viewer@t.local"))
+
+        self.assertContains(self.client.get(reverse("pulse_announcements")), "отдельное право")
+        self.assertContains(self.send(), "нужно право")
+        self.assertFalse(Announcement.objects.exists())
+
+    def test_the_audience_is_counted_while_writing(self):
+        self.assertContains(self.client.post(reverse("pulse_announcement_audience"), {}), "Получат 3 человека · всем")
+
+    def test_nobody_to_send_to_sends_nothing(self):
+        empty = Team.objects.create(number="Б05-999", profile="x", course_code="x", stage="bachelor", year_of_admission=2025)
+
+        self.assertContains(self.send(teams=[empty.pk]), "никого нет")
+        self.assertFalse(Announcement.objects.exists())
+
+    def test_an_empty_text_is_not_sent(self):
+        self.assertContains(self.send(text=""), "Обязательное поле")
+        self.assertFalse(Announcement.objects.exists())
+
+    def test_withdrawing_needs_its_own_right_and_is_written_down(self):
+        self.send()
+        announcement = Announcement.objects.get()
+
+        self.client.force_login(make_admin("half@t.local", "notifications.add_announcement"))
+        self.client.post(reverse("pulse_announcement_withdraw", args=[announcement.pk]))
+        self.assertTrue(Announcement.objects.exists())
+
+        self.client.force_login(self.sender)
+        self.client.post(reverse("pulse_announcement_withdraw", args=[announcement.pk]))
+        self.assertFalse(Announcement.objects.exists())
+        self.assertFalse(Notification.objects.exists())
+        self.assertEqual(logs(announcement)[0], "Пульс: объявление снято у всех")
+
+
 class SystemTabTests(TestCase):
     """«Система»: расписание, заслон, бэкап, очередь."""
 
@@ -693,6 +749,17 @@ class SystemTabTests(TestCase):
             self.assertContains(self.client.post(reverse("pulse_system_queue")), "Очередь не ответила")
 
         sent.assert_not_called()
+
+    def test_inquiries_are_counted_with_what_the_filter_caught(self):
+        now = timezone.now()
+        for verdict, days in (("sent", 0), ("spam", 0), ("spam", 3), ("sent", 9)):
+            Inquiry.objects.create(source="contacts", verdict=verdict, text="?", created=now - timedelta(days=days, minutes=1))
+
+        page = self.client.get(reverse("pulse_system"))
+
+        self.assertContains(page, "за сутки 2, отсеяно 1")
+        self.assertContains(page, "за неделю 3, отсеяно 2")
+        self.assertContains(page, reverse("admin:core_inquiry_changelist"))
 
     @override_settings(SITE_VERSION="3f2fc8f · 2026-10-26 · Print to EVERYONE")
     def test_the_deployed_version_is_shown(self):

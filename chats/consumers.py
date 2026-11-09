@@ -75,6 +75,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         await self.subscribe()
         await self.send_json({"chat": event["chat"]})
 
+    async def notice_changed(self, event):
+        """Колокольчик в шапке: повод, а не число — число вкладка спросит обычным запросом."""
+        await self.send_json({"notifications": True})
+
     async def chat_left(self, event):
         group = chat_group(event["chat"])
         if group in self.joined:

@@ -8,9 +8,9 @@ from django.shortcuts import redirect
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 
-from . import donors
+from . import donors, inquiries
 from .lockdown import GROUP, PASS
-from .models import Failure, Funding, Lockdown, Subject, Supporter, Team, Term
+from .models import Failure, Funding, Inquiry, Lockdown, Subject, Supporter, Team, Term
 
 admin.site.register(Subject)
 admin.site.register(Term)
@@ -113,3 +113,45 @@ class FailureAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(Inquiry)
+class InquiryAdmin(admin.ModelAdmin):
+    """Обращения из поддержки и контактов. Пишет их сама форма (core/inquiries.py); отсюда —
+    только смотреть, удалять и вернуть в чат живого человека, которого отсеял фильтр."""
+
+    list_display = ("created", "source", "verdict", "score", "who", "short")
+    list_filter = ("verdict", "source")
+    search_fields = ("text", "name", "contact")
+    date_hierarchy = "created"
+    fields = ("created", "source", "verdict", "author", "name", "contact", "topic", "text", "had_image",
+              "score", "reasons_text", "seconds", "ip", "agent")
+    readonly_fields = fields
+    actions = ["release"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="кто")
+    def who(self, inquiry):
+        return inquiry.author.full_name if inquiry.author else f"{inquiry.name} · {inquiry.contact}".strip(" ·")
+
+    @admin.display(description="текст")
+    def short(self, inquiry):
+        return inquiry.text[:80]
+
+    @admin.display(description="за что")
+    def reasons_text(self, inquiry):
+        return inquiry.reasons_text()
+
+    @admin.action(description="Не спам — переслать в чат", permissions=["view"])
+    def release(self, request, queryset):
+        caught = list(queryset.filter(verdict=Inquiry.Verdict.SPAM))
+        for inquiry in caught:
+            inquiries.release(request, inquiry)
+            self.log_change(request, inquiry, "Не спам — переслано в чат")
+        skipped = queryset.count() - len(caught)
+        self.message_user(request, f"Переслано в чат: {len(caught)}." + (f" Не отсеянных среди выбранных: {skipped}, их не трогали." if skipped else ""))

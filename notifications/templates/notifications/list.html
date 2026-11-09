@@ -1,0 +1,33 @@
+{% extends "core/base.html" %}
+
+{% block title %}Уведомления{% endblock %}
+{% block main_width %}max-w-3xl{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+  <h1 class="page-title text-2xl font-bold">Уведомления</h1>
+  {% if page.object_list %}
+  <form method="post" action="{% url 'notification_read_all' %}">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-secondary"><i class="fa-solid fa-check-double"></i>Прочитать все</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
+  {% for n in page.object_list %}
+    {% include "notifications/_item.html" %}
+  {% empty %}
+    <p class="px-4 py-10 text-center text-slate-500 dark:text-slate-400">Пока ничего нет. Сюда придут комментарии под вашими материалами и лекциями, ответы вам, решения модераторов и выпечка лекций.</p>
+  {% endfor %}
+</div>
+
+{% if page.has_other_pages %}
+<nav class="mt-4 flex items-center justify-between text-sm" aria-label="Страницы">
+  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}" class="text-accent hover:underline">← новее</a>{% else %}<span></span>{% endif %}
+  <span class="text-slate-500">{{ page.number }} из {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?page={{ page.next_page_number }}" class="text-accent hover:underline">старше →</a>{% else %}<span></span>{% endif %}
+</nav>
+{% endif %}
+<p class="mt-4 text-xs text-slate-400">Уведомления хранятся 90 дней.</p>
+{% endblock %}

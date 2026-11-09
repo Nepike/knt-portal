@@ -15,6 +15,7 @@ from attachments.uploads import (
     check_pending, check_uploads, max_upload_size, pending_uploads, saved_files, sync_files, upload_limits,
 )
 from economy import rewards
+from notifications import services as notifications
 from telegram.notify import MODERATION, notify
 
 from .forms import BookFilterForm, BookForm
@@ -114,6 +115,7 @@ def book_detail(request, pk):
     book = get_object_or_404(
         visible(request.user).select_related("uploader").prefetch_related("subjects", "terms", "files"), pk=pk
     )
+    notifications.seen(request.user, book=book)
     return render(request, "library/book_detail.html", {
         "book": book,
         # Ссылка «Библиотека» ведёт не в начало списка, а туда, откуда пришли: подбор
@@ -212,6 +214,7 @@ def book_review(request, pk):
         book.reject(request.user, request.POST.get("note", ""))
         text = "Книга отклонена."
     book.save(update_fields=Book.REVIEW_FIELDS)
+    notifications.reviewed(book, request.user)
     # Автору — за опубликованную работу, модератору — за разобранную чужую.
     rewards.sync(book.uploader)
     rewards.sync(request.user)

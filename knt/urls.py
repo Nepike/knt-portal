@@ -23,4 +23,5 @@ urlpatterns = [
     path('', include('printing.urls')),
     path('', include('pulse.urls')),
     path('', include('telegram.urls')),
+    path('', include('notifications.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

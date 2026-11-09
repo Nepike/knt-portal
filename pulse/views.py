@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -14,11 +14,13 @@ from django.views.decorators.http import require_POST
 
 from core.models import Moderated
 from cosmetics.models import Case, CosmeticItem
+from notifications.forms import AnnouncementForm
+from notifications.models import Announcement
 from core.search import by_name
 from users.models import User
 from wall.models import ProtectedArea
 
-from . import actions, feed, people, summary, system, tokens, wallstats
+from . import actions, announce, feed, people, summary, system, tokens, wallstats
 from .access import pulse_only
 
 
@@ -344,3 +346,43 @@ def system_backups(request):
 @require_POST
 def system_queue(request):
     return render(request, "pulse/_queue.html", {"alive": system.queue_alive()})
+
+
+@pulse_only
+def announcements_page(request, form=None):
+    return render(request, "pulse/announcements.html", {
+        "tab": "announcements", "form": form or AnnouncementForm(), "history": announce.history(),
+        "may_send": request.user.has_perm(announce.SEND), "may_remove": request.user.has_perm(announce.REMOVE),
+    })
+
+
+@pulse_only
+@require_POST
+def announcement_send(request):
+    form = AnnouncementForm(request.POST)
+    if not form.is_valid():
+        return announcements_page(request, form)
+    try:
+        return _back(request, "pulse_announcements", announce.send(request, form))
+    except people.Refused as refusal:
+        messages.error(request, str(refusal))
+        return announcements_page(request, form)
+
+
+@pulse_only
+@require_POST
+def announcement_audience(request):
+    """Сколько получат — пересчитывается, пока выбирают курсы и группы."""
+    form = AnnouncementForm(request.POST)
+    form.is_valid()  # ради разобранных курсов и групп; текста может ещё не быть
+    return HttpResponse(announce.audience(request, form.cleaned_data))
+
+
+@pulse_only
+@require_POST
+def announcement_withdraw(request, pk):
+    announcement = get_object_or_404(Announcement, pk=pk)
+    try:
+        return _back(request, "pulse_announcements", announce.withdraw(request, announcement))
+    except people.Refused as refusal:
+        return _back(request, "pulse_announcements", error=str(refusal))

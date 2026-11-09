@@ -1,6 +1,7 @@
 """«Система» в Пульсе: состояние служб, расписание, сбои и ручные запуски."""
 
 import logging
+from datetime import timedelta
 
 from celery.schedules import crontab
 from django.conf import settings
@@ -10,7 +11,7 @@ from django.utils import timezone
 
 from core import backup, runs
 from core.lockdown import PASS
-from core.models import Failure, Lockdown
+from core.models import Failure, Inquiry, Lockdown
 from core.tasks import backup_database, ping
 from intake import health
 from intake.models import Bakery, MediaJob
@@ -74,6 +75,12 @@ def services(now=None):
     )
     mail = Failure.objects.filter(source=Failure.Source.MAIL).order_by("-last_at").first()
     bakeries = list(Bakery.objects.all())
+    spam = Q(verdict=Inquiry.Verdict.SPAM)
+    asked = Inquiry.objects.filter(created__gte=now - timedelta(days=7)).aggregate(
+        week=Count("id"), week_spam=Count("id", filter=spam),
+        day=Count("id", filter=Q(created__gte=now - timedelta(days=1))),
+        day_spam=Count("id", filter=spam & Q(created__gte=now - timedelta(days=1))),
+    )
     return {
         "printers": list(Printer.objects.filter(active=True)),
         "bakery": jobs,
@@ -82,6 +89,7 @@ def services(now=None):
         "bakery_broken": any(one.problem for one in bakeries),
         "redis": redis_memory(),
         "mail": mail,
+        "inquiries": asked,
         "backup": runs.last(backup_database.name),
         "lockdown": Lockdown.load(),
         "version": settings.SITE_VERSION,

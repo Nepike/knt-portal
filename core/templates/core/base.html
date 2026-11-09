@@ -201,8 +201,26 @@
         {% if request.lockdown %}
         <a href="{% url 'lockdown' %}" title="Сайт закрыт для всех, кроме белого списка" class="inline-flex items-center gap-1.5 mr-1 rounded-full px-3 py-1 text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"><i class="fa-solid fa-lock"></i><span class="max-sm:hidden">Сайт закрыт</span></a>
         {% endif %}
-        {# TODO (notifications) #}
-        <button type="button" class="btn btn-ghost" aria-label="Уведомления"><i class="fa-solid fa-bell text-xl"></i></button>
+        {% comment %}
+          Колокольчик (notifications): число приходит с каждой страницей и обновляется по сокету,
+          панель грузится при каждом открытии. Число стоит на самом значке, а не в углу кнопки:
+          у кнопки отступы, и кружок висел бы в стороне. На телефоне панель во всю ширину под
+          шапкой — от колокольчика вправо места нет, и она уехала бы за левый край.
+        {% endcomment %}
+        {% comment %}
+          Клик по строке ровно в миг, когда панель перерисовалась, приходит от уже удалённого
+          узла — Alpine считает его кликом мимо и закрывал панель. Такой клик не закрывает.
+        {% endcomment %}
+        <div class="relative" x-data="bell" data-panel="{% url 'notification_panel' %}"
+             @click.outside="$event.target.isConnected && (open = false)" @keydown.escape.window="open = false">
+          <button type="button" class="btn btn-ghost" aria-label="Уведомления" :aria-expanded="open" @click="toggle()">
+            <span class="relative inline-flex"><i class="fa-solid fa-bell text-xl"></i>{% include "notifications/_badge.html" %}</span>
+          </button>
+          <div x-show="open" x-cloak x-transition.origin.top.right x-ref="panel" data-notification-panel
+               class="absolute right-0 top-full mt-2 z-30 w-96 max-sm:fixed max-sm:inset-x-3 max-sm:top-16 max-sm:w-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
+            <p class="px-4 py-6 text-center text-sm text-slate-500">Загружаю…</p>
+          </div>
+        </div>
         {% include "core/_theme_toggle.html" %}
       </div>
     </header>

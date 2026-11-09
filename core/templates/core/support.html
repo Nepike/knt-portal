@@ -9,6 +9,7 @@
 
   <form method="post" enctype="multipart/form-data" class="mt-8 flex flex-col gap-5">
     {% csrf_token %}
+    {{ form.started }}
     {% include "core/inputs.html" with field=form.topic %}
     {% include "core/inputs.html" with field=form.text %}
     {# Скриншот объясняет поломку лучше любого описания — как и было на старом сайте #}

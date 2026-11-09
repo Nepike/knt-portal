@@ -15,6 +15,7 @@ from bookmarks.views import button as bookmark_button
 from comments.views import context as comments_context
 from core import filters
 from economy import rewards
+from notifications import services as notifications
 from telegram.notify import MODERATION, notify
 
 from .forms import MaterialForm
@@ -95,6 +96,7 @@ def material_detail(request, pk):
         ),
         pk=pk,
     )
+    notifications.seen(request.user, material=material)
     return render(request, "materials/material_detail.html", {
         "material": material,
         # Ссылка «Материалы» ведёт не в начало списка, а туда, откуда пришли: фильтры
@@ -190,6 +192,7 @@ def material_review(request, pk):
         material.reject(request.user, request.POST.get("note", ""))
         text = "Материал отклонён."
     material.save(update_fields=Material.REVIEW_FIELDS)
+    notifications.reviewed(material, request.user)
     # Автору — за опубликованную работу, модератору — за разобранную чужую.
     rewards.sync(material.uploader)
     rewards.sync(request.user)

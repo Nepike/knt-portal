@@ -20,6 +20,7 @@ from core.throttle import throttled
 from economy import rewards
 from intake.models import MediaJob
 from intake.spec import POSTER
+from notifications import services as notifications
 from telegram.notify import MODERATION, notify
 
 from .forms import LectureForm, PlaylistForm
@@ -331,6 +332,7 @@ def playlist_detail(request, pk):
     if watching is not None:
         watching = _with_votes(request.user, Lecture.objects.filter(pk=watching.pk)).get()
         discussion = comments_context(request.user, watching)
+    notifications.seen_course(request.user, playlist, watching)
 
     return render(request, "lectorium/playlist_detail.html", {
         "playlist": playlist,
@@ -385,6 +387,7 @@ def playlist_review(request, pk):
         playlist.reject(request.user, request.POST.get("note", ""))
         text = "Плейлист отклонён."
     playlist.save(update_fields=Playlist.REVIEW_FIELDS)
+    notifications.reviewed(playlist, request.user)
     # Автору — за опубликованный курс, модератору — за разобранную чужую работу.
     rewards.sync(playlist.uploader)
     rewards.sync(request.user)

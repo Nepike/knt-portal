@@ -327,3 +327,52 @@ class Failure(models.Model):
 
     def __str__(self):
         return f"{self.get_source_display()}: {self.text}"
+
+
+class Inquiry(models.Model):
+    """Обращение в поддержку или со страницы контактов — каждое: ушедшее в чат и отсеянное.
+
+    До ноября 2026 обращения не хранились, они уходили в телеграм и всё. Таблица пришла
+    вместе с фильтром спама (core/spam.py): отсеянное нужно где-то видеть, чтобы вернуть
+    живого человека, попавшего под фильтр, а баллы, причины и время заполнения — чтобы
+    подкручивать веса по своим данным, а не только по старому сайту. Картинку не храним:
+    она уходит в чат байтами, а в бакете стала бы сиротой. Живёт INQUIRY_DAYS (core/tasks.py).
+    """
+
+    class Source(models.TextChoices):
+        SUPPORT = "support", "поддержка"
+        CONTACTS = "contacts", "контакты"
+
+    class Verdict(models.TextChoices):
+        SENT = "sent", "ушло в чат"
+        SPAM = "spam", "отсеяно"
+        RELEASED = "released", "переслано вручную"
+
+    source = models.CharField("откуда", max_length=10, choices=Source.choices)
+    verdict = models.CharField("что стало", max_length=10, choices=Verdict.choices, db_index=True)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    topic = models.CharField("тема", max_length=20, blank=True)
+    name = models.CharField("имя", max_length=100, blank=True)
+    contact = models.CharField("контакт", max_length=100, blank=True)
+    text = models.TextField("текст")
+    had_image = models.BooleanField("была картинка", default=False)
+    score = models.SmallIntegerField("баллы", default=0)
+    reasons = models.JSONField("за что", default=list, blank=True)
+    ip = models.GenericIPAddressField("адрес", null=True, blank=True)
+    agent = models.CharField("браузер", max_length=200, blank=True)
+    seconds = models.PositiveIntegerField("заполняли, с", null=True, blank=True)
+    created = models.DateTimeField("когда", default=timezone.now, db_index=True)
+
+    class Meta:
+        verbose_name = "обращение"
+        verbose_name_plural = "обращения"
+        ordering = ["-created"]
+
+    def __str__(self):
+        return f"{self.get_source_display()}, {self.created:%d.%m %H:%M}"
+
+    def reasons_text(self):
+        """«чужая ссылка +6, почта для ответа +1» — для чата и админки."""
+        return ", ".join(f"{sign} {points:+d}" for sign, points in self.reasons)

@@ -40,7 +40,8 @@ const warnOnLeave = (event) => event.preventDefault();
 //   chats:event   — список чатов слева;
 //   chats:recount — счётчик у сервера (правка, удаление: сколько их, тут не вычислить);
 //   chats:current — лента открытого чата;
-//   chats:sync    — всё сразу, после обрыва связи или возвращения на вкладку.
+//   chats:sync    — всё сразу, после обрыва связи или возвращения на вкладку;
+//   notifications:changed — колокольчик в шапке (по личной группе человека, не чата).
 window.chatSocket = (() => {
   const me = document.body.dataset.live;
   if (!me) return { sync() {} }; // не залогинен — некуда
@@ -108,7 +109,13 @@ window.chatSocket = (() => {
     socket.send(JSON.stringify({ typing: Number(chat) }));
   }
 
-  function deliver({ chat, msg, author, read, by, kind, typing: typist, who }) {
+  function deliver({ chat, msg, author, read, by, kind, typing: typist, who, notifications }) {
+    // Колокольчик — первый не чатовый повод в этом сокете (chats/events.py). Вкладка в фоне
+    // тоже переспрашивает: число видно в шапке, а запрос за ним ничего не помечает прочитанным.
+    if (notifications) {
+      fire("notifications:changed");
+      return;
+    }
     const open = String(chat) === openChat();
     // Метка «печатает» живёт секунды: ничего не перерисовывает и на сервер не ходит
     if (typist) {
@@ -220,6 +227,23 @@ document.addEventListener("alpine:init", () => {
     _id: 0,
   }));
 
+  // Колокольчик в шапке (notifications). Число перерисовывает сам значок по поводу из
+  // сокета (notifications/_badge.html); панель грузится при каждом открытии, а открытая —
+  // по тому же поводу: новое появляется в ней, не закрывая.
+  Alpine.data("bell", () => ({
+    open: false,
+    init() {
+      document.body.addEventListener("notifications:changed", () => this.open && this.load());
+    },
+    toggle() {
+      this.open = !this.open;
+      if (this.open) this.load();
+    },
+    load() {
+      htmx.ajax("GET", this.$root.dataset.panel, { target: this.$refs.panel, swap: "innerHTML" });
+    },
+  }));
+
   // Обёртка текстового поля: плавающий лейбл по состоянию (как active у селектов).
   // Типы вроде date всегда держат лейбл поднятым — определяем по el.type при init.
   const INTRINSIC = ["date", "time", "month", "week", "datetime-local", "color"];
@@ -311,7 +335,13 @@ document.addEventListener("alpine:init", () => {
     // Значение живёт в hidden input и меняется из Alpine, а такая правка события не даёт.
     // Шлём change сами (в nextTick — иначе слушатель прочитает ещё старое значение),
     // чтобы htmx-фильтры и любые формы работали с нашими селектами как с обычными.
-    changed() { this.$nextTick(() => this.$el.dispatchEvent(new Event("change", { bubbles: true }))); },
+    // С корня компонента, а не с $el: у мультиселекта $el — нажатый пункт, а к nextTick его
+    // уже убрали из списка (выбранное там не показывается), и событие из оторванного
+    // узла до формы не всплывало — счётчик «Получат N» в объявлениях не пересчитывался.
+    changed() {
+      const root = this.$root;
+      this.$nextTick(() => root.dispatchEvent(new Event("change", { bubbles: true })));
+    },
   });
 
   Alpine.data("select", (cfg) => ({

@@ -13,6 +13,7 @@
       <a href="{% url 'pulse_people' %}" {% if tab == 'people' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Люди</a>
       <a href="{% url 'pulse_tokens' %}" {% if tab == 'tokens' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Токены и магазин</a>
       <a href="{% url 'pulse_wall' %}" {% if tab == 'wall' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Стена</a>
+      <a href="{% url 'pulse_announcements' %}" {% if tab == 'announcements' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Объявления</a>
       <a href="{% url 'pulse_system' %}" {% if tab == 'system' %}aria-current="page" class="rounded-btn px-3 py-1.5 font-medium bg-accent/10 text-accent"{% else %}class="rounded-btn px-3 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"{% endif %}>Система</a>
     </nav>
   </header>

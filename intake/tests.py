@@ -30,6 +30,7 @@ from core import agents
 from core.models import Failure, Subject
 from lectorium.models import Lecture, Playlist
 from materials.models import Material
+from notifications.models import Notification
 from tools import bake
 from users.models import User
 
@@ -1331,6 +1332,9 @@ class QueueTests(TestCase):
         self.assertEqual(MediaJob.objects.get().status, MediaJob.Status.DONE)
         # Сырьё больше не нужно: гигабайты, из которых уже всё взяли.
         swept.assert_called_once_with("uploads/abc")
+        # И автору курса — колокольчик: лекция готова.
+        notice = Notification.objects.get()
+        self.assertEqual((notice.recipient, notice.kind, notice.lecture), (lecture.playlist.uploader, "baked", lecture))
 
     def test_a_second_attempt_sweeps_away_what_the_first_one_uploaded(self):
         """Задание вернулось в очередь после упавшей пекарни. Папка у второй попытки

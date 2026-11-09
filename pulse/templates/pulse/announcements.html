@@ -1,0 +1,61 @@
+{% extends "pulse/base.html" %}
+{% load text_extras %}
+
+{% block heading %}Объявления{% endblock %}
+
+{% block pulse %}
+<div class="grid lg:grid-cols-5 gap-4 items-start">
+  <section class="panel p-5 lg:col-span-3 flex flex-col gap-4">
+    <div>
+      <h3 class="font-semibold">Новое объявление</h3>
+      <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Придёт в колокольчик каждому выбранному. Ничего не выбрано — всем.</p>
+    </div>
+    {% if may_send %}
+    <form method="post" action="{% url 'pulse_announcement_send' %}" class="flex flex-col gap-4">
+      {% csrf_token %}
+      {% include "core/inputs.html" with field=form.text %}
+      {% include "core/inputs.html" with field=form.link %}
+      <div class="grid sm:grid-cols-2 gap-4">
+        {% include "core/inputs.html" with field=form.courses %}
+        {% include "core/inputs.html" with field=form.teams %}
+      </div>
+      {% comment %}
+        Сколько получат — пересчитывается при каждом выборе курса или группы: разослать
+        всем по ошибке, забыв выбрать курс, — то, от чего эта строка и стоит над кнопкой.
+      {% endcomment %}
+      <p class="text-sm font-medium" hx-post="{% url 'pulse_announcement_audience' %}" hx-trigger="load, change from:closest form"
+         hx-include="closest form" hx-swap="innerHTML">&nbsp;</p>
+      <div><button type="submit" class="btn btn-primary"><i class="fa-solid fa-bullhorn"></i>Разослать</button></div>
+    </form>
+    {% else %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">Рассылать объявления — отдельное право («Can add объявление»); его выдают в админке.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel p-5 lg:col-span-2 flex flex-col gap-3">
+    <h3 class="font-semibold">Разосланные</h3>
+    {% for one in history %}
+    <article class="flex flex-col gap-1.5 border-t border-slate-100 dark:border-slate-800 pt-3 first:border-0 first:pt-0" x-data="{ ask: false }">
+      <p class="text-xs text-slate-500 dark:text-slate-400">
+        {{ one.created|date:"j E, H:i" }} · {% if one.author %}{{ one.author.full_name }}{% else %}—{% endif %} · {{ one.audience }}
+      </p>
+      <a href="{{ one.get_absolute_url }}" class="text-sm line-clamp-3 hover:text-accent">{{ one.text|markdown|striptags }}</a>
+      {# div, а не p: форма внутри p закрывает абзац, и кнопки выпадали из скрытого подтверждения #}
+      <div class="text-xs text-slate-500 dark:text-slate-400">
+        получили {{ one.sent }} · прочитали {{ one.read }}
+        {% if may_remove %}
+        <button type="button" x-show="!ask" @click="ask = true" class="ml-2 text-rose-500 hover:underline">снять</button>
+        <span x-show="ask" x-cloak class="ml-2 inline-flex items-center gap-2">
+          уберётся у всех —
+          <form method="post" action="{% url 'pulse_announcement_withdraw' one.pk %}" class="inline">{% csrf_token %}<button type="submit" class="text-rose-500 font-medium hover:underline">снять</button></form>
+          <button type="button" @click="ask = false" class="hover:underline">отмена</button>
+        </span>
+        {% endif %}
+      </div>
+    </article>
+    {% empty %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">Пока ни одного. Объявления живут 90 дней, как и остальные уведомления.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

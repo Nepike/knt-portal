@@ -6,6 +6,7 @@ from unittest import mock
 
 from PIL import Image as PilImage
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
@@ -26,7 +27,7 @@ from core.models import Team
 from users.models import User, UserSession
 
 from .consumers import ChatConsumer
-from .events import chat_group, notify_chat, user_group
+from .events import chat_group, notify_chat, notify_notifications, user_group
 from .forms import CuratorAddForm
 from .mentions import mentioned
 from .models import Chat, Membership, Message, Reaction, unread_total
@@ -964,6 +965,30 @@ class ConsumerTests(TransactionTestCase):
         await get_channel_layer().group_send(chat_group(group.pk), {"type": "chat.event", "chat": group.pk})
         self.assertEqual(await socket.receive_json_from(), {"chat": group.pk})
         await socket.disconnect()
+
+    async def test_the_bell_hears_its_own_reason(self):
+        """Колокольчик — первый не чатовый повод в этом сокете: идёт по личной группе."""
+        socket, _ = await self.open_socket(self.alice)
+        other, _ = await self.open_socket(self.bob)
+
+        await sync_to_async(notify_notifications)(self.alice.pk)
+
+        self.assertEqual(await socket.receive_json_from(), {"notifications": True})
+        self.assertTrue(await other.receive_nothing())
+        await socket.disconnect()
+        await other.disconnect()
+
+    async def test_an_announcement_rings_everyone_it_went_to(self):
+        """Объявление уходит сотням разом — одним проходом, и до каждого."""
+        alice, _ = await self.open_socket(self.alice)
+        bob, _ = await self.open_socket(self.bob)
+
+        await sync_to_async(notify_notifications)(self.alice.pk, self.bob.pk)
+
+        self.assertEqual(await alice.receive_json_from(), {"notifications": True})
+        self.assertEqual(await bob.receive_json_from(), {"notifications": True})
+        await alice.disconnect()
+        await bob.disconnect()
 
     async def test_typing_reaches_the_chat(self):
         """Метка идёт по сокету в обе стороны: она живёт секунды, ничего не сохраняет

@@ -37,6 +37,7 @@ LOCAL_APPS = [
     "wall",
     "printing",
     "pulse",
+    "notifications",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -77,6 +78,7 @@ TEMPLATES = [
                 "core.context_processors.section",
                 "core.context_processors.site_theme",
                 "chats.context_processors.unread_messages",
+                "notifications.context_processors.unread_notifications",
                 "cosmetics.context_processors.my_frame",
             ],
         },

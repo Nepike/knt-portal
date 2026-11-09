@@ -182,6 +182,7 @@
     <form method="post" enctype="multipart/form-data"
           class="px-6 sm:px-8 py-7 w-full max-w-2xl mx-auto grid gap-5 sm:grid-cols-2">
       {% csrf_token %}
+      {{ form.started }}
 
       <div class="sm:col-span-2">{% include "core/inputs.html" with field=form.text %}</div>
 

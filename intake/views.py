@@ -20,6 +20,7 @@ from django.views.decorators.http import require_GET, require_POST
 from attachments.storage import content_type
 from attachments.uploads import sign_download, sign_put, under
 from core import agents
+from notifications import services as notifications
 
 from .health import heard
 from .models import MediaJob, failed_bake, sweep, take
@@ -229,6 +230,7 @@ def commit(request):
         job.status = MediaJob.Status.DONE
         job.note = ""
         job.save(update_fields=["status", "note", "updated"])
+    notifications.baked(job)
     # Сырьё больше не нужно: гигабайты, из которых уже всё взяли.
     source = job.source
     transaction.on_commit(lambda: drop_source.delay(source))

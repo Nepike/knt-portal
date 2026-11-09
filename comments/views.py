@@ -15,6 +15,7 @@ from django.views.decorators.http import require_POST
 
 from attachments.uploads import drop_replaced
 from economy import rewards
+from notifications import services as notifications
 
 from .forms import CommentForm
 from .models import Comment
@@ -171,6 +172,7 @@ def comment_add(request, kind, pk):
     comment = form.save(commit=False)
     comment.parent = parent
     comment.save()
+    notifications.commented(comment)
     return _block(request, owner)
 
 

@@ -1,0 +1,33 @@
+{% extends "core/base.html" %}
+{% load text_extras %}
+
+{% block title %}Объявление{% endblock %}
+{% block main_width %}max-w-3xl{% endblock %}
+
+{% block content %}
+<a href="{% url 'notification_list' %}" class="text-sm text-slate-500 hover:text-accent"><i class="fa-solid fa-arrow-left mr-1"></i>Все уведомления</a>
+
+<article class="panel mt-3 p-6 flex flex-col gap-4">
+  <header class="flex items-center gap-3">
+    <span class="w-10 h-10 shrink-0 rounded-[22%] grid place-items-center bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400" aria-hidden="true">
+      <i class="fa-solid fa-bullhorn"></i>
+    </span>
+    <div class="min-w-0">
+      <h1 class="page-title text-xl font-bold">Объявление</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400">
+        {{ announcement.created|date:"j E Y, H:i" }} · {% if announcement.author %}{{ announcement.author.full_name }}{% else %}Команда сайта{% endif %}
+      </p>
+    </div>
+  </header>
+
+  <div class="prose leading-relaxed break-words">{{ announcement.text|markdown }}</div>
+
+  {% if announcement.link %}
+  <div>
+    <a href="{{ announcement.link }}" class="btn btn-primary"{% if announcement.link|slice:":1" != "/" %} target="_blank" rel="noopener"{% endif %}>
+      <i class="fa-solid fa-arrow-up-right-from-square"></i>Перейти
+    </a>
+  </div>
+  {% endif %}
+</article>
+{% endblock %}

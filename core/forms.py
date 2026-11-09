@@ -1,4 +1,7 @@
+import time
+
 from django import forms
+from django.core import signing
 
 from attachments.models import human_size
 
@@ -46,11 +49,34 @@ TEACHERS = [
 PLANS = [("free", "Бесплатно"), ("pro", "Про"), ("team", "Командный")]
 
 
-class SupportForm(forms.Form):
-    """Обращение в поддержку. Ничего не хранит: уходит сообщением в телеграм.
+class StampedForm(forms.Form):
+    """Форма, которая знает, сколько её заполняли: признак для фильтра спама (core/spam.py).
 
-    Базы под обращения нет намеренно — отвечает на них живой человек в чате, и запись
-    в таблице, куда никто не заглядывает, только создавала бы вид работающей очереди.
+    Время открытия кладём в скрытое поле, подписанное сервером, — без скриптов на странице.
+    Бот не может ни подделать метку, ни сделать её старше. Вернулась форма с ошибкой —
+    метка едет обратно та же, и счёт идёт от первого открытия.
+    """
+
+    SALT = "core.forms.started"
+
+    started = forms.CharField(required=False, widget=forms.HiddenInput)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["started"].initial = signing.dumps(time.time(), salt=self.SALT)
+
+    def seconds(self):
+        """Секунд от открытия до отправки; None — метки нет или она чужая."""
+        try:
+            started = float(signing.loads(self.data.get("started") or "", salt=self.SALT))
+        except (signing.BadSignature, TypeError, ValueError):
+            return None
+        return max(0, int(time.time() - started))
+
+
+class SupportForm(StampedForm):
+    """Обращение в поддержку: уходит сообщением в телеграм и остаётся в таблице
+    `core.Inquiry` — вместе с баллами фильтра спама, если писал гость.
 
     Темы общие и от разделов не зависят: список разделов ещё сменится не раз, а форма
     поддержки переживёт все эти смены неизменной.
@@ -78,17 +104,17 @@ class SupportForm(forms.Form):
             del self.fields["contact"]
 
 
-class FeedbackForm(forms.Form):
-    """Вопрос со страницы контактов. Сестра SupportForm: так же ничего не хранит и так же
-    уходит в телеграм — но в другой чат и к другим людям.
+class FeedbackForm(StampedForm):
+    """Вопрос со страницы контактов. Сестра SupportForm: так же уходит в телеграм и
+    остаётся в `core.Inquiry` — но в другой чат и к другим людям.
 
     Темы нет намеренно. В поддержку пишут про поломки, и там список тем помогает
     рассортировать; сюда пишет абитуриент с одним вопросом, и выбор из пяти пунктов
     перед ним — лишняя ступенька на ровном месте.
 
-    Капчи, которая стояла на старом сайте, тоже нет: от нас её роль играет ограничитель
-    частоты в самой странице (core/throttle.py), и он не заставляет человека разгадывать
-    картинки, чтобы спросить про общежитие.
+    Капчи, которая стояла на старом сайте, тоже нет: по опыту старого сайта спам она
+    почти не убавляла. Гостей проверяют штрафные баллы (core/spam.py), а человеку не
+    приходится разгадывать картинки, чтобы спросить про общежитие.
     """
 
     text = forms.CharField(label="Вопрос", max_length=2000, widget=forms.Textarea(attrs={"rows": 4}))

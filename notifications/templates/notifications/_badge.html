@@ -1,0 +1,7 @@
+{% comment %}
+  Число на колокольчике — поверх значка, с кольцом цвета шапки, чтобы отделялось от него.
+  Пустое — без внутреннего кружка вовсе, а не со спрятанным: `hidden` рядом с `inline-flex`
+  в собранном css проигрывает (так у чата показывался «0»). Обёртка с id остаётся всегда:
+  её перерисовывает сама себя по поводу из сокета (`notifications:changed`, chats/events.py)
+  и после обрыва связи (`chats:sync`), её же заменяет «Прочитать все».
+{% endcomment %}<span id="notification-badge" hx-get="{% url 'notification_badge' %}" hx-trigger="notifications:changed from:body, chats:sync from:body" hx-swap="outerHTML" {% if oob %}hx-swap-oob="true"{% endif %} class="pointer-events-none absolute -top-1.5 -right-2">{% if unread_notifications %}<span class="inline-flex items-center justify-center min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold leading-none ring-2 ring-slate-50 dark:ring-slate-950">{% if unread_notifications > 99 %}99+{% else %}{{ unread_notifications }}{% endif %}</span>{% endif %}</span>

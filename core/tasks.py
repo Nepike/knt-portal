@@ -8,6 +8,9 @@ from .mail import deliver, report_failure
 MAIL_RETRIES = 3
 # Сколько живут журналы входов и сбоев: квартал — с запасом на «а что было в начале семестра».
 JOURNAL_DAYS = 90
+# Обращения из поддержки и контактов — год: по ним подкручивают фильтр спама, и сезон
+# поступления должен попасть в выборку целиком.
+INQUIRY_DAYS = 365
 # Дамп сегодняшней базы — секунда, но база растёт, а общий потолок задач — минута.
 BACKUP_SOFT_LIMIT = 15 * 60
 BACKUP_LIMIT = BACKUP_SOFT_LIMIT + 5 * 60
@@ -55,7 +58,8 @@ def backup_database():
 
 @shared_task
 def sweep_journals():
-    """Снять из журналов входов и сбоев всё старше JOURNAL_DAYS, а с ними просроченные сессии.
+    """Снять из журналов входов и сбоев и из уведомлений всё старше JOURNAL_DAYS, обращения
+    старше INQUIRY_DAYS, а с ними просроченные сессии.
 
     Сессии Django сам не удаляет: строка с истёкшим сроком лежит, пока её не снимет
     clearsessions, а с ней лежит и приписка «моих устройств» (UserSession уходит только
@@ -63,13 +67,18 @@ def sweep_journals():
     """
     from django.contrib.sessions.models import Session
 
+    from notifications.models import Announcement, Notification
     from users.models import LoginEvent
 
-    from .models import Failure
+    from .models import Failure, Inquiry
 
     now = timezone.now()
     edge = now - timedelta(days=JOURNAL_DAYS)
     logins, _ = LoginEvent.objects.filter(created__lt=edge).delete()
     failures, _ = Failure.objects.filter(last_at__lt=edge).delete()
+    asked, _ = Inquiry.objects.filter(created__lt=now - timedelta(days=INQUIRY_DAYS)).delete()
+    notices, _ = Notification.objects.filter(created__lt=edge).delete()
+    Announcement.objects.filter(created__lt=edge).delete()  # его строки ушли строкой выше
     _, gone = Session.objects.filter(expire_date__lt=now).delete()
-    return f"входов снято: {logins}, сбоев: {failures}, сессий: {gone.get('sessions.Session', 0)}"
+    return (f"входов снято: {logins}, сбоев: {failures}, обращений: {asked}, уведомлений: {notices}, "
+            f"сессий: {gone.get('sessions.Session', 0)}")

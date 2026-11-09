@@ -63,6 +63,24 @@ def notify_left(user_id, chat_id):
     _publish(user_group(user_id), {"type": "chat.left", "chat": chat_id})
 
 
+def notify_notifications(*user_ids):
+    """Колокольчик (notifications): у людей изменились уведомления — их вкладки переспросят
+    число. Первый не чатовый повод в этом сокете: с ним сокет становится каналом человека, а не
+    только его чатов, — с этого шага и начинается переделка «Сообщений».
+
+    Объявление уходит сотням разом — поэтому один проход по слою, а не переход в async на
+    каждого."""
+    layer = get_channel_layer()
+    if layer is None or not user_ids:
+        return
+
+    async def send():
+        for user_id in user_ids:
+            await layer.group_send(user_group(user_id), {"type": "notice.changed"})
+
+    async_to_sync(send)()
+
+
 def _publish(group, payload):
     layer = get_channel_layer()
     if layer is None:  # слой не настроен (например, отдельная management-команда)
