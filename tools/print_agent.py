@@ -21,16 +21,18 @@
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -382,6 +384,10 @@ PUT_TRIES = 4
 UPLOAD_THREADS = 8
 CONFIG_EVERY = 600
 CONFIG_WAIT = 15  # секунд между попытками достучаться до сайта на старте
+TALK_TIMEOUT = 60
+# Так кончается соединение, которое сервер закрыл, пока агент молчал: вопрос по нему
+# до сайта не дошёл, и его можно задать заново.
+STALE = (ConnectionError, ssl.SSLEOFError)
 STOP_SIGNALS = [name for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
 PRINT_PDF, BLANK_PDF = "print.pdf", "blank.pdf"
 
@@ -412,33 +418,92 @@ def setting(name, default=""):
     return os.environ.get(name) or dotenv().get(name, default)
 
 
+def broken(error):
+    """Сбой http.client как сетевой сбой. Цикл службы ловит OSError, а обрыв посреди ответа
+    и брак вместо ответа (HTTPException) им не являются — служба бы падала и ждала systemd."""
+    return OSError(f"{type(error).__name__}: {error}")
+
+
 class Site:
-    """Ручки агента на сайте (`printing/agent.py`)."""
+    """Ручки агента на сайте (`printing/agent.py`).
+
+    Все вопросы идут по одному соединению. Работу агент спрашивает каждые две-три секунды,
+    и новое TLS-рукопожатие на каждый вопрос (~5 КБ ради ответа в сотню байт) — это ~15 ГБ
+    в месяц, а М4 может остаться на мобильном интернете с пакетом трафика. Соединение одно
+    на процесс, поэтому говорит с сайтом только главный поток.
+    """
 
     def __init__(self, url, token):
         self.url, self.token = url.rstrip("/"), token
+        parts = urllib.parse.urlsplit(self.url)
+        self.secure, self.host, self.port, self.prefix = parts.scheme == "https", parts.hostname, parts.port, parts.path
+        self.connection, self.served, self.pending = None, 0, False
+
+    def connect(self):
+        kind = http.client.HTTPSConnection if self.secure else http.client.HTTPConnection
+        return kind(self.host, self.port, timeout=TALK_TIMEOUT)
+
+    def drop(self):
+        if self.connection is not None:
+            self.connection.close()
+        self.connection, self.served = None, 0
+
+    def exchange(self, method, path, payload):
+        """Один вопрос: (код, причина, тело). Сеть подвела — OSError, как у urllib."""
+        headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
+        # Прошлый вопрос не дошёл до конца — оборвала сеть или остановка (сигнал приходит
+        # посреди разговора). Что лежит в соединении, неизвестно, и следующий вопрос — часто
+        # тот самый release — по нему бы не ушёл: берём новое.
+        if self.pending:
+            self.drop()
+        self.pending = True
+        for again in (True, False):
+            if self.connection is None:
+                self.connection = self.connect()
+            stale = self.served > 0
+            try:
+                self.connection.request(method, path, body=payload, headers=headers)
+                answer = self.connection.getresponse()
+            except STALE:
+                if not (again and stale):
+                    raise
+                self.drop()
+                continue
+            except http.client.HTTPException as error:
+                raise broken(error) from error
+            # Тело читается вне попытки выше: ответ начался — значит, вопрос до сайта дошёл,
+            # и повторять его нельзя (claim выдал бы второе задание, пока первое ждёт тишины).
+            try:
+                data = answer.read()
+            except http.client.HTTPException as error:
+                raise broken(error) from error
+            self.served += 1
+            # Сервер попрощался (nginx так делает после тысячи вопросов) — следующее соединение
+            # будет новым, и его неудача — уже не «простояло».
+            if answer.will_close:
+                self.drop()
+            self.pending = False
+            return answer.status, answer.reason, data
 
     def talk(self, door, body=None):
         """GET без тела, POST с телом. Ответ — JSON; 409 — Gone; прочий отказ — SiteError."""
-        request = urllib.request.Request(
-            f"{self.url}/printing/agent/{door}/",
-            data=None if body is None else json.dumps(body).encode(),
-            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+        status, reason, data = self.exchange(
+            "GET" if body is None else "POST",
+            f"{self.prefix}/printing/agent/{door}/",
+            None if body is None else json.dumps(body).encode(),
         )
+        if 200 <= status < 300:
+            return json.loads(data)
+        # Причину сайт пишет в JSON, но 502 от nginx приезжает страницей — без разбора
+        # в лоб вместо «сайт ответил 502» было бы JSONDecodeError.
         try:
-            with urllib.request.urlopen(request, timeout=60) as answer:
-                return json.load(answer)
-        except urllib.error.HTTPError as error:
-            # Причину сайт пишет в JSON, но 502 от nginx приезжает страницей — без разбора
-            # в лоб вместо «сайт ответил 502» было бы JSONDecodeError.
-            try:
-                data = json.loads(error.read() or b"{}")
-            except ValueError:
-                data = {}
-            detail = data.get("error", "") if isinstance(data, dict) else ""
-            if error.code == 409:
-                raise Gone(detail) from error
-            raise SiteError(f"сайт ответил {error.code}: {detail or error.reason}") from error
+            parsed = json.loads(data or b"{}")
+        except ValueError:
+            parsed = {}
+        detail = parsed.get("error", "") if isinstance(parsed, dict) else ""
+        if status == 409:
+            raise Gone(detail)
+        raise SiteError(f"сайт ответил {status}: {detail or reason}")
 
     def tell(self, door, body):
         """Доложить, не падая: отчёт чаще всего нужен ровно тогда, когда связи и нет.

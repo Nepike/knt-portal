@@ -1,6 +1,8 @@
 """Печать: разбор выбора и себестоимость, недельный лимит, страницы, админка и
 чистые функции агента (tools/print_agent.py)."""
 
+import http.client
+import http.server
 import io
 import json
 import os
@@ -8,7 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
-import urllib.error
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -1857,18 +1859,6 @@ class AgentServiceTests(SimpleTestCase):
 
         self.assertEqual(sleep.call_count, 2)
 
-    def test_the_sites_answers_become_exceptions(self):
-        site = print_agent.Site("https://knt-mipt.ru", "t")
-
-        def refused(code, body):
-            error = urllib.error.HTTPError("https://knt-mipt.ru", code, "x", {}, io.BytesIO(body.encode()))
-            return mock.patch.object(print_agent.urllib.request, "urlopen", side_effect=error)
-
-        with refused(409, '{"error": "задание закрыто"}'), self.assertRaisesRegex(print_agent.Gone, "закрыто"):
-            site.talk("printed", {"token": "t"})
-        with refused(502, "<html>Bad Gateway</html>"), self.assertRaisesRegex(print_agent.SiteError, "502"):
-            site.talk("claim", {"kind": "print"})
-
     def test_every_door_the_agent_knocks_on_exists(self):
         """Ручки агент складывает строкой — своего Django у него нет, и опечатка нашлась бы
         только на М4, посреди печати."""
@@ -1879,3 +1869,172 @@ class AgentServiceTests(SimpleTestCase):
         for door in doors:
             with self.subTest(door=door):
                 reverse(f"printagent_{door}")
+
+
+class AgentSite(http.server.ThreadingHTTPServer):
+    """Сайт для агента на настоящих сокетах 127.0.0.1: здесь важно, сколько соединений открыл
+    агент и что сервер с ними делает. Ответы — по сценарию, по одному на вопрос:
+    (как, код, тело); сценарий кончился — «работы нет»."""
+
+    daemon_threads = True
+
+    def __init__(self, idle=None):
+        super().__init__(("127.0.0.1", 0), AgentSiteHandler)
+        self.idle, self.script, self.seen = idle, [], []
+        self.closed = threading.Semaphore(0)
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.server_address[1]}/site"
+
+    def shutdown_request(self, request):
+        super().shutdown_request(request)
+        self.closed.release()
+
+    def handle_error(self, request, client_address):
+        pass  # агент, бросивший соединение посреди ответа, здесь не сбой, а предмет проверки
+
+    def ports(self):
+        return {port for port, *_ in self.seen}
+
+
+class AgentSiteHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # с 1.0 сервер закрывал бы соединение после каждого ответа
+
+    def setup(self):
+        self.timeout = self.server.idle  # так nginx закрывает соединение, по которому молчат
+        super().setup()
+
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        size = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(size) or b"null")
+        self.server.seen.append((self.client_address[1], self.command, self.path, self.headers["Authorization"], body))
+        how, status, answer = self.server.script.pop(0) if self.server.script else ("ok", 200, {"job": None})
+        if how == "hang up":
+            self.close_connection = True
+            return
+        if how == "garbage":
+            self.wfile.write(b"HELLO\r\n\r\n")
+            self.close_connection = True
+            return
+        data = answer if isinstance(answer, bytes) else json.dumps(answer).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        # «cut» обещает втрое больше, чем пришлёт, и закрывает соединение посреди тела.
+        self.send_header("Content-Length", str(len(data) * (3 if how == "cut" else 1)))
+        if how == "bye":
+            self.send_header("Connection", "close")
+        self.close_connection = how in ("bye", "cut")
+        self.end_headers()
+        self.wfile.write(data)
+
+    do_GET = do_POST
+
+
+class SiteConnectionTests(SimpleTestCase):
+    """Агент говорит с сайтом по одному соединению: М4 может остаться на мобильном интернете,
+    а новое TLS-рукопожатие на каждый вопрос «есть работа?» — это ~15 ГБ в месяц."""
+
+    def setUp(self):
+        patch = mock.patch.object(print_agent, "TALK_TIMEOUT", 5)  # сломанный тест не висит минуту
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def serve(self, *script, idle=None):
+        server = AgentSite(idle)
+        server.script.extend(script)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        site = print_agent.Site(server.url, "t0ken")
+        self.addCleanup(site.drop)  # первым: тогда поток сервера дочитает соединение и выйдет
+        return server, site
+
+    def test_every_question_goes_over_one_connection(self):
+        server, site = self.serve()
+
+        answers = [site.talk("claim", {"kind": "print"}) for _ in range(10)]
+        site.talk("config")
+
+        self.assertEqual(answers, [{"job": None}] * 10)
+        self.assertEqual(len(server.ports()), 1)
+        self.assertEqual(server.seen[0][1:], ("POST", "/site/printing/agent/claim/", "Bearer t0ken", {"kind": "print"}))
+        self.assertEqual(server.seen[-1][1:3], ("GET", "/site/printing/agent/config/"))
+
+    def test_https_goes_over_tls(self):
+        connection = print_agent.Site("https://knt-mipt.ru", "t").connect()
+
+        self.assertIsInstance(connection, http.client.HTTPSConnection)
+        self.assertEqual((connection.host, connection.port, connection.timeout), ("knt-mipt.ru", 443, 5))
+
+    def test_a_connection_the_server_closed_while_idle_is_replaced(self):
+        """Так nginx закрывает соединение, по которому молчали дольше keepalive_timeout. Вопрос
+        по нему до сайта не дошёл — его задают заново по новому, один раз."""
+        server, site = self.serve(idle=0.2)
+        site.talk("claim", {"kind": "print"})
+        self.assertTrue(server.closed.acquire(timeout=5))
+
+        answer = site.talk("claim", {"kind": "print"})
+
+        self.assertEqual(answer, {"job": None})
+        self.assertEqual(len(server.seen), 2)
+        self.assertEqual(len(server.ports()), 2)
+
+    def test_a_fresh_connection_that_fails_is_not_asked_again(self):
+        """Свежее соединение простоять не могло: раз сайт не ответил, вопрос он, может, и
+        получил, а повторный claim выдал бы второе задание."""
+        server, site = self.serve(("hang up", 0, None))
+
+        with self.assertRaises(ConnectionError):
+            site.talk("claim", {"kind": "print"})
+
+        self.assertEqual(len(server.seen), 1)
+
+    def test_after_the_server_says_goodbye_the_next_connection_counts_as_fresh(self):
+        """nginx прощается после тысячи вопросов. Следующее соединение новое, и его неудачу,
+        как у любого свежего, не повторяют."""
+        server, site = self.serve(("bye", 200, {"job": None}), ("hang up", 0, None))
+        site.talk("claim", {"kind": "print"})
+
+        with self.assertRaises(ConnectionError):
+            site.talk("claim", {"kind": "print"})
+
+        self.assertEqual(len(server.seen), 2)
+
+    def test_a_broken_answer_is_a_network_error_and_the_next_question_reconnects(self):
+        """Обрыв посреди ответа и брак вместо него у http.client не OSError, а цикл службы
+        ловит именно OSError: без перевода служба падала бы до перезапуска systemd."""
+        for how in ("cut", "garbage"):
+            with self.subTest(how=how):
+                server, site = self.serve((how, 200, {"job": None}))
+
+                with self.assertRaises(OSError):
+                    site.talk("claim", {"kind": "print"})
+
+                self.assertEqual(site.talk("claim", {"kind": "print"}), {"job": None})
+                self.assertEqual(len(server.seen), 2)
+
+    def test_a_question_cut_short_by_a_stop_does_not_block_the_release(self):
+        """Сигнал остановки приходит посреди разговора, и следом агент возвращает задание в
+        очередь. По соединению с недочитанным ответом release бы уже не ушёл."""
+        server, site = self.serve()
+        site.talk("claim", {"kind": "analyze"})
+        with mock.patch.object(site.connection, "getresponse", side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):
+            site.talk("alive", {"token": "t"})
+
+        self.assertEqual(site.talk("release", {"token": "t"}), {"job": None})
+        self.assertEqual(server.seen[-1][2], "/site/printing/agent/release/")
+
+    def test_the_sites_refusals_become_exceptions(self):
+        server, site = self.serve(("ok", 409, {"error": "задание закрыто"}), ("ok", 502, b"<html>Bad Gateway</html>"))
+
+        with self.assertRaisesRegex(print_agent.Gone, "закрыто"):
+            site.talk("printed", {"token": "t"})
+        with self.assertRaisesRegex(print_agent.SiteError, "502"):
+            site.talk("claim", {"kind": "print"})
+
+        self.assertEqual(len(server.ports()), 1)  # отказ сайта — не повод рвать соединение
