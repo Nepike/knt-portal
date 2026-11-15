@@ -55,7 +55,7 @@ from chats.models import Chat
 from wall.models import Board
 
 from . import backup, donors, lockdown, nav, runs, spam
-from .context_processors import theme_for
+from .context_processors import skin_classes, theme_for
 from .search import by_name
 from .failures import record
 from .forms import MAX_SUPPORT_IMAGE, FeedbackForm, StampedForm, SupportForm
@@ -1987,6 +1987,121 @@ class SkinTests(TestCase):
         for url in urls:
             with self.subTest(url=url):
                 self.assertTrue((static / url).is_file())
+
+
+class GlitchSkinTests(TestCase):
+    """Глитч «сайт взломан», 18 ноября – 1 декабря 2026: только тёмная тема, запертый
+    переключатель, свой логотип, фавикон и скрипт. Сам отсчёт и подсказки — quest.tests."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.person = make_user("glitch@t.local", name="Илья", surname="Смирнов")
+        self.client.force_login(self.person)
+
+    def page(self, name="material_list"):
+        return self.client.get(reverse(name)).content.decode()
+
+    def test_the_calendar_of_the_hack(self):
+        for day, skin in [
+            (date(2026, 11, 17), "default"), (date(2026, 11, 18), "glitch"), (date(2026, 11, 30), "glitch"),
+            (date(2026, 12, 1), "glitch"), (date(2026, 12, 2), "party"), (date(2026, 12, 3), "default"),
+            (date(2027, 11, 20), "default"),
+        ]:
+            with self.subTest(day=day):
+                self.assertEqual(theme_for(day), skin)
+
+    def test_the_last_day_of_the_hack_is_red(self):
+        self.assertEqual(skin_classes("glitch", date(2026, 12, 1)), "theme-glitch dark redday")
+        self.assertEqual(skin_classes("glitch", date(2026, 11, 30)), "theme-glitch dark")
+        self.assertEqual(skin_classes("party", date(2026, 12, 2)), "theme-party")
+
+    @override_settings(SITE_THEME=None)
+    def test_left_to_itself_the_site_turns_green_on_the_eighteenth(self):
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 11, 18)):
+            self.assertIn('class="theme-glitch dark"', self.page())
+
+    @override_settings(SITE_THEME="glitch")
+    def test_the_server_makes_it_dark_and_locks_the_switch(self):
+        """Светлую тему человека в localStorage скин не трогает: переключатель в эти дни
+        не пишет туда ничего, и выбор вернётся сам."""
+        page = self.page()
+
+        self.assertIn('class="theme-glitch dark"', page)
+        self.assertIn('x-data="lockedSwitch"', page)
+        self.assertNotIn("localStorage.setItem('color-scheme'", page)
+
+    def test_the_plain_switch_still_switches(self):
+        page = self.page()
+
+        self.assertNotIn("lockedSwitch", page)
+        self.assertIn("localStorage.setItem('color-scheme'", page)
+
+    @override_settings(SITE_THEME="glitch")
+    def test_the_hack_brings_its_own_logo_favicon_and_script(self):
+        page = self.page()
+
+        for sign in ("skin-lag", "core/img/glitch/favicon.png", "core/js/glitch.js", 'x-data="denied('):
+            with self.subTest(sign=sign):
+                self.assertIn(sign, page)
+        self.assertNotIn("core/img/favicon.ico", page)
+
+    def test_without_the_skin_nothing_of_the_hack_is_loaded(self):
+        page = self.page()
+
+        for sign in ("skin-lag", "glitch", "takeover", "skin-timer"):
+            with self.subTest(sign=sign):
+                self.assertNotIn(sign, page)
+
+    @override_settings(SITE_THEME="glitch")
+    def test_the_denial_calls_people_by_their_own_name_only(self):
+        make_user("other@t.local", name="Пётр", surname="Петров")
+
+        page = self.page()
+
+        self.assertIn("denied('Илья')", page)
+        self.assertNotIn("Пётр", page)
+
+    @override_settings(SITE_THEME="glitch")
+    def test_a_guest_is_hacked_too(self):
+        self.client.logout()
+
+        page = self.page("about")
+
+        self.assertIn('class="theme-glitch dark"', page)
+        self.assertIn('x-data="lockedSwitch"', page)
+        self.assertIn("denied('')", page)
+
+    def test_unready_sections_are_gone_from_the_menu(self):
+        page = self.page()
+
+        self.assertNotIn("Новости?", page)
+        self.assertNotIn("Расписание?", page)
+
+    @override_settings(SITE_THEME=None)
+    def test_error_pages_wear_the_hack_by_the_date_alone(self):
+        """500 и 400 Django рисует без контекста — день скин считает сам."""
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 11, 25)):
+            hacked = render_to_string("500.html")
+        with patch("core.context_processors.timezone.localdate", return_value=date(2026, 10, 15)):
+            spooky = render_to_string("500.html")
+
+        self.assertIn('class="theme-glitch dark"', hacked)
+        self.assertIn("kernel panic", hacked)
+        self.assertIn("skin-error-red", hacked)
+        # Хэллоуин на ошибки не идёт: потёки там были не к месту.
+        self.assertNotIn("theme-", spooky)
+        self.assertNotIn("kernel panic", spooky)
+        self.assertIn("Что-то сломалось", spooky)
+
+    @override_settings(SITE_THEME="glitch")
+    def test_a_missing_page_shows_its_code_in_blocks(self):
+        response = Client(raise_request_exception=False).get("/wp-admin/setup.php")
+
+        self.assertContains(response, "нет такого файла или каталога", status_code=404)
+        self.assertContains(response, "Такой страницы нет", status_code=404)
+        self.assertContains(response, "██  ██  ██████  ██  ██", status_code=404)
+        self.assertNotContains(response, "skin-error-red", status_code=404)
 
     def test_every_picture_the_skin_markup_names_is_in_place(self):
         """На бою `{% static %}` на файл, которого нет, — это ошибка 500 на каждой странице."""

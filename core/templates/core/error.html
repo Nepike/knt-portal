@@ -1,20 +1,31 @@
-{% load static %}
+{% load static skin_extras %}
 {% comment %}
   Общая раскладка страниц ошибок (core/templates/400.html, 403.html, 403_csrf.html, 404.html,
   500.html). Сама по себе, как страница закрытия, и без base.html намеренно: 500 рисуется, когда
   что-то уже сломалось, и не должна упасть второй раз на меню, счётчиках и рамке аватара.
   Остальные — той же раскладкой: ошибки выглядят одинаково и на домене файлов, где меню сайта
   всё равно никуда не ведёт. Django рисует 500 и 400 вовсе без контекста — поэтому здесь ни user,
-  ни request, только static и url. Скина тоже нет: страница ошибки не место для подтёков.
+  ни request, только static и url.
+
+  Скин — только глитч (error_skin считает день сам, контекста ведь нет): строка команды,
+  код из блоков, «системное сообщение» и смеющийся смайл; у 500 всё красное и kernel panic.
+  Строки команды и сообщения у каждой ошибки свои — блоки command и system; trace — строка
+  под ними (у 404 там подсказка квеста).
 {% endcomment %}
+{% error_skin as skin %}
+{% capture code %}{% block code %}{% endblock %}{% endcapture %}
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru"{% if skin.classes %} class="{{ skin.classes }}"{% endif %}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
   <title>{% block title %}{% endblock %} - КНТ МФТИ</title>
+  {% if skin.theme == "glitch" %}
+  <link rel="icon" href="{% static 'core/img/glitch/favicon.png' %}" type="image/png" sizes="32x32">
+  {% else %}
   <link rel="icon" href="{% static 'core/img/favicon.ico' %}" type="image/x-icon">
+  {% endif %}
 
   {# Тот же ключ и тот же класс, что в base.html: тема остаётся той, какую человек выбрал #}
   <script>
@@ -29,22 +40,32 @@
   <link href="{% static 'core/css/base.css' %}" rel="stylesheet">
 </head>
 
-<body class="min-h-dvh flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+<body class="min-h-dvh flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans{% if skin.theme == 'glitch' %} skin-error{% if code == '500' %} skin-error-red{% endif %}{% endif %}">
   <main class="flex-1 flex flex-col justify-center w-full max-w-xl mx-auto px-4 sm:px-6 py-10">
     <a href="{% url 'home' %}" class="flex items-center gap-2.5 self-start">
-      <img src="{% static 'core/img/logo.svg' %}" alt="Логотип" class="w-11 aspect-square shrink-0 dark:brightness-0 dark:invert">
+      {% include "core/_logo.html" with site_theme=skin.theme width="w-11" %}
       <span>
-        <span class="block font-bold text-2xl leading-none">КНТ</span>
+        <span class="brand-name block font-bold text-2xl leading-none">КНТ</span>
         <span class="block text-[12px] font-medium text-slate-400 leading-none">Студенческий сайт</span>
       </span>
     </a>
 
-    <p class="mt-8 text-sm font-semibold text-slate-400">Ошибка {% block code %}{% endblock %}</p>
-    <h1 class="mt-1 text-3xl font-bold">{% block heading %}{% endblock %}</h1>
+    {% if skin.theme == "glitch" %}
+    <p class="skin-error-cmd"><span class="cd-prompt">root@knt-mipt:~#</span> {% block command %}{% endblock %}</p>
+    <p class="skin-error-sys">{% block system %}{% endblock %}</p>
+    {% block trace %}{% endblock %}
+    <div class="flex items-center gap-7 mt-5">
+      <pre class="skin-error-big" aria-hidden="true">{{ code|blocks }}</pre>
+      {% include "core/glitch/_smiley.html" with size="w-24 h-24 max-sm:w-16 max-sm:h-16" mode="masc-laugh" %}
+    </div>
+    {% endif %}
+    <p class="mt-8 text-sm font-semibold text-slate-400 skin-error-code">Ошибка {{ code }}</p>
+    <h1 class="mt-1 text-3xl font-bold skin-error-title">{% block heading %}{% endblock %}</h1>
 
     <div class="mt-5 space-y-3 leading-relaxed text-slate-600 dark:text-slate-400">
       {% block text %}{% endblock %}
     </div>
+    {% if skin.theme == "glitch" %}{% block panic %}{% endblock %}{% endif %}
 
     <div class="mt-8 flex flex-wrap gap-2">
       <button type="button" class="btn btn-primary" onclick="history.back()">Назад</button>

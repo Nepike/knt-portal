@@ -8,6 +8,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_safe
 
 from . import inquiries, lockdown
+from .context_processors import today as site_today
 from .forms import DemoForm, FeedbackForm, SupportForm
 from .models import Funding, Inquiry, Lockdown
 
@@ -19,7 +20,14 @@ def home(request):
     Без `login_not_required` корень уводил бы незалогиненного на форму входа, а нам
     нужна витрина: на knt-mipt.ru приходят и те, кто сюда только собирается поступать.
     Своей главной по-прежнему нет; материалы — самый нужный раздел для вошедших.
+    На время глитч-скина главная у всех одна — страница отсчёта (quest), в праздник после
+    него — праздничная.
     """
+    theme = site_today()[0]
+    if theme == "glitch":
+        return redirect("countdown")
+    if theme == "party":
+        return redirect("party")
     if not request.user.is_authenticated:
         return redirect("about")
     return redirect("material_list")

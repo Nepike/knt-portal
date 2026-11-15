@@ -7,7 +7,9 @@
 import secrets
 
 from django.db import transaction
+from django.utils import timezone
 
+from core.context_processors import party
 from economy.models import BalanceLog
 from economy.services import NotEnoughFunds, lock, spend
 
@@ -57,9 +59,22 @@ def draw(items, owned, gift=False, luck=_luck):
     return rarity, (luck.choice(fresh) if fresh else None)
 
 
-def first_is_free(user):
-    """Первый кейс — любой — в подарок. Один раз на человека."""
-    return not CaseOpening.objects.filter(user=user).exists()
+def gift(user):
+    """Почему следующий кейс человеку бесплатный, или None — платный.
+
+    «first» — первый кейс, любой, раз на человека. «party» — подарок всем в праздник после
+    взлома (2 декабря 2026, quest): ещё один любой в этот день, сверх первого. Кто открыл
+    свой первый кейс в тот же день, получает оба.
+    """
+    openings = CaseOpening.objects.filter(user=user)
+    if not openings.exists():
+        return "first"
+    if party():
+        day = timezone.localdate()
+        allowed = 1 if openings.filter(created__date__lt=day).exists() else 2
+        if openings.filter(created__date=day, paid=0).count() < allowed:
+            return "party"
+    return None
 
 
 @transaction.atomic
@@ -77,12 +92,12 @@ def open_case(user, case, luck=_luck):
     owned = set(UserItem.objects.filter(user=user).values_list("item_id", flat=True))
     if all(item.pk in owned for item in items):
         raise AllCollected(case.name)
-    gift = first_is_free(user)
-    price = 0 if gift else case.price
+    reason = gift(user)
+    price = 0 if reason else case.price
     if wallet.balance < price:
         raise NotEnoughFunds(f"нужно {price}, на балансе {wallet.balance}")
 
-    rarity, item = draw(items, owned, gift=gift, luck=luck)
+    rarity, item = draw(items, owned, gift=bool(reason), luck=luck)
     # Ступень собрана целиком — вещи нет, половина цены остаётся у человека. Одной строкой
     # в журнале, а не «минус цена, плюс половина»: плюс записался бы в заработанное.
     refund = 0 if item else price // 2
@@ -91,7 +106,9 @@ def open_case(user, case, luck=_luck):
     if price - refund:
         what = f"«{item.name}»" if item else f"{R(rarity).label}: всё уже есть, половина цены назад"
         spend(user, price - refund, BalanceLog.Reason.CASE, note=f"кейс «{case.name}» → {what}"[:200], key=f"case:{case.pk}")
-    return CaseOpening.objects.create(user=user, case=case, item=item, rarity=rarity, paid=price, refund=refund)
+    opening = CaseOpening.objects.create(user=user, case=case, item=item, rarity=rarity, paid=price, refund=refund)
+    opening.gift = reason  # подпись под рулеткой: «первый» или «праздничный» (cosmetics/_roulette.html)
+    return opening
 
 
 def percent(share):
@@ -100,20 +117,20 @@ def percent(share):
 
 
 def on_show(user, coins):
-    """Кейсы для витрины с пометками: `cost` — сколько стоит человеку сейчас (первый — 0),
-    `gift`, `short` — сколько не хватает, `collected` — всё уже есть, `size`, `chances`
-    [(ступень, подпись, доля для ширины, проценты словами)] и `fan` — три самые редкие вещи
-    для обложки. Пустой кейс не показываем: открыть его нельзя."""
+    """Кейсы для витрины с пометками: `cost` — сколько стоит человеку сейчас (подарок — 0),
+    `gift` — почему подарок (см. gift), `short` — сколько не хватает, `collected` — всё уже
+    есть, `size`, `chances` [(ступень, подпись, доля для ширины, проценты словами)] и `fan` —
+    три самые редкие вещи для обложки. Пустой кейс не показываем: открыть его нельзя."""
     owned = set(UserItem.objects.filter(user=user).values_list("item_id", flat=True))
-    gift = first_is_free(user)
+    reason = gift(user)
     rank = {rarity: step for step, rarity in enumerate(CosmeticItem.RARITY_ORDER)}
     shown = []
     for case in Case.objects.filter(active=True).prefetch_related("items"):
         items = list(case.items.all())
         if not items:
             continue
-        case.gift = gift
-        case.cost = 0 if gift else case.price
+        case.gift = reason
+        case.cost = 0 if reason else case.price
         case.short = max(case.cost - coins, 0)
         case.size = len(items)
         case.collected = all(item.pk in owned for item in items)

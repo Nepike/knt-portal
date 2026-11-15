@@ -80,6 +80,11 @@ DOWNLOAD_SYNC_EVERY = 50
 WALL_BATCH = 50
 DOWNLOAD_BATCH = 50
 
+# Ключ от глитч-взлома 1 декабря 2026 (quest): раз на человека, цифру назначил пользователь
+# 15 ноя 2026 (в макете было 500). Награда держится на записи quest.Unlock; после праздника
+# её можно не трогать — вниз пересчёта нет, выплаченное останется.
+QUEST_KEY = 1500
+
 # Одна причитающаяся награда: за что (reason+key), сколько всего и как подписать в журнале.
 Award = namedtuple("Award", "reason key amount note")
 
@@ -94,6 +99,7 @@ def earned(user):
     """
     return [
         Award(R.WELCOME, "", WELCOME, "добро пожаловать"),
+        *_quest(user),
         *_downloads(user),
         *_wall(user),
         *_comments(user),
@@ -223,6 +229,14 @@ def _wall(user):
     profile = getattr(user, "wall", None)
     if profile:
         yield from _batches(R.WALL, profile.painted, WALL_BATCH, "клетки на Стене")
+
+
+def _quest(user):
+    """Ключ от взлома, введённый в консоли отсчёта (quest.keys.unlock)."""
+    from quest.models import Unlock
+
+    if Unlock.objects.filter(user=user).exists():
+        yield Award(R.QUEST, "glitch-2026", QUEST_KEY, "ключ от взлома")
 
 
 def _moderated(user):

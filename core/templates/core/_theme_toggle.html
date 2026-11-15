@@ -5,10 +5,19 @@
   не разъехалось со скриптом в <head>: там читается тот же ключ localStorage и тот же класс
   на <html>. Положение кружка задаёт этот класс (theme/input.css, .theme-switch), а не Alpine:
   тему скрипт ставит раньше, чем Alpine проснётся, и кружок не прыгает при загрузке.
+
+  На время глитч-скина переключатель заперт: тема только тёмная, а нажатие дёргает кружок
+  и выводит окно «ОТКАЗАНО» (lockedSwitch и denied в core/js/glitch.js). localStorage он
+  тогда не трогает — выбранная человеком тема вернётся сама, когда скин кончится.
 {% endcomment %}
+{% if site_theme == "glitch" %}
+<button type="button" role="switch" class="theme-switch shrink-0" aria-label="Тёмная тема" aria-checked="true"
+        x-data="lockedSwitch" @click="deny()" :class="shaking && 'denied'">
+{% else %}
 <button type="button" role="switch" class="theme-switch shrink-0" aria-label="Тёмная тема"
         x-data="{ dark: document.documentElement.classList.contains('dark') }" :aria-checked="dark.toString()"
         @click="dark = !dark; document.documentElement.classList.toggle('dark', dark); localStorage.setItem('color-scheme', dark ? 'dark' : 'light')">
+{% endif %}
   <span class="theme-switch-knob"></span>
   <span class="theme-switch-icon left-0.5"><i class="fa-solid fa-sun"></i></span>
   <span class="theme-switch-icon right-0.5"><i class="fa-solid fa-moon"></i></span>

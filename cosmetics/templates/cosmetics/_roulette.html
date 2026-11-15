@@ -20,7 +20,7 @@
     <h2 class="text-lg font-bold pr-8">Кейс «{{ case.name }}»</h2>
     {% if opening %}
     <p class="text-sm text-slate-500 dark:text-slate-400">
-      {% if opening.paid %}за {{ opening.paid }} <i class="fa-solid fa-cent-sign text-xs"></i>{% else %}<i class="fa-solid fa-gift"></i> первый — в подарок{% endif %}
+      {% if opening.paid %}за {{ opening.paid }} <i class="fa-solid fa-cent-sign text-xs"></i>{% elif opening.gift == "party" %}<i class="fa-solid fa-gift"></i> праздничный — в подарок{% else %}<i class="fa-solid fa-gift"></i> первый — в подарок{% endif %}
     </p>
     {% endif %}
   </div>

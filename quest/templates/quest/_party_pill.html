@@ -1,0 +1,7 @@
+{% comment %}
+  В праздник после взлома (2 декабря) — на месте счётчика в шапке вошедшего: ссылка на
+  праздничную страницу. На ней самой её нет. На телефоне — одна иконка.
+{% endcomment %}
+<a href="{% url 'party' %}" class="party-pill" aria-label="С праздником!">
+  <i class="fa-solid fa-gift" aria-hidden="true"></i><span class="max-sm:hidden" aria-hidden="true">С праздником!</span>
+</a>

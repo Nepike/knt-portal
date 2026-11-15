@@ -1,6 +1,8 @@
 {% extends "core/error.html" %}
 {% block title %}Неверный запрос{% endblock %}
 {% block code %}400{% endblock %}
+{% block command %}curl -X ??? knt-mipt.ru{% endblock %}
+{% block system %}ошибка разбора: запрос повреждён в пути{% endblock %}
 {% block heading %}Запрос не получилось разобрать{% endblock %}
 {% block text %}
 <p>Вернитесь назад и попробуйте ещё раз.</p>

@@ -1,6 +1,10 @@
 {% extends "core/error.html" %}
+{% load quest_extras %}
 {% block title %}Страница не найдена{% endblock %}
 {% block code %}404{% endblock %}
+{% block command %}cd /materials/9999{% endblock %}
+{% block system %}bash: cd: /materials/9999: нет такого файла или каталога{% endblock %}
+{% block trace %}{% notfound_clue as clue %}{% if clue %}<p class="skin-error-trace">{{ clue }}</p>{% endif %}{% endblock %}
 {% block heading %}Такой страницы нет{% endblock %}
 {% block text %}
 <p>Возможно, её удалили, или в адресе опечатка.</p>

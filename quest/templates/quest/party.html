@@ -1,0 +1,67 @@
+{% extends "core/base.html" %}
+{% block title %}С праздником{% endblock %}
+{% block meta %}<meta name="robots" content="noindex">{% endblock %}
+
+{% block content %}
+{% comment %}
+  Праздник после взлома — 2 декабря (quest.views.party). Числа — настоящие, имён нет.
+  Конфетти здесь сыплется всё время (.party-confetti), на прочих страницах тает за 5 секунд
+  после загрузки (theme/input.css). Карточка рамки — только если рамка за ключ назначена
+  в «Квест → передача». «Твой взлом» гостю закрыт и зовёт войти.
+{% endcomment %}
+<div class="party-confetti" aria-hidden="true"></div>
+<section class="flex flex-col gap-4" aria-label="Праздник">
+  <div class="party-hero">
+    <span class="party-fw party-fw-a" aria-hidden="true"></span>
+    <span class="party-fw party-fw-b" aria-hidden="true"></span>
+    <span class="party-fw party-fw-c" aria-hidden="true"></span>
+    <p class="party-date">2 декабря · взлом окончен</p>
+    <h1 class="party-title">Сайт свободен!</h1>
+    <p class="party-lead">Взломщики ушли, всё вернулось на место — и светлая тема тоже. Спасибо всем, кто искал ключ. С праздником!</p>
+    <ul class="party-stats">
+      {% for number, label in numbers %}<li><b>{{ number }}</b>{{ label }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  {% comment %}
+    На широком экране колонок столько, сколько карточек: рамки может и не быть. Уже — по две:
+    втроём в ряд карточки узкие, и ключ в «Твой взлом» мельчал бы до 9 пикселей.
+  {% endcomment %}
+  <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-none xl:grid-flow-col xl:auto-cols-fr">
+    <article class="panel p-5 flex flex-col gap-2.5">
+      <span class="party-icon" aria-hidden="true"><i class="fa-solid fa-gift"></i></span>
+      <h2 class="text-lg font-bold">Подарок всем</h2>
+      <p class="text-sm leading-relaxed text-slate-500 dark:text-slate-400">Бесплатный кейс — до конца дня, один на человека.</p>
+      <a href="{% url 'shop' %}#cases" class="btn btn-primary self-start mt-auto">Открыть кейс</a>
+    </article>
+
+    {% if frame %}
+    <article class="panel p-5 flex flex-col gap-2.5">
+      <span class="w-14" aria-hidden="true">{% include "cosmetics/_tile.html" with item=frame only %}</span>
+      <h2 class="text-lg font-bold">Рамка «{{ frame.name }}»</h2>
+      <p class="text-sm leading-relaxed text-slate-500 dark:text-slate-400">Досталась тем, кто нашёл ключ. Больше её не получить.</p>
+      {% if request.user.is_authenticated %}<a href="{% url 'profile' request.user.pk %}" class="btn btn-secondary self-start mt-auto">Мои рамки</a>{% endif %}
+    </article>
+    {% endif %}
+
+    {% if mine %}
+    <article class="@container panel p-5 flex flex-col gap-2.5">
+      <span class="party-icon" aria-hidden="true"><i class="fa-solid fa-terminal"></i></span>
+      <h2 class="text-lg font-bold">Твой взлом</h2>
+      {% comment %}
+        Ключ ячейками, как «ключ повреждён» на экране отсчёта: сданное — значением. Одной
+        строкой: между ячейками пробел (KEY_GAP в quest/views.py), а --key-len — длина
+        всей строки в знаках, по ней css подбирает шрифт под ширину карточки.
+      {% endcomment %}
+      <p class="party-key" style="--key-len: {{ mine.length }}" aria-hidden="true">{% for cell in mine.cells %}<span{% if not cell.open %} class="party-key-lost"{% endif %}>{{ cell.text }}</span>{% if not forloop.last %} {% endif %}{% endfor %}</p>
+      {% if request.user.is_authenticated %}
+      <p class="text-sm leading-relaxed text-slate-500 dark:text-slate-400">Сдано фрагментов: {{ mine.done }} из {{ mine.total }}. {% if mine.unlocked %}Ключ вскрыт — тебе {{ mine.reward }} токенов.{% else %}Ключ остался у взломщиков.{% endif %}</p>
+      {% else %}
+      <p class="text-sm leading-relaxed text-slate-500 dark:text-slate-400">Чтобы узнать свои результаты, войди.</p>
+      <a href="{% url 'login' %}?next={{ request.path|urlencode }}" class="btn btn-brand self-start mt-auto">Войти</a>
+      {% endif %}
+    </article>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

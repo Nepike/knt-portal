@@ -1,6 +1,6 @@
 {% load static moderation_extras economy_extras %}
 <!DOCTYPE html>
-<html lang="ru" class="theme-{{ site_theme }}">
+<html lang="ru" class="{{ skin_classes }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,7 +11,11 @@
   <meta name="htmx-config" content='{"refreshOnHistoryMiss": true}'>
   {% block meta %}{% endblock %}
   <title>{% block title %}{% endblock %} - КНТ МФТИ - Студенческий сайт</title>
+  {% if site_theme == "glitch" %}
+  <link rel="icon" href="{% static 'core/img/glitch/favicon.png' %}" type="image/png" sizes="32x32">
+  {% else %}
   <link rel="icon" href="{% static 'core/img/favicon.ico' %}" type="image/x-icon">
+  {% endif %}
 
   <script>
     (function () {
@@ -21,6 +25,7 @@
       }
     })();
   </script>
+  {% if site_theme == "glitch" %}{% include "core/glitch/_head.html" %}{% endif %}
 
 
   <link href="{% static 'core/vendor/fontawesome/css/fontawesome.min.css' %}" rel="stylesheet">
@@ -29,6 +34,8 @@
   <link href="{% static 'core/vendor/fontawesome/css/brands.min.css' %}" rel="stylesheet">
   <script defer src="{% static 'core/vendor/htmx.min.js' %}"></script>
   <script defer src="{% static 'core/js/components.js' %}"></script>
+  {# Глитч-скин — своим файлом: он нужен две недели в году, и вместе с ним уходит целиком #}
+  {% if site_theme == "glitch" %}<script defer src="{% static 'core/js/glitch.js' %}"></script>{% endif %}
   {# Плагины Alpine — сюда: они вешаются на alpine:init, значит грузиться должны ДО ядра #}
   {% block plugins %}{% endblock %}
   <script defer src="{% static 'core/vendor/alpine.min.js' %}"></script>
@@ -49,6 +56,8 @@
       {# data-live — и признак «сокету есть куда подключаться», и чей это экран: по нему #}
       {# чат отличает своё сообщение от чужого, не спрашивая сервер (chats/events.py). #}
       {% if request.user.is_authenticated %}data-live="{{ request.user.pk }}"{% endif %} class="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans">
+  {# Экран «взлома» раз в день — первым в body: он закрывает страницу с первой отрисовки #}
+  {% if site_theme == "glitch" %}{% include "core/glitch/_boot.html" %}{% endif %}
   {% comment %}
     Левая панель — только для вошедших. Гостю показывать нечего: за каждым разделом
     всё равно форма входа, а три пункта в колонке шириной в 256 пикселей выглядят
@@ -74,15 +83,14 @@
         </a>
 
         {% comment %}
-          Неготовые разделы гасим, а не прячем: пусть видно, что они есть и никуда
-          не делись. Ссылка при этом снимается — вести на страницу «закрыто» незачем.
-
           Подсвечен пункт РАЗДЕЛА, а не страницы: уйдя со списка материалов в конкретный
           материал, человек из раздела не вышел. Какие имена урлов к какому разделу
           относятся — в core/nav.py, оттуда же приезжает `section`.
+
+          Неготовых разделов в меню нет: погашенные «Новости?» и «Расписание?» висели
+          с первого дня и сняты 15 ноя 2026 — вернутся, когда разделы появятся.
         {% endcomment %}
         <nav class="flex flex-col gap-1">
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Новости?</a>
           <a href="{% url 'chat_list' %}" class="nav-link {% if section == 'chats' %}nav-link-active{% endif %}">
             <i class="fa-solid fa-comment"></i>Сообщения
             {% include "chats/_unread_badge.html" %}
@@ -115,9 +123,9 @@
           {% endif %}
 
           <a href="{% url 'bookmark_list' %}" class="nav-link {% if section == 'bookmarks' %}nav-link-active{% endif %}"><i class="fa-solid fa-bookmark text-lg"></i>Закладки</a>
-          <a class="nav-link nav-link-disabled"><i class="fa-solid fa-ban"></i>Расписание?</a>
         </nav>
 
+        {% if site_theme == "glitch" %}{% load quest_extras %}{% journal %}{% endif %}
         <div class="relative mt-auto pt-3 border-t border-slate-200 dark:border-slate-800" x-data="{ open: false }">
           <button @click="open = !open" class="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
             {% comment %}
@@ -183,7 +191,7 @@
   <div class="{% if request.user.is_authenticated %}site-body lg:pl-64 {% endif %}flex flex-col {% block wrapper_class %}min-h-dvh{% endblock %}">
     {# Заливка своя, а не с body: под ней проходит косметический фон профиля #}
     {% if request.user.is_authenticated %}
-    <header class="site-header sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+    <header class="site-header skin-bar sticky top-0 z-20 h-14 flex items-center gap-2 px-4 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <button type="button" class="lg:hidden btn btn-ghost" aria-label="Меню" @click="sidebar = true"><i class="fa-solid fa-bars text-xl"></i></button>
       <div class="ml-auto flex items-center gap-1">
         {% comment %}
@@ -198,6 +206,7 @@
           всё выглядит как обычно, и без напоминания легко забыть, что остальные видят
           страницу закрытия. Ссылка ведёт на неё же.
         {% endcomment %}
+        {% if site_theme == "glitch" %}{% include "quest/_pill.html" %}{% elif site_theme == "party" and request.resolver_match.url_name != "party" %}{% include "quest/_party_pill.html" %}{% endif %}
         {% if request.lockdown %}
         <a href="{% url 'lockdown' %}" title="Сайт закрыт для всех, кроме белого списка" class="inline-flex items-center gap-1.5 mr-1 rounded-full px-3 py-1 text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"><i class="fa-solid fa-lock"></i><span class="max-sm:hidden">Сайт закрыт</span></a>
         {% endif %}
@@ -234,7 +243,7 @@
       втроём они занимают почти всю ширину экрана и рядом с ним просто не помещаются.
       Колонка та же max-w-5xl, что у main, — иначе меню разъезжается с содержимым.
     {% endcomment %}
-    <header class="sticky top-0 z-20 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+    <header class="skin-bar sticky top-0 z-20 border-b-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
       <div class="w-full max-w-5xl mx-auto px-4 sm:px-6 flex flex-wrap items-center gap-x-2 max-sm:py-2 sm:h-14">
         <a href="{% url 'about' %}" class="flex items-center gap-2.5 mr-auto">
           {% include "core/_logo.html" with width="w-10" %}
@@ -275,6 +284,7 @@
   {# В чате и на Стене в этом углу своё: кнопка отправки и палитра. #}
   {% if section != "chats" and section != "wall" %}{% include "core/halloween/_ghost.html" %}{% endif %}
   {% endif %}
+  {% if site_theme == "glitch" %}{% include "core/glitch/_body.html" %}{% endif %}
 
   {# Тосты: Django messages + событие $dispatch('toast', {type, text}) из любого места #}
   <div class="fixed top-16 right-4 z-50 flex flex-col gap-2 items-end"

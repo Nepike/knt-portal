@@ -1,6 +1,7 @@
 import random
 import re
 from collections import Counter
+from datetime import timedelta
 from functools import partial
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -11,8 +12,9 @@ from django.contrib.admin import site
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from PIL import Image as PilImage
 
@@ -26,7 +28,7 @@ from users.models import User
 
 from . import specs
 from .admin import CaseAdmin, CosmeticItemAdmin
-from .cases import ODDS, REEL, REEL_ODDS, STOP, AllCollected, CaseClosed, _faces, draw, odds, open_case, reel
+from .cases import ODDS, REEL, REEL_ODDS, STOP, AllCollected, CaseClosed, _faces, draw, gift, odds, open_case, reel
 from .forms import CaseForm, CosmeticItemForm
 from .models import Case, CaseOpening, CosmeticItem, UserItem
 from .services import NotOwned, equip, grant, inventory, outfit, unequip, worn
@@ -1251,6 +1253,58 @@ class CasePageTests(TestCase):
     def test_opening_is_not_done_by_a_get(self):
         self.assertEqual(self.client.get(reverse("case_open", args=[self.case.pk])).status_code, 405)
         self.assertFalse(CaseOpening.objects.exists())
+
+
+@override_settings(SITE_THEME="party")
+class PartyCaseTests(TestCase):
+    """2 декабря 2026, праздник после взлома (quest): ещё один кейс в подарок, сверх первого."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.case = make_case("Рамки", 300, [make_frame(f"Рамка {n}", R.COMMON) for n in range(4)])
+
+    def opened_before(self):
+        """Первый, подарочный, кейс открыт когда-то раньше."""
+        CaseOpening.objects.create(user=self.user, case=self.case, rarity=R.COMMON, paid=0,
+                                   created=timezone.now() - timedelta(days=3))
+
+    def test_one_more_case_is_free_on_the_day(self):
+        self.opened_before()
+        credit(self.user, 1000, MANUAL)
+
+        self.assertEqual(gift(self.user), "party")
+        self.assertEqual(open_case(self.user, self.case).paid, 0)
+        self.assertIsNone(gift(self.user))
+        self.assertEqual(open_case(self.user, self.case).paid, 300)
+
+    def test_a_newcomer_gets_both_gifts(self):
+        self.assertEqual(gift(self.user), "first")
+        open_case(self.user, self.case)
+
+        self.assertEqual(gift(self.user), "party")
+        open_case(self.user, self.case)
+
+        self.assertIsNone(gift(self.user))
+
+    def test_a_paid_case_does_not_use_up_the_gift(self):
+        self.opened_before()
+        CaseOpening.objects.create(user=self.user, case=self.case, rarity=R.COMMON, paid=300)
+
+        self.assertEqual(gift(self.user), "party")
+
+    @override_settings(SITE_THEME="default")
+    def test_on_other_days_only_the_first_is_free(self):
+        self.opened_before()
+
+        self.assertIsNone(gift(self.user))
+
+    def test_the_shop_and_the_reel_say_it_is_the_party_gift(self):
+        self.opened_before()
+        self.client.force_login(self.user)
+
+        self.assertContains(self.client.get(reverse("shop")), "сегодня — любой — в подарок")
+        response = self.client.post(reverse("case_open", args=[self.case.pk]), headers={"HX-Request": "true"})
+        self.assertContains(response, "праздничный — в подарок")
 
 
 class CaseAdminTests(TestCase):

@@ -1,0 +1,80 @@
+{% extends "core/base.html" %}
+{% block title %}Отсчёт{% endblock %}
+{% block meta %}<meta name="robots" content="noindex">{% endblock %}
+
+{% block content %}
+<h1 class="page-title text-2xl font-bold">Отсчёт</h1>
+
+{% comment %}
+  Экран терминала: строки взлома, цифры из блоков, полоса и консоль (clock и terminal
+  в core/js/glitch.js). Под вывод консоли отведено постоянное место: сколько ни набирай,
+  таймер не сдвинется. Цифры нарисованы символами — экранный диктор читает скрытую
+  строку «Осталось …», а не рисунок.
+
+  После нуля (1 декабря, zero) — красный день: «время вышло», передача взломщиков
+  (запись лектория, quest.Broadcast) и ввод ключа в консоли. Кто на странице в полночь,
+  тому она перезагрузится сама.
+{% endcomment %}
+<section class="cd-screen{% if zero %} cd-zero{% endif %} mt-4" aria-label="{% if zero %}Передача взломщиков{% else %}Обратный отсчёт{% endif %}"
+         x-data="clock({{ deadline }}, {{ now }}, {{ since }})" :class="spasm" @laugh="shake()">
+  <div class="cd-lines">
+    <p><span class="cd-prompt">root@knt-mipt:~#</span> ./countdown --follow</p>
+    {% if zero %}
+    <p><span class="cd-bad cd-alert">[ !! ]</span> время вышло</p>
+    <p><span class="cd-bad cd-alert">[ !! ]</span> входящая передача</p>
+    {% else %}
+    <p><span class="cd-ok">[ ok ]</span> канал установлен</p>
+    <p><span class="cd-ok">[ ok ]</span> права root получены</p>
+    <p><span class="cd-ok">[ ok ]</span> файрвол отвлечён котиками</p>
+    {% endif %}
+    {% if slots %}
+    {# Ключ — без слов «ищите»: одна строка «повреждён» и закрытые ячейки. Сданные (quest.keys) — открыты #}
+    {# Сданная в консоли копия открывает свою ячейку сразу, без перезагрузки (keyline в glitch.js) #}
+    <p x-data="keyline" @key-restored.window="restore($event.detail)"><span class="cd-bad">[ !! ]</span> ключ повреждён:{% for slot in slots %} {% if slot.value %}<span class="cd-ok" data-slot="{{ slot.number }}">{{ slot.value }}</span>{% else %}<span class="cd-redacted" data-slot="{{ slot.number }}">░░░░</span>{% endif %}{% endfor %}</p>
+    {% endif %}
+    {% if zero %}
+    <p x-data="{ open: {{ unlocked|yesno:'true,false' }} }" x-show="open" @key-unlocked.window="open = true" {% if not unlocked %}x-cloak{% endif %}>
+      <span class="cd-ok">[ ok ]</span> ключ принят. сайт вернётся 2 декабря
+    </p>
+    {% else %}
+    <p><span class="cd-wait">[ .. ]</span> обратный отсчёт</p>
+    {% endif %}
+  </div>
+
+  {% if zero %}
+  <div class="cd-zero-row">
+    <div class="cd-tx">
+      <p class="cd-tx-rec">01.12 · 00:00 · КАНАЛ ███ · ПЕРЕДАЧА №1</p>
+      {% if broadcast %}
+      {% include "lectorium/_player.html" with manifest=broadcast.manifest_url poster=broadcast.poster_url only %}
+      {% else %}
+      <div class="cd-tx-lost"><span>сигнал потерян</span></div>
+      {% endif %}
+    </div>
+    <div class="cd-zero-side">
+      <pre class="cd-big cd-zero-big" aria-hidden="true" x-text="zeros"></pre>
+      <p class="cd-zero-hint">&gt; чтобы вернуть сайт, нужен ключ: unlock &lt;ключ&gt;</p>
+    </div>
+  </div>
+  {% else %}
+  <pre class="cd-big" aria-hidden="true" x-text="big"></pre>
+  <pre class="cd-units" aria-hidden="true" x-text="units"></pre>
+  <p class="sr-only" role="timer" x-text="say"></p>
+  <pre class="cd-bar" aria-hidden="true" x-text="bar"></pre>
+  {% endif %}
+
+  <div class="cd-con" x-data="terminal('{{ request.user.full_name|default:''|escapejs }}', '{% url 'countdown_ask' %}', '{{ csrf_token }}', {{ zero|yesno:'true,false' }})">
+    <div class="cd-con-out" role="log" aria-live="polite">
+      <template x-for="line in lines" :key="line.id">
+        <p :class="line.kind" :data-prompt="prompt" x-text="line.text"></p>
+      </template>
+    </div>
+    <form class="cd-con-form" @submit.prevent="run()">
+      <label for="cd-in" x-text="prompt"></label>
+      <input id="cd-in" type="text" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false"
+             x-model="value" :disabled="busy" :placeholder="busy ? 'канал перегружен…' : 'help'"
+             @keydown.arrow-up.prevent="recall(-1)" @keydown.arrow-down.prevent="recall(1)">
+    </form>
+  </div>
+</section>
+{% endblock %}

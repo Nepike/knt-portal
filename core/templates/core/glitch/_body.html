@@ -1,0 +1,30 @@
+{% load quest_extras %}
+{% comment %}
+  Глитч-скин, конец <body>.
+
+  Окна «ОТКАЗАНО» от запертого переключателя темы: каждое нажатие — ещё одно окно
+  лесенкой, до пяти, текст злее с каждым разом (denied в core/js/glitch.js). Имя — только
+  своё: «Илья, хватит.»
+
+  Данные для порчи названий карточек и пасхалки в консоли браузера — подсказки квеста
+  из базы (quest.Clue), под занавеской (veil в quest_extras). Читает их glitch.js.
+{% endcomment %}
+<div x-data="denied('{{ request.user.name|default:''|escapejs }}')" @skin-denied.window="add()"
+     @keydown.escape.window="windows.pop()">
+  <template x-for="(w, i) in windows" :key="w.id">
+    <div class="skin-denied" role="alertdialog" aria-label="Ошибка" :style="place(i)" :class="w.angry && 'skin-denied-angry'">
+      <div class="skin-denied-bar"><span>ОШИБКА · theme.sys</span><button type="button" aria-label="Закрыть" @click="close(w.id)">×</button></div>
+      <div class="skin-denied-body">
+        {% include "core/glitch/_smiley.html" with size="w-12 h-12" mode="masc-laugh" %}
+        <div>
+          <p class="skin-denied-cmd">$ theme --set light</p>
+          <p class="skin-denied-err">ОТКАЗАНО: недостаточно прав.</p>
+          <p x-text="w.text"></p>
+        </div>
+      </div>
+      <button type="button" class="skin-denied-ok" @click="close(w.id)">[ ОК ]</button>
+    </div>
+  </template>
+</div>
+{% glitch_clues as clues %}
+<script id="glitch-clues" type="text/plain">{{ clues|veil }}</script>

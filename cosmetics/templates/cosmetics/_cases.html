@@ -16,7 +16,8 @@
 <section class="flex flex-col gap-3">
   <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
     <h2 class="text-lg font-bold">Кейсы</h2>
-    {% if cases.0.gift %}<span class="text-sm font-medium text-accent"><i class="fa-solid fa-gift"></i> первый — любой — в подарок</span>{% endif %}
+    {% if cases.0.gift == "party" %}<span class="text-sm font-medium text-accent"><i class="fa-solid fa-gift"></i> сегодня — любой — в подарок</span>
+    {% elif cases.0.gift %}<span class="text-sm font-medium text-accent"><i class="fa-solid fa-gift"></i> первый — любой — в подарок</span>{% endif %}
   </div>
   <div class="grid gap-4 md:grid-cols-2">
     {% for case in cases %}

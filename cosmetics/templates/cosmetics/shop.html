@@ -51,8 +51,9 @@
     {% include "cosmetics/_shelves.html" %}
   </div>
 
-  {# Вне #shelves: галочка «мне по карману» кейсы не прячет #}
-  <div id="cases">{% include "cosmetics/_cases.html" %}</div>
+  {# Вне #shelves: галочка «мне по карману» кейсы не прячет. Отступ — под липкую шапку: #}
+  {# сюда ведёт ссылка «Открыть кейс» праздничной страницы (quest/party.html) #}
+  <div id="cases" class="scroll-mt-20">{% include "cosmetics/_cases.html" %}</div>
 
   {# Окно товара. Содержимое приезжает по htmx, поэтому здесь только рамка и заглушка. #}
   <div x-show="open" x-cloak x-transition.opacity @click.self="close()"

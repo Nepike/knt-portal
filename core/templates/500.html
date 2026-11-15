@@ -1,8 +1,14 @@
 {% extends "core/error.html" %}
 {% block title %}Ошибка на сайте{% endblock %}
 {% block code %}500{% endblock %}
+{% block command %}./site --serve{% endblock %}
+{% block system %}Segmentation fault (core dumped){% endblock %}
 {% block heading %}Что-то сломалось{% endblock %}
 {% block text %}
 <p>Ошибка на нашей стороне, а не у вас. Она уже записана, мы её посмотрим.</p>
 <p>Попробуйте обновить страницу через минуту. Если не проходит — напишите в <a href="{% url 'support' %}" class="text-accent hover:underline">поддержку</a>, что вы делали.</p>
 {% endblock %}
+{% block panic %}<pre class="skin-error-panic">kernel panic: не удалось удержать контроль
+  at takeover.ko+0x1337
+  at knt.views+0x2a
+---[ end trace 0xDEADBEEF ]---</pre>{% endblock %}

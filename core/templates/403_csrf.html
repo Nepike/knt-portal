@@ -5,6 +5,8 @@
 {% endcomment %}
 {% block title %}Форма устарела{% endblock %}
 {% block code %}403{% endblock %}
+{% block command %}./form --submit{% endblock %}
+{% block system %}csrf: ключ формы устарел, запрос отклонён{% endblock %}
 {% block heading %}Форма устарела{% endblock %}
 {% block text %}
 {% if no_cookie %}

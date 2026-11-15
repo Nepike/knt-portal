@@ -1,0 +1,21 @@
+{% comment %}
+  Экран «взлома» — раз в день при первом заходе (класс glitch-boot ставит
+  core/glitch/_head.html). Две с половиной секунды, уходит сам — анимацией, без скрипта:
+  не загрузись скрипт, страница всё равно откроется. Нажатие пропускает (boot в glitch.js).
+  Имя — только своё.
+{% endcomment %}
+<div class="skin-boot" aria-hidden="true" x-data="boot" @click="skip()" @animationend.self="skip()">
+  <div class="skin-boot-lines">
+    <p>KNT-BIOS v13.37 · проверка памяти ............ 640K ok</p>
+    <p>[    0.000000] загрузка ядра takeover.ko</p>
+    <p>[    0.004211] подключение к knt-mipt.ru .......... ok</p>
+    <p>[    0.013370] обход авторизации .................. ok</p>
+    <p>[    0.031415] перехват сессии: {% if request.user.is_authenticated %}{{ request.user.full_name }}{% else %}гость{% endif %}</p>
+    <p>[    0.062830] монтирование /materials /library /lectorium</p>
+    <p>[    0.099999] отключение светлой темы ............ ok</p>
+    <p>[    0.271828] стирание следов .................... ok</p>
+    <p>[    0.314159] _</p>
+  </div>
+  <p class="skin-boot-granted">ДОСТУП ПОЛУЧЕН</p>
+  <p class="skin-boot-skip">нажмите, чтобы пропустить</p>
+</div>

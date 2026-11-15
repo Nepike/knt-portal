@@ -38,6 +38,7 @@ LOCAL_APPS = [
     "printing",
     "pulse",
     "notifications",
+    "quest",
 ]
 # daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

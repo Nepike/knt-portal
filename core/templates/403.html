@@ -1,6 +1,8 @@
 {% extends "core/error.html" %}
 {% block title %}Нет доступа{% endblock %}
 {% block code %}403{% endblock %}
+{% block command %}cat /pulse{% endblock %}
+{% block system %}cat: /pulse: отказано в доступе{% endblock %}
 {% block heading %}Сюда нельзя{% endblock %}
 {% block text %}
 <p>У вашей учётной записи нет доступа к этой странице.</p>

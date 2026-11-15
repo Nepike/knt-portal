@@ -1,7 +1,9 @@
 from django.contrib import admin
+from django.contrib.auth.decorators import login_not_required
 from django.urls import include, path
 from django.conf.urls.static import static
 from django.conf import settings
+from django.views.static import serve
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,4 +26,11 @@ urlpatterns = [
     path('', include('pulse.urls')),
     path('', include('telegram.urls')),
     path('', include('notifications.urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    path('', include('quest.urls')),
+]
+
+# Файлы с локального диска — только в разработке (static() вне DEBUG пуст). Без входа, как
+# на боевом: там картинки отдаёт домен файлов (attachments.views.media_image), и гость их
+# видит. Без пометки ограничитель входа уводил гостя на форму — рамки и аватары у гостя
+# на dev были битыми.
+urlpatterns += static(settings.MEDIA_URL, view=login_not_required(serve), document_root=settings.MEDIA_ROOT)

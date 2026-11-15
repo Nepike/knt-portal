@@ -43,7 +43,7 @@
       {% elif n.kind == "bake_failed" %}
         Загрузите запись ещё раз или напишите в поддержку{% if n.note %} · {{ n.note }}{% endif %}
       {% elif n.kind == "announcement" %}
-        {% if n.actor %}{{ n.actor.full_name }}{% else %}Команда сайта{% endif %} · целиком — по нажатию
+        {% if n.actor %}{{ n.actor.full_name }}{% else %}Команда сайта{% endif %} · нажмите, чтобы увидеть подробности
       {% else %}
         Теперь это видят все
       {% endif %}
