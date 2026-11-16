@@ -15,8 +15,7 @@ from .forms import ReviewForm
 from .models import SCORE_LABELS, Review, Teacher
 
 PAGE_SIZE = 20  # преподавателей в порции
-# Сколько оценок нужно, чтобы попасть в топ. Без порога наверху висел человек с одним
-# отзывом на пять звёзд: средняя от одной оценки — это не рейтинг, а мнение одного студента.
+# Минимум оценок для топа: средняя от одной — мнение, а не рейтинг.
 TOP_MIN_REVIEWS = 15
 TOP_SIZE = 3
 
@@ -31,19 +30,15 @@ def _reviews(user):
 
 
 def _hx_refresh():
-    # после действий, меняющих статистику в сайдбаре, перезагружаем страницу целиком
+    # Действие меняет статистику в сайдбаре — перезагружаем страницу.
     response = HttpResponse()
     response["HX-Refresh"] = "true"
     return response
 
 
 def _top(size=TOP_SIZE):
-    """Лучшие — среди тех, кого оценивали достаточно много раз.
-
-    Порог отсекает случайные пятёрки, а заодно оставляет в памяти десяток человек
-    вместо всей кафедры: считать среднюю из четырёх шкал в Python по всему списку
-    было бы вторым проходом по той же таблице.
-    """
+    """Лучшие среди оценённых не меньше TOP_MIN_REVIEWS раз. Порог заодно сужает выборку
+    для средней в Python."""
     rated = [
         teacher for teacher in Teacher.objects.with_ratings().filter(reviews_count__gte=TOP_MIN_REVIEWS)
         if teacher.overall_rating()
@@ -55,12 +50,10 @@ def teacher_list(request):
     q = request.GET.get("q", "").strip()
     teachers = Teacher.objects.with_ratings().prefetch_related("subjects")
     if q:
-        # Отчество здесь в поиске участвует: на карточке оно на виду, и ФИО целиком
-        # переписывают из расписания.
+        # Здесь и отчество: ФИО целиком переписывают из расписания.
         teachers = by_name(teachers, q, fields=("surname", "name", "patronymic"))
 
-    # Порциями, как книги и материалы: у преподавателя есть фото, и каждое — отдельный
-    # запрос за картинкой. Списком целиком страница открывалась минуту.
+    # Порциями: у каждого фото — свой запрос за картинкой.
     page = Paginator(teachers, PAGE_SIZE).get_page(request.GET.get("page"))
     context = {"page": page, "teachers": page.object_list, "q": q}
 
@@ -81,8 +74,7 @@ def teacher_detail(request, pk):
         review.author = request.user
         review.save()
         drop_replaced(form)
-        # Отзыв с текстом стоит дороже голых оценок, поэтому пересчёт нужен и на правке:
-        # человек мог дописать текст к тому, что раньше было одними звёздами.
+        # Отзыв с текстом дороже оценок — пересчёт и на правке.
         rewards.sync(request.user)
         messages.success(request, "Отзыв сохранён")
         return redirect("teacher_detail", pk=pk)
@@ -107,7 +99,7 @@ def teacher_detail(request, pk):
         "scales": scales,
         "hidden_count": hidden_count,
         "form": form,
-        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        # Закладка в шапке; что помечать — знает страница.
         "bookmark": bookmark_button(request.user, teacher),
     })
 
@@ -153,7 +145,6 @@ def review_vote(request, pk, vote):
     else:
         mine.add(request.user)
         other.remove(request.user)
-    # Награда автору, не голосующему. Снятый лайк её не отнимает: sync только
-    # доначисляет. Назад её забирает лишь сам автор, удалив отзыв (rewards.remove).
+    # Награда — автору. Снятый лайк её не отнимает: sync только доначисляет.
     rewards.sync(review.author)
     return review_card(request, pk)

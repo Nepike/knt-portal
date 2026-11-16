@@ -1,15 +1,13 @@
-// Края ленты чата для hx-vals. Читаем из DOM, а не держим в шаблоне — иначе после
-// первой же догрузки курсор устареет.
+// Края ленты чата для hx-vals — из DOM: курсор в шаблоне устарел бы после догрузки.
 const feedEdges = () => document.querySelectorAll("#messages [data-id]");
 
-// Нижний край: докуда мы дочитали, отсюда сервер отдаёт новое.
+// Нижний край: отсюда сервер отдаёт новое.
 window.lastMessageId = () => {
   const items = feedEdges();
   return items.length ? items[items.length - 1].dataset.id : 0;
 };
 
-// Верхний: правку сообщения, которого у нас на экране нет, htmx выбросил бы с ошибкой
-// в консоль — за этот край сервер oob-замены не шлёт.
+// Верхний край: правки за ним сервер не шлёт — их oob-замену htmx выбросил бы с ошибкой.
 window.firstMessageId = () => {
   const items = feedEdges();
   return items.length ? items[0].dataset.id : 0;
@@ -25,23 +23,19 @@ const humanSize = (bytes) => {
   return `${size.toFixed(1)} ТБ`;
 };
 
-// Свой id у каждого выбранного файла: имя можно править, а ключ списка и сортировки
-// должен пережить правку — иначе строка пересоздастся прямо во время набора.
+// Свой id у выбранного файла: имя правят, а ключ списка должен пережить правку.
 let pickedFiles = 0;
 
-// Уход со страницы во время отправки оборвёт загрузку — спрашиваем подтверждение.
-// Текст задаёт браузер, свой показать нельзя.
+// Уход со страницы оборвёт загрузку — браузер спросит подтверждение (свой текст нельзя).
 const warnOnLeave = (event) => event.preventDefault();
 
-// По сокету приходит {chat} и, если появилось новое сообщение, ещё {msg, author}.
-// Разметка у каждого получателя своя, поэтому её клиент забирает обычным запросом —
-// а вот счётчик непрочитанных считает сам. События вешаем на <body>, оттуда их берёт
-// htmx через hx-trigger="… from:body":
+// Сокет приносит повод ({chat}, для нового сообщения ещё {msg, author}). Разметку вкладка
+// берёт запросом, счётчик непрочитанного считает сама. События — на <body> (hx-trigger="… from:body"):
 //   chats:event   — список чатов слева;
-//   chats:recount — счётчик у сервера (правка, удаление: сколько их, тут не вычислить);
+//   chats:recount — счётчик с сервера (правка, удаление);
 //   chats:current — лента открытого чата;
-//   chats:sync    — всё сразу, после обрыва связи или возвращения на вкладку;
-//   notifications:changed — колокольчик в шапке (по личной группе человека, не чата).
+//   chats:sync    — всё сразу, после обрыва связи или возврата на вкладку;
+//   notifications:changed — колокольчик в шапке.
 window.chatSocket = (() => {
   const me = document.body.dataset.live;
   if (!me) return { sync() {} }; // не залогинен — некуда
@@ -59,13 +53,8 @@ window.chatSocket = (() => {
     fire("chats:sync");
   }
 
-  // Счётчик держим у себя. Раньше за каждым чужим сообщением каждая вкладка каждого
-  // участника шла на сервер за одним числом, и в чате курса это сотня запросов на
-  // одно сообщение — при том, что по сокету уже пришло всё, чтобы прибавить единицу.
-  // Точка правды прежняя: chats:sync и любая перезагрузка берут число у сервера.
-  // Беззвучный чат в общий счётчик не идёт. Спрашиваем об этом сам список слева: он
-  // на странице всегда и перерисовывается сервером, то есть знает состояние точно —
-  // держать вторую копию этого знания в JS значило бы её рассинхронить.
+  // Счётчик считаем на месте, без запроса на каждое сообщение. Точное число приносит
+  // chats:sync. «Без звука» читаем из списка чатов: его рисует сервер.
   const muted = (chat) => !!document.querySelector(`[data-row="${chat}"]`)?.hasAttribute("data-muted");
 
   function count(chat, author, reading) {
@@ -76,21 +65,18 @@ window.chatSocket = (() => {
     paintTitle();
   }
 
-  // Число и в заголовке вкладки: фоновая вкладка иначе никак не показывает, что написали,
-  // — её не видно целиком, а бейдж живёт внутри страницы.
+  // Число — и в заголовке вкладки: фоновая вкладка иначе не покажет, что написали.
   const plainTitle = document.title;
   function paintTitle() {
     const badge = document.getElementById("unread-badge");
     const unread = badge && !badge.classList.contains("hidden") ? Number(badge.textContent) : 0;
     document.title = unread ? `(${unread}) ${plainTitle}` : plainTitle;
   }
-  // Счётчик перерисовывает и сервер (chats:recount, chats:sync). Отличать его подмену
-  // от прочих незачем: перерисовка заголовка — это чтение одного узла.
+  // Счётчик перерисовывает и сервер (chats:recount, chats:sync).
   document.body.addEventListener("htmx:afterSettle", paintTitle);
   paintTitle();
 
-  // Собеседник дочитал до `upto` — переставляем галочки у своих сообщений. Разметку за
-  // этим не перезапрашиваем: состояние тут двоичное, и класс на месте меняется дешевле.
+  // Собеседник дочитал до `upto` — переставляем галочки своих сообщений на месте.
   function ticks(upto, by) {
     if (String(by) === me) return; // это мы сами прочитали чужое, свои галочки ни при чём
     document.querySelectorAll("#messages [data-tick]").forEach((tick) => {
@@ -100,8 +86,7 @@ window.chatSocket = (() => {
     });
   }
 
-  // «Печатает…» — единственное, что вкладка говорит в сокет. Придерживаем: событие
-  // нужно раз в несколько секунд, а input случается на каждую букву.
+  // «Печатает…» — единственное, что вкладка шлёт в сокет; не чаще раза в 4 секунды.
   let typedAt = 0;
   function typing(chat) {
     if (!socket || socket.readyState !== WebSocket.OPEN || Date.now() - typedAt < 4000) return;
@@ -110,8 +95,7 @@ window.chatSocket = (() => {
   }
 
   function deliver({ chat, msg, author, read, by, kind, typing: typist, who, notifications }) {
-    // Колокольчик — первый не чатовый повод в этом сокете (chats/events.py). Вкладка в фоне
-    // тоже переспрашивает: число видно в шапке, а запрос за ним ничего не помечает прочитанным.
+    // Колокольчик: фоновая вкладка тоже переспрашивает — запрос не помечает прочитанным.
     if (notifications) {
       fire("notifications:changed");
       return;
@@ -130,15 +114,13 @@ window.chatSocket = (() => {
     // Открытый чат на видимой вкладке сейчас сходит за сообщением и пометит прочитанным
     if (msg) count(chat, author, open && !document.hidden);
 
-    // Вкладка в фоне — ленту не трогаем: запрос за сообщениями пометил бы их
-    // прочитанными, а человек их не видел. Копим флаг и догоняем при возврате.
+    // Фоновую вкладку не трогаем: запрос пометил бы невиденное прочитанным. Догоним при возврате.
     if (document.hidden) {
       missed = true;
       return;
     }
-    // Обновляем ровно то, что могло измениться (вид изменения приходит в событии,
-    // см. chats/events.py). Реакция не трогает ни счётчик, ни список чатов; правка
-    // меняет строку в списке, но не счётчик; удаление — и то и другое.
+    // Обновляем только то, что могло измениться (вид — в событии, chats/events.py): реакция —
+    // ни список, ни счётчик; правка — строку списка; удаление — и счётчик.
     if (!msg && kind !== "react" && kind !== "edit") fire("chats:recount");
     if (kind !== "react") fire("chats:event", { chat });
     // Своё сообщение вкладка уже показала в ответ на отправку — второй раз не ходим
@@ -176,13 +158,11 @@ window.chatSocket = (() => {
   return { sync, typing, alive: () => !!socket && socket.readyState === WebSocket.OPEN };
 })();
 
-// Кто где печатает: id чата → имя. Метка гаснет сама по времени — отдельного события
-// «перестал печатать» нет: человек просто закрывает вкладку, и такое событие не пришло бы.
+// Кто где печатает: id чата → имя. Метка гаснет по времени: события «перестал» нет.
 const typists = new Map();
 
-// Строка чата в списке: вместо превью последнего сообщения — «печатает…». Держим
-// отдельно от разметки, потому что список перерисовывает htmx, и метка пережить
-// перерисовку сама не может — восстанавливаем её после каждой.
+// «печатает…» вместо превью в списке чатов. Список перерисовывает htmx — метку
+// восстанавливаем после каждой перерисовки.
 function paintTyping() {
   document.querySelectorAll("[data-row]").forEach((row) => {
     const busy = typists.has(row.dataset.row);
@@ -206,8 +186,7 @@ document.body.addEventListener("chats:typing", ({ detail }) => {
 document.body.addEventListener("htmx:afterSettle", paintTyping);
 
 document.addEventListener("alpine:init", () => {
-  // Тосты. Источники: Django messages (initial при рендере) и событие window
-  // $dispatch('toast', { type, text }) — для действий без перезагрузки (HTMX и т.п.).
+  // Тосты: Django messages (initial) и событие $dispatch('toast', { type, text }).
   Alpine.data("toasts", (initial = []) => ({
     items: [],
     icons: {
@@ -227,9 +206,8 @@ document.addEventListener("alpine:init", () => {
     _id: 0,
   }));
 
-  // Колокольчик в шапке (notifications). Число перерисовывает сам значок по поводу из
-  // сокета (notifications/_badge.html); панель грузится при каждом открытии, а открытая —
-  // по тому же поводу: новое появляется в ней, не закрывая.
+  // Колокольчик. Число перерисовывает сам значок (notifications/_badge.html); панель
+  // грузится при открытии, а открытая обновляется по тому же поводу.
   Alpine.data("bell", () => ({
     open: false,
     init() {
@@ -244,8 +222,7 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Обёртка текстового поля: плавающий лейбл по состоянию (как active у селектов).
-  // Типы вроде date всегда держат лейбл поднятым — определяем по el.type при init.
+  // Плавающий лейбл текстового поля. У date и подобных лейбл поднят всегда.
   const INTRINSIC = ["date", "time", "month", "week", "datetime-local", "color"];
   Alpine.data("field", () => ({
     focused: false, filled: false, alwaysUp: false,
@@ -257,30 +234,26 @@ document.addEventListener("alpine:init", () => {
     get up() { return this.focused || this.filled || this.alwaysUp; },
   }));
 
-  // Поиск по списку — по тем же правилам, что и на сервере (core/search.py): запрос
-  // режем на слова, каждое должно найтись в подписи, порядок слов любой. Иначе
-  // «Иван Иванов» не находил Иванова Ивана — подпись начинается с фамилии.
+  // Поиск по списку — по правилам core/search.py: каждое слово в подписи, порядок любой.
   const words = (query) => query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const hits = (label, parts) => parts.every((part) => label.toLowerCase().includes(part));
 
-  // Общее для select и multiSelect: открытие/закрытие, фокус, клавиатура.
-  // Только методы и данные — геттеры (active/filtered/...) живут в компонентах,
-  // т.к. spread ...base() превратил бы геттер в статичное значение.
+  // Общее для select и multiSelect. Только методы и данные: геттеры — в компонентах,
+  // spread ...base() превратил бы геттер в значение.
   const base = ({ options, search = false }) => ({
     open: false, focused: false, query: "", activeIndex: 0, options, search,
     scrolling: false, // по списку ведут пальцем — клик в конце жеста выбором не считаем
     room: 0, // чем ограничить высоту списка, когда снизу вылезла клавиатура; 0 — не мешаем
 
     init() {
-      // Клавиатура телефона НЕ двигает раскладку — она просто закрывает нижнюю часть
-      // экрана. Обычные размеры окна об этом ничего не знают, знает только visualViewport.
+      // Клавиатура телефона закрывает низ экрана, не двигая раскладку: это видно только
+      // в visualViewport.
       if (!window.visualViewport) return;
       this.refit = () => this.open && this.fit();
       visualViewport.addEventListener("resize", this.refit);
       visualViewport.addEventListener("scroll", this.refit);
     },
-    // Фильтры списков перерисовываются на каждый выбор — без этого на окне копились бы
-    // слушатели каждого прежнего селекта, и каждый держал бы свой снятый кусок страницы.
+    // Фильтры перерисовываются на каждый выбор — снимаем слушатель, иначе они копятся.
     destroy() {
       if (!this.refit) return;
       visualViewport.removeEventListener("resize", this.refit);
@@ -295,10 +268,8 @@ document.addEventListener("alpine:init", () => {
     },
     close() { this.open = false; this.query = ""; this.room = 0; },
 
-    // Фокус в поиск ставим только там, где есть мышь. На телефоне он поднимает клавиатуру,
-    // а она закрывает собой тот самый список, который человек и пришёл листать: замерено
-    // на экране 375×812 — из 224px списка над клавиатурой остаётся 34, меньше одной строки.
-    // Кому нужен поиск, тот нажмёт на поле сам — и тогда за высотой следит fit().
+    // Фокус в поиск — только при мыши: на телефоне клавиатура закрыла бы список.
+    // Нажали на поле сами — высоту подгонит fit().
     focusSearch() {
       if (this.search && matchMedia("(pointer: fine)").matches) this.$refs.search.focus();
     },
@@ -306,8 +277,7 @@ document.addEventListener("alpine:init", () => {
     // Список не должен уезжать под клавиатуру: ужимаем его до того, что реально видно.
     fit() {
       const view = window.visualViewport;
-      // Ограничиваем ТОЛЬКО когда поверх страницы снизу что-то появилось. В обычном
-      // состоянии высота задана в разметке, и лезть в неё незачем.
+      // Только если снизу что-то перекрыло окно; иначе высота — из разметки.
       if (!view || !this.$refs.list || view.height >= innerHeight - 1) {
         this.room = 0;
         return;
@@ -323,21 +293,16 @@ document.addEventListener("alpine:init", () => {
       this.$nextTick(() => this.$el.querySelector(`[data-opt="${this.activeIndex}"]`)?.scrollIntoView({ block: "nearest" }));
     },
     onEnter() { const o = this.filtered[this.activeIndex]; if (this.open && o) this.pick(o); else this.openMenu(); },
-    // relatedTarget === null — фокус ушёл «в никуда». На телефоне так выглядит касание
-    // самого списка: браузер снимает фокус с селекта, а mousedown, которым мы его держим
-    // на десктопе, во время жеста не приходит вовсе — и меню закрывалось под пальцем.
-    // Настоящий уход мимо селекта всё равно закроет @click.outside.
+    // relatedTarget === null: на телефоне так выглядит касание самого списка (mousedown во время
+    // жеста не приходит), и меню закрывалось под пальцем. Уход мимо закроет @click.outside.
     onFocusOut(e) {
       if (this.$el.contains(e.relatedTarget)) return;
       this.focused = false;
       if (e.relatedTarget) this.close();
     },
-    // Значение живёт в hidden input и меняется из Alpine, а такая правка события не даёт.
-    // Шлём change сами (в nextTick — иначе слушатель прочитает ещё старое значение),
-    // чтобы htmx-фильтры и любые формы работали с нашими селектами как с обычными.
-    // С корня компонента, а не с $el: у мультиселекта $el — нажатый пункт, а к nextTick его
-    // уже убрали из списка (выбранное там не показывается), и событие из оторванного
-    // узла до формы не всплывало — счётчик «Получат N» в объявлениях не пересчитывался.
+    // Значение — в hidden input, правка из Alpine события не даёт: шлём change сами, в nextTick
+    // (иначе слушатель прочтёт старое). С корня компонента: у мультиселекта $el — пункт,
+    // который к nextTick уже убран, и событие из оторванного узла не всплыло бы.
     changed() {
       const root = this.$root;
       this.$nextTick(() => root.dispatchEvent(new Event("change", { bubbles: true })));
@@ -354,20 +319,14 @@ document.addEventListener("alpine:init", () => {
     clear() { this.selectedValue = null; this.changed(); },
   }));
 
-  // Форма с файлами: выбор, лимиты, прямая загрузка в R2 и общий прогресс. Висит на самой
-  // форме — оттуда видно и htmx-события, и инпут. Лимиты приезжают из attachments/uploads.py.
-  // Многочастная загрузка. Три части разом: одна не выбирает канал целиком, а больше —
-  // это лишние повторы при обрыве. Ссылки берём порциями: на 16 ГБ частей тысяча,
-  // и все разом — полмегабайта ответа и лишний риск, что они протухнут по дороге.
+  // Форма с файлами: выбор, лимиты (attachments/uploads.py), прямая загрузка в R2, прогресс.
+  // Многочастная — по три части разом, ссылки порциями: на 16 ГБ частей тысяча.
   const PARALLEL = 3;
   const PART_BATCH = 24;
   const PART_TRIES = 4;
   const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
-  // Помним начатую загрузку, чтобы после обрыва не лить гигабайты заново. Ключ — по
-  // самому файлу: имя, размер и время правки. У разных файлов эта тройка совпасть может,
-  // но правка файла меняет время, так что на практике этого хватает — на том же держатся
-  // и готовые библиотеки возобновляемой загрузки.
+  // Начатую загрузку помним по файлу (имя, размер, время правки): после обрыва не лить заново.
   const resumeKey = (file) => `upload:${file.name}:${file.size}:${file.lastModified}`;
   const recallUpload = (file) => {
     try { return localStorage.getItem(resumeKey(file)) || ""; } catch { return ""; }
@@ -397,8 +356,7 @@ document.addEventListener("alpine:init", () => {
       this.errors = [];
       if (config.single) this.items = []; // форма на один файл: новый выбор заменяет прежний
       for (const file of files) {
-        // Предел на пачку — не про сервер, а про хранилище: сырьё лежит в бакете, пока
-        // до него не дойдёт пекарня, и за всё это время оно стоит денег.
+        // Предел на пачку — из-за денег: сырьё лежит в бакете, пока до него не дойдёт пекарня.
         if (config.maxFiles && this.items.length >= config.maxFiles) {
           this.errors.push(`За раз можно сдать не больше ${config.maxFiles} файлов`);
           break;
@@ -411,8 +369,7 @@ document.addEventListener("alpine:init", () => {
         if (this.items.some((item) => item.file.name === file.name && item.file.size === file.size)) continue;
         this.items.push({
           id: ++pickedFiles, file, name: file.name, size: humanSize(file.size),
-          // Название по имени файла: пачку сдают, чтобы уйти, а не чтобы вписать
-          // десять названий руками. Поправить его можно прямо в строке.
+          // Название — по имени файла; поправить можно в строке.
           title: file.name.replace(/\.[^.]+$/, "").slice(0, 150),
           percent: null, done: false, posted: false, failed: "", token: null,
         });
@@ -434,16 +391,14 @@ document.addEventListener("alpine:init", () => {
       this.items.splice(index, 1);
       this.syncInput();
     },
-    // В инпуте только то, что ещё не уехало в хранилище: залитые файлы остаются
-    // в списке (иначе кажется, будто они отвалились), но второй раз не отправляются.
+    // В инпуте — только то, что не уехало в хранилище; залитые остаются в списке.
     syncInput() {
       const data = new DataTransfer(); // FileList только для чтения, собираем заново
       for (const item of this.items) if (!item.done) data.items.add(item.file);
       this.$refs.input.files = data.files;
     },
 
-    // Перестановку рисует плагин x-sort (он же двигает узел), нам остаётся привести
-    // состояние в тот же порядок — иначе Alpine на следующем рендере вернёт строку назад.
+    // Узел двигает x-sort; приводим состояние в тот же порядок, иначе Alpine вернёт строку.
     move(list, from, position) {
       if (from === -1 || from === position) return;
       list.splice(position, 0, ...list.splice(from, 1));
@@ -451,15 +406,14 @@ document.addEventListener("alpine:init", () => {
     reorderSaved(pk, position) {
       this.move(this.saved, this.saved.findIndex((file) => file.pk === pk), position);
     },
-    // Порядок строк задаёт и порядок отправки: из этого же списка собираются
-    // файловый инпут и скрытые поля с токенами и именами.
+    // Порядок строк — это и порядок отправки.
     reorderNew(id, position) {
       this.move(this.items, this.items.findIndex((file) => file.id === id), position);
       this.syncInput();
     },
 
-    // htmx:confirm — единственное место, где запрос можно отложить и сделать что-то async.
-    // Сначала льём файлы прямо в хранилище, в форме остаются только подписанные токены.
+    // htmx:confirm — единственное место, где запрос можно отложить на async: сначала льём
+    // файлы в хранилище, в форме остаются подписанные токены.
     async beforeSend(event) {
       if (this.percent !== null) return event.preventDefault(); // уже льём, второй раз не начинаем
       const pending = this.items.filter((item) => !item.done);
@@ -475,14 +429,12 @@ document.addEventListener("alpine:init", () => {
       if (config.each) return this.sendEach(pending, total);
       try {
         for (const item of pending) {
-          // Отмену ловим и между файлами, и во время подписи: там abort() нечего прерывать,
-          // а без проверки загрузка поехала бы дальше как ни в чём не бывало.
+          // Отмену ловим и между файлами, и во время подписи: там abort() прерывать нечего.
           if (this.cancelled) throw new Error("Загрузка отменена");
           item.percent = 0;
           const token = await this.send(item, total);
           this.sent += item.file.size;
-          // Помечаем сразу: повторная отправка после ошибки на следующем файле
-          // не должна залить этот вторым экземпляром.
+          // Помечаем сразу: повтор после ошибки на следующем файле не зальёт этот дважды.
           item.percent = 100;
           item.done = true;
           item.token = token; // скрытое поле рисуется из строки, уберут строку — уйдёт и токен
@@ -502,9 +454,8 @@ document.addEventListener("alpine:init", () => {
         return;
       }
 
-      // Скрытые поля с токенами рисует Alpine, а он правит DOM в микрозадаче.
-      // issueRequest собирает форму СИНХРОННО, поэтому без этой паузы поле последнего
-      // файла ещё не существует и книга сохраняется без него — молча.
+      // Скрытые поля с токенами Alpine рисует в микрозадаче, а issueRequest собирает форму
+      // синхронно: без паузы последний файл молча пропал бы.
       await this.$nextTick();
       const carried = new FormData(this.$el).getAll("uploaded");
       const lost = this.items.find((item) => !carried.includes(item.token));
@@ -518,9 +469,7 @@ document.addEventListener("alpine:init", () => {
       event.detail.issueRequest(true);
     },
 
-    // Каждая запись уезжает СВОИМ запросом, сразу за своим файлом, и упавшая не уносит
-    // с собой остальные: пачку ставят, чтобы уйти по делам, и вернуться к семи готовым
-    // лекциям из десяти лучше, чем к нулю из-за того, что восьмой файл не долетел.
+    // Каждая запись — своим запросом сразу за своим файлом: упавшая не уносит остальные.
     async sendEach(pending, total) {
       for (const item of pending) {
         if (this.cancelled) break;
@@ -543,9 +492,8 @@ document.addEventListener("alpine:init", () => {
       }
       this.end();
       this.syncInput();
-      // Готовые записи уже стоят в очереди — страница о них ещё не знает. Если что-то
-      // не вышло, остаёмся: причина написана у своей строки, и её видно.
-      // Ответ может сказать, куда идти дальше: у печати это страница задания.
+      // Что-то не вышло — остаёмся: причина у своей строки. Ответ может сказать, куда идти
+      // (у печати — страница задания).
       if (!this.items.some((item) => item.failed) && !this.cancelled) {
         const next = this.items.find((item) => item.next)?.next;
         if (next) location.assign(next);
@@ -602,16 +550,14 @@ document.addEventListener("alpine:init", () => {
       });
     },
 
-    // Общая отдача куска в хранилище. Возвращает ETag — для части он и есть расписка,
-    // без которой объект потом не собрать.
+    // Отдать кусок в хранилище. Возвращает ETag: для части это расписка для сборки объекта.
     put(url, blob, { onProgress, broken, tag = false, type = "" }) {
       return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
         this.flying.add(request);
         const finish = (fn, value) => { this.flying.delete(request); fn(value); };
         request.open("PUT", url);
-        // Тип назначает сервер, и он входит в подпись ссылки: с любым другим хранилище
-        // откажет. Сам браузер подставил бы file.type — у каждой системы свой.
+        // Тип назначает сервер, и он входит в подпись: с file.type браузера хранилище откажет.
         if (type) request.setRequestHeader("Content-Type", type);
         request.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
         request.onload = () => {
@@ -619,9 +565,7 @@ document.addEventListener("alpine:init", () => {
             return finish(reject, new Error(`Хранилище ответило ${request.status}`));
           }
           const etag = request.getResponseHeader("ETag");
-          // Без ETag часть не пришить к объекту. Заголовок приходит всегда, а вот ЧИТАТЬ
-          // его браузер даёт, только если бакет разрешил (ExposeHeaders: ETag в CORS).
-          // Молчать тут нельзя: иначе загрузка гигабайтов кончается непонятно чем.
+          // ETag браузер даёт прочитать, только если бакет разрешил (ExposeHeaders: ETag в CORS).
           if (tag && !etag) {
             return finish(reject, new Error("Хранилище не отдало ETag части — в CORS бакета нужен ExposeHeaders: ETag"));
           }
@@ -648,8 +592,7 @@ document.addEventListener("alpine:init", () => {
       const todo = [];
       for (let number = 1; number <= count; number += 1) if (!parts.has(number)) todo.push(number);
 
-      // Уже лежащее в хранилище — это уже отданные байты, и шкала не должна начинаться
-      // с нуля: человек, продолживший после обрыва, решил бы, что всё зря.
+      // Лежащее в хранилище уже отдано: шкала после обрыва не начинается с нуля.
       let settled = (count - todo.length) * step;
       this.sending.clear();
       const progress = () => {
@@ -682,8 +625,7 @@ document.addEventListener("alpine:init", () => {
       return done.token;
     },
 
-    // Несколько частей разом, но не все: канал один, а каждая незавершённая часть
-    // при обрыве переливается заново.
+    // Несколько частей разом, но не все: при обрыве незавершённые переливаются заново.
     async pool(numbers, work) {
       const queue = [...numbers];
       const runner = async () => {
@@ -695,8 +637,7 @@ document.addEventListener("alpine:init", () => {
       await Promise.all(Array.from({ length: Math.min(PARALLEL, queue.length) }, runner));
     },
 
-    // Часть повторяем сама по себе: на сорока минутах отдачи одна сорвётся почти
-    // наверняка, и ронять из-за неё весь файл — значит не иметь возобновления вовсе.
+    // Часть повторяем сама по себе: за долгую отдачу одна сорвётся почти наверняка.
     async putPart(url, slice, number, progress) {
       for (let attempt = 1; ; attempt += 1) {
         try {
@@ -715,11 +656,8 @@ document.addEventListener("alpine:init", () => {
       }
     },
 
-    // Залитые файлы остаются: они уже в хранилище. Прерванная отдача может доехать
-    // и всё равно (байты браузер отдал) — такую сироту убирает clean_uploads.
-    //
-    // Начатую многочастную бросаем НА СТОРОНЕ ХРАНИЛИЩА: её части занимают место
-    // и стоят денег, а продолжать её человек уже не собирается — он нажал «отмена».
+    // Залитые файлы остаются. Прерванная отдача может доехать — сироту убирает clean_uploads.
+    // Начатую многочастную бросаем и в хранилище: её части занимают место.
     cancel() {
       this.cancelled = true;
       for (const request of this.flying) request.abort();
@@ -734,24 +672,20 @@ document.addEventListener("alpine:init", () => {
       if (this.percent === null) this.percent = 0; // после прямой загрузки шкала уже на 100
       window.addEventListener("beforeunload", warnOnLeave);
     },
-    // Снимаем охранника, КАК ТОЛЬКО пришёл ответ (htmx:before-on-load), а не по
-    // afterRequest: htmx обрабатывает HX-Redirect раньше, и браузер спрашивал бы
-    // «точно уйти?» на нашем же переходе к книге.
+    // Охранника снимаем на htmx:before-on-load, не на afterRequest: HX-Redirect приходит
+    // раньше, и браузер спросил бы «точно уйти?» на нашем же переходе.
     end() {
       this.percent = null;
       window.removeEventListener("beforeunload", warnOnLeave);
     },
-    // htmx вешает слушателей и на xhr, и на xhr.upload, поэтому следом придёт прогресс
-    // ОТВЕТА со своим total — шкалу назад не откатываем.
+    // Следом придёт прогресс ОТВЕТА со своим total — шкалу назад не откатываем.
     track({ detail }) {
       if (this.percent === null || !detail.lengthComputable) return;
       this.percent = Math.max(this.percent, Math.round((detail.loaded / detail.total) * 100));
     },
   }));
 
-  // Просмотрщик картинок: превью маленькие, по клику — крупно, со стрелками,
-  // зумом и перетаскиванием. Своими руками, а не библиотекой: нужного тут строк на сто,
-  // а любая готовая тянет за собой сборку, которой у нас нет.
+  // Просмотрщик картинок: крупно, стрелки, зум, перетаскивание. Своими руками: готовые тянут сборку.
   Alpine.data("lightbox", (items = []) => ({
     items,
     index: 0,
@@ -781,8 +715,7 @@ document.addEventListener("alpine:init", () => {
       this.y = 0;
     },
 
-    // Масштабируем ВОКРУГ ТОЧКИ под курсором, а не вокруг центра: иначе то место,
-    // куда человек целился, уезжает из виду и приходится его догонять.
+    // Масштаб — вокруг точки под курсором: место, куда целились, остаётся на виду.
     zoomAt(factor, event) {
       const next = Math.min(Math.max(this.scale * factor, 1), 6);
       if (next === this.scale) return;
@@ -828,8 +761,7 @@ document.addEventListener("alpine:init", () => {
     drop() {
       this.drag = null;
     },
-    // Не даём утащить картинку за край: дальше начинается пустота, и обратно
-    // её ловить неприятно.
+    // Картинку не утащить за край.
     hold() {
       const picture = this.$refs.picture;
       const frame = this.$refs.frame;
@@ -848,23 +780,20 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Галерея материала. Проще fileForm: картинки маленькие и едут обычным multipart,
-  // поэтому ни подписанных ссылок, ни прогресса — только выбор, порядок и удаление.
-  // Берём только то, что покажет любой браузер (apng для него — тот же png).
+  // Галерея материала: картинки едут обычным multipart — только выбор, порядок и удаление.
+  // Типы — те, что покажет любой браузер (apng — тот же png); список сверяет attachments/tests.py.
   const PICTURE_TYPES = ["image/jpeg", "image/png", "image/apng", "image/webp", "image/gif"];
   Alpine.data("gallery", (saved = [], maxSize = 0) => ({
     saved: saved.map((image) => ({ ...image, marked: false })),
     picked: [], // { id, file, url } — url живёт до отправки формы, это objectURL
     errors: [],
 
-    // Тот же отказ, что и на сервере, но до отправки: картинки едут обычным multipart,
-    // и отказ по размеру приходил бы уже после того, как всё уехало.
+    // Тот же отказ, что на сервере, но до отправки.
     add(files) {
       this.errors = [];
       for (const file of files) {
-        // HEIC — отдельно и по имени тоже: тип у него браузер называет не всегда, а случай
-        // частый, это формат фотографий айфона. Последнее слово всё равно за сервером:
-        // он смотрит на содержимое, а не на имя (attachments.uploads.check_picture).
+        // HEIC — и по имени: тип браузер называет не всегда. Последнее слово — за сервером
+        // (attachments.uploads.check_picture).
         if (/\.hei[cf]$/i.test(file.name) || /^image\/hei[cf]/.test(file.type)) {
           this.errors.push(`«${file.name}» — формат HEIC браузеры не показывают. Сохрани как JPEG и загрузи снова`);
           continue;
@@ -900,8 +829,7 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Переключатель сортировки списков. Значение живёт в hidden input формы,
-  // change шлём вручную — по той же причине, что и в селектах (см. changed()).
+  // Переключатель сортировки: значение в hidden input, change шлём сами (см. changed()).
   Alpine.data("segmented", (value) => ({
     value,
     pick(v) {
@@ -911,10 +839,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Сжатие фото перед отправкой. Снимок с телефона — это 4000 пикселей и мегабайты,
-  // а в ленте он показывается в триста: остальное едет впустую, через мобильный интернет
-  // студента и в наш бакет, за который платят. Жмём в webp — он держит и прозрачность
-  // (скриншоты), и текст лучше jpeg; где его нет, canvas молча вернёт png.
+  // Сжатие фото перед отправкой: снимок телефона — 4000 пикселей, в ленте — триста. webp
+  // держит прозрачность и текст; где его нет, canvas молча вернёт png.
   const shrink = async (file, side, quality) => {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
     const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
@@ -930,16 +856,14 @@ document.addEventListener("alpine:init", () => {
   const renamed = (blob, name, suffix) =>
     new File([blob], `${name.replace(/\.[^.]+$/, "")}${suffix}`, { type: blob.type });
 
-  // Сложить файлы в скрытое поле формы: своей записи у files нет, но DataTransfer
-  // отдаёт готовый FileList — так браузер и отправит их обычным multipart.
+  // Файлы в скрытое поле формы: DataTransfer отдаёт готовый FileList для обычного multipart.
   const carry = (input, files) => {
     const box = new DataTransfer();
     files.forEach((file) => box.items.add(file));
     input.files = box.files;
   };
 
-  // Свайп по сообщению вправо — ответ на него. Тянуть начинаем не сразу: первые
-  // пиксели жеста ещё могут оказаться прокруткой ленты.
+  // Свайп вправо — ответ на сообщение. Первые пиксели ещё могут быть прокруткой ленты.
   const SWIPE_FROM = 12;  // с этого сдвига считаем, что тянут вбок
   const SWIPE_AT = 56;    // и с этого — что ответ
   const SWIPE_MAX = 72;
@@ -959,8 +883,7 @@ document.addEventListener("alpine:init", () => {
     busy: false, // идёт сжатие — отправлять пока нечего
     lightbox: "",
     typed: 0, // длина набранного: по ней у самого потолка показываем остаток
-    // Enter на телефоне — перенос строки: там он на экранной клавиатуре, и отправлять
-    // им значит рассылать обрывки фраз. Отправка кнопкой, она рядом с полем.
+    // Enter на телефоне — перенос строки: отправка там кнопкой.
     coarse: matchMedia("(pointer: coarse)").matches,
     pinned: true, // держимся низа, пока человек не прокрутил вверх
     below: 0, // сколько сообщений пришло, пока лента прокручена вверх
@@ -972,11 +895,9 @@ document.addEventListener("alpine:init", () => {
       const box = this.$refs.box;
       this.draftKey = `chat-draft:${this.$el.dataset.chatId}`;
       this.restore();
-      // Открываемся не на конце, а на черте «непрочитанные», если она есть: иначе после
-      // ночи в чате курса человек попадает в конец и листает назад, гадая, где остановился.
+      // Открываемся на черте «непрочитанные», если она есть, а не в конце.
       const start = () => {
-        // Пришли из поиска — встаём на найденном, иначе непонятно, ради чего
-        // открылась середина переписки.
+        // Пришли из поиска — встаём на найденном.
         const found = box.querySelector("[data-at]");
         const mark = box.querySelector("[data-unread]");
         if (found) found.scrollIntoView({ block: "center" });
@@ -985,14 +906,12 @@ document.addEventListener("alpine:init", () => {
       };
       const found = box.querySelector("[data-at]");
       if (found) {
-        // Подсвечиваем сам пузырь, а не строку: строка во всю ширину ленты, и рамка
-        // вокруг неё показывала бы пустое место справа. У служебной строки пузыря нет.
+        // Подсвечиваем пузырь, а не строку во всю ширину ленты.
         const spot = found.querySelector("[data-msg]") || found;
         spot.classList.add("flash");
         setTimeout(() => spot.classList.remove("flash"), 2500);
       }
-      // Высота ленты растёт уже ПОСЛЕ init: догружаются аватары и шрифты,
-      // поэтому одного скролла мало — длинный диалог остался бы вверху.
+      // Высота ленты растёт после init (аватары, шрифты) — скроллим дважды.
       start();
       requestAnimationFrame(start);
       window.addEventListener("load", start, { once: true });
@@ -1005,8 +924,7 @@ document.addEventListener("alpine:init", () => {
         if (this.pinned) this.below = 0; // долистал сам — считать больше нечего
       });
 
-      // Подгрузка истории вставляет сообщения СВЕРХУ — запоминаем позицию,
-      // иначе лента прыгнет на высоту добавленного.
+      // История вставляется СВЕРХУ — запоминаем позицию, иначе лента прыгнет.
       this.$el.addEventListener("htmx:beforeSwap", (e) => {
         this.loadingHistory = e.detail.target.id === "history-top";
         this.prevHeight = box.scrollHeight;
@@ -1036,13 +954,8 @@ document.addEventListener("alpine:init", () => {
         }
       });
 
-      // Чат мог исчезнуть, пока страница открыта: группу удалили, из неё исключили.
-      // Слева он из списка пропадёт сам, а эта половина осталась бы жить с открытой
-      // перепиской и молча ловить 404 на каждую догрузку — htmx на них не подменяет
-      // ничего. Уводим на список, а он уже скажет, что произошло.
-      //
-      // Сверяемся с адресом: 404 прилетает и на отдельное сообщение, если его снесли
-      // из админки, — выгонять из-за него живого человека из живого чата незачем.
+      // Чат исчез, пока страница открыта (группу удалили, из неё исключили): на 404 по
+      // адресу чата уводим на список. 404 отдельного сообщения чат не закрывает.
       const own = `/chats/${this.$el.dataset.chatId}/`;
       this.$el.addEventListener("htmx:responseError", (e) => {
         const { status, responseURL } = e.detail.xhr;
@@ -1078,14 +991,11 @@ document.addEventListener("alpine:init", () => {
     },
 
     // --- упоминания ------------------------------------------------------------
-    // Подсказка вылезает на собачку в начале слова. Список участников тянем один раз
-    // и фильтруем у себя: в чате курса их сотни, и спрашивать сервер на каждую букву
-    // значило бы слать запросы чаще, чем человек успевает печатать.
+    // Подсказка на собачку в начале слова. Участников тянем один раз и фильтруем у себя.
     async suggest() {
       const box = this.$refs.input;
       const upto = box.value.slice(0, box.selectionStart);
-      // Собачка в начале слова и после неё — то, что уже набрали. Пробел в имени
-      // допускаем: люди пишут «@Иванов Ив», а не только фамилию.
+      // Собачка в начале слова и набранное после; пробел в имени допускаем («@Иванов Ив»).
       const start = upto.search(/(?:^|\s)@[^\n@]{0,40}$/);
       if (start === -1) return (this.hints = []);
       this.hintAt = upto.lastIndexOf("@");
@@ -1179,9 +1089,8 @@ document.addEventListener("alpine:init", () => {
       this.picked = this.picked.filter((item) => item.id !== id);
       this.load();
     },
-    // Раскладываем выбранное по полям-носителям. Фото и миниатюры сервер сопоставляет
-    // по порядку, поэтому либо миниатюры есть у всех, либо не шлём ни одной: пропусти
-    // одна (не собрался canvas) — и дальше каждое фото получило бы чужую.
+    // Раскладываем выбранное по полям. Фото и миниатюры сервер сопоставляет по порядку:
+    // миниатюры либо у всех, либо ни у одной.
     load() {
       const photos = this.picked.filter((item) => item.url);
       const thumbs = photos.map((item) => item.preview);
@@ -1194,11 +1103,7 @@ document.addEventListener("alpine:init", () => {
       this.picked = [];
       this.load();
     },
-    // Поле ввода растёт под текст. Сначала auto — иначе scrollHeight помнит прежнюю
-    // высоту и поле умеет только расти. Потолок задан в разметке (max-h), оттуда же
-    // берётся и прокрутка: JS про число строк ничего не знает и знать не должен.
-    // Черновик переживает уход со страницы: набрал длинное, отвлёкся на другой чат —
-    // и всё пропадало. Хранится у этого браузера и только до отправки.
+    // Черновик хранится в этом браузере до отправки.
     restore() {
       try {
         this.$refs.input.value = localStorage.getItem(this.draftKey) || "";
@@ -1214,20 +1119,19 @@ document.addEventListener("alpine:init", () => {
     forget() {
       try { localStorage.removeItem(this.draftKey); } catch { /* см. restore */ }
     },
+    // Поле растёт под текст. Сначала auto — иначе scrollHeight помнит прежнюю высоту.
+    // Потолок — max-h в разметке.
     grow() {
       const box = this.$refs.input;
       box.style.height = "auto";
-      // Рамку добавляем отдельно: scrollHeight её не считает, а высота у поля меряется
-      // по внешнему краю (border-box). Без этих двух пикселей текст никогда не влезает
-      // целиком, и поле показывает полосу прокрутки уже на второй строке.
+      // + рамка: scrollHeight её не считает, а высота поля — по border-box.
       box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`;
       this.typed = box.value.length;
       this.remember();
     },
     send(event) {
       if (event.isComposing) return;
-      // Открыта подсказка — Enter выбирает из неё. И на телефоне тоже: там это
-      // единственный способ добраться до неё с клавиатуры.
+      // Открыта подсказка — Enter выбирает из неё, и на телефоне тоже.
       if (this.hints.length) {
         event.preventDefault();
         return this.pickMention(this.hints[this.active]);
@@ -1238,8 +1142,7 @@ document.addEventListener("alpine:init", () => {
       if (this.$refs.input.value.trim() || this.picked.length) this.$refs.input.form.requestSubmit();
     },
     // --- свайп для ответа ------------------------------------------------------
-    // Ответить с телефона можно было только через меню: долгое нажатие, потом пункт.
-    // Жест короче и привычнее — им отвечают во всех мессенджерах.
+    // Свайп вправо — ответ, как в мессенджерах.
     swipeStart(event) {
       const bubble = event.target.closest("[data-msg]");
       // Внутри строки реакций свой жест вбок — там прокрутка, а не ответ
@@ -1286,9 +1189,7 @@ document.addEventListener("alpine:init", () => {
     openMenu(event) {
       const bubble = event.target.closest("[data-msg]");
       if (!bubble || event.target.closest("a, button")) return; // ссылки, чипы реакций и цитата работают сами
-      // Выделение текста — не вызов меню. Но именно ЭТОГО пузыря: раньше сверялись
-      // с выделением где угодно на странице, и одна давняя выделенная строчка в шапке
-      // запирала меню совсем — до клика по пустому месту.
+      // Выделение текста в этом пузыре — не вызов меню.
       const picked = getSelection();
       if (picked && !picked.isCollapsed && bubble.contains(picked.anchorNode)) return;
       event.preventDefault();
@@ -1318,8 +1219,7 @@ document.addEventListener("alpine:init", () => {
       else if (kind === "readers") this.showReaders(m.readers);
       else if (kind === "delete" && confirm("Удалить сообщение?")) this.request("POST", m.del, m.id);
     },
-    // Список считается по нажатию и на этот момент: живые галочки «прочитано» пришлось бы
-    // рассылать всем на каждый чужой опрос, а в чате курса это лавина ради двух значков.
+    // Список — по нажатию: рассылать живые «прочитано» всем на каждый опрос накладно.
     showReaders(url) {
       this.readers = true;
       htmx.ajax("GET", url, { source: this.$el, target: "#readers-body", swap: "innerHTML" });
@@ -1334,9 +1234,8 @@ document.addEventListener("alpine:init", () => {
       const target = "#msg-" + id;
       htmx.ajax(verb, url, { source: document.querySelector(target), target, swap: "outerHTML", values });
     },
-    // Отправка и догрузка могут разойтись и принести одно сообщение дважды. Заодно
-    // разделители дня: у одного дня в ленте он ровно один, а порции считают его каждая
-    // сама и на стыке ставят второй.
+    // Отправка и догрузка могут принести одно сообщение дважды; на стыке порций —
+    // второй разделитель дня.
     dedupe() {
       const seen = new Set();
       this.$refs.box.querySelectorAll("[data-id], [data-day]").forEach((el) => {
@@ -1350,9 +1249,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Одна картинка в комментарии или отзыве: показываем ту, что уже прицеплена (иначе при
-  // правке не понять, есть она вообще или нет), и даём снять её, не трогая сам комментарий.
-  // `cleared` уезжает в поле «<имя>-clear», по которому Django очищает картинку сам.
+  // Одна картинка в комментарии или отзыве: показываем прицепленную, даём снять.
+  // `cleared` уходит в поле «<имя>-clear» — Django очищает картинку сам.
   Alpine.data("imagePick", (saved = "") => ({
     url: saved,
     name: "",
@@ -1372,9 +1270,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Видео вещи в витрине: источник подставляем, только когда плитка попала в экран.
-  // Не ради трафика — Safari на телефоне держит считанные видеодекодеры разом, и
-  // десяток автоплеев его роняет. До подстановки видно постер, ждать ничего не надо.
+  // Видео в витрине — источник только когда плитка в экране: Safari на телефоне держит
+  // считанные декодеры, и десяток автоплеев его роняет.
   Alpine.data("lazyVideo", () => ({
     watcher: null,
 
@@ -1394,11 +1291,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Картинка вещи на полке магазина: источник подставляется, когда плитку видно.
-  // Браузерный loading=lazy не годится — он качает с запасом в полтора-два экрана, и
-  // витрина тянула все анимации разом (26 МБ рамок). Что ушло за край ленты, наблюдатель
-  // видимым не считает: лента обрезает его так же, как экран. У видео здесь подставляем
-  // только постер — включает и останавливает его полка (shelf ниже).
+  // Картинка на полке магазина — источник, когда плитку видно: loading=lazy качает с запасом
+  // в два экрана. У видео — только постер, играет его полка (shelf).
   Alpine.data("lazyMedia", () => ({
     watcher: null,
 
@@ -1418,11 +1312,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Полка магазина: лента листается стрелками и пальцем, подпись «1–6 из 29» следит за
-  // прокруткой. Видео играют все, что видно на полке: листается она по три фона, пусть
-  // и оживают по три (решение пользователя). На телефоне фон один во всю ширину — там и
-  // играет одно, Safari больше пары декодеров разом не держит. Ушедшее за край встаёт на
-  // паузу, а файл видео до первого показа не качается вовсе.
+  // Полка магазина: листается стрелками и пальцем, подпись «1–6 из 29» следит за прокруткой.
+  // Играют видео, что видны на полке (на телефоне — одно); ушедшее за край — на паузе.
   Alpine.data("shelf", () => ({
     first: 0,
     shown: 1,
@@ -1493,10 +1384,8 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Рулетка кейса: лента едет и встаёт на выигрыше. Исход решён сервером ДО анимации, она
-  // его только показывает. Ждём картинку выигрыша (рамка весит до трёх мегабайт), но не
-  // дольше полутора секунд. Стрелка встаёт не ровно в середину плитки, а куда-то в неё:
-  // ровная середина каждый раз выглядит подстроенной.
+  // Рулетка кейса: исход решён сервером ДО анимации. Картинку выигрыша ждём не дольше 1,5 с.
+  // Стрелка встаёт не ровно в середину плитки: ровная выглядит подстроенной.
   Alpine.data("roulette", () => ({
     done: false,
     track: null,
@@ -1527,8 +1416,7 @@ document.addEventListener("alpine:init", () => {
       this.track.addEventListener("transitionend", () => this.finish(), { once: true });
     },
 
-    // Докрутить сразу: человек закрывает окно или жмёт на ленту, не дождавшись. Иначе он
-    // закрыл бы окно и не узнал, что выпало, — вещь уже в инвентаре, а какая, не видно.
+    // Докрутить сразу: закрыли окно или нажали на ленту — пусть увидят выпавшее.
     skip() {
       if (this.done) return;
       this.track.style.transition = "none";
@@ -1545,8 +1433,7 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
-  // Библиотека HLS общая на страницу и грузится один раз: обещание запоминаем, иначе
-  // два плеера на одной странице потянули бы её дважды.
+  // Библиотека HLS — одна на страницу: обещание запоминаем.
   let hlsLibrary = null;
   const loadHls = (src) => {
     if (window.Hls) return Promise.resolve(true);
@@ -1560,9 +1447,7 @@ document.addEventListener("alpine:init", () => {
     return hlsLibrary;
   };
 
-  // Выбранное качество помнится между записями: человек с медленным каналом иначе
-  // переставлял бы его на каждой лекции заново. Помним ВЫСОТУ, а не номер дорожки:
-  // номера у разных записей значат разное — у снятой на 720p дорожка всего одна.
+  // Качество помнится между записями — по высоте, а не по номеру дорожки: номера у записей разные.
   const QUALITY = "lecture-quality";
   const remembered = () => {
     try { return Number(localStorage.getItem(QUALITY)) || 0; } catch { return 0; }
@@ -1571,32 +1456,26 @@ document.addEventListener("alpine:init", () => {
     try { localStorage.setItem(QUALITY, height); } catch { /* приватный режим */ }
   };
 
-  // Стрелки — на 10 секунд, как привыкли по YouTube. Без этого в хроме стрелки после клика
-  // по полосе перемотки двигают её ползунок на сотую долю длины: на полуторачасовой лекции
-  // это почти минута, и у каждой лекции своя (жалобы 8 ноя 2026). Перехватить эти нажатия
-  // нельзя — родная полоса съедает их, до страницы не доходит ни одно событие. Поэтому после
-  // перемотки, пуска и паузы фокус возвращается на само видео, а там стрелки уже наши.
+  // Стрелки — на 10 секунд. После клика по полосе перемотки хром двигает стрелками её
+  // ползунок на 1% длины, и перехватить это нельзя — поэтому фокус возвращаем на видео.
   const SEEK_STEP = 10;
   const keepFocus = (video) => {
-    // Только если фокус и так внутри плеера: перемотка кнопкой гарнитуры, пока человек пишет
-    // комментарий, не должна выдёргивать его из поля ввода.
+    // Только если фокус уже в плеере: не выдёргиваем человека из поля комментария.
     if (document.activeElement === video) video.focus({ preventScroll: true });
   };
   const seekByKeys = (video, event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (!Number.isFinite(video.duration)) return;
-    // Иначе родное управление сдвинуло бы ещё и на свой шаг (в файрфоксе — по keypress,
-    // а его отменённый keydown не порождает).
+    // Иначе родное управление сдвинуло бы ещё на свой шаг (в файрфоксе — по keypress).
     event.preventDefault();
     event.stopPropagation();
     const step = event.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
     video.currentTime = Math.min(Math.max(video.currentTime + step, 0), video.duration);
   };
 
-  // Выбор страниц на печать: превью нажимается, поле «1-3,7» и сетка показывают одно
-  // и то же. Разбор — копия printing.pricing.pages_of, а печатает сервер по своему
-  // разбору; сумма здесь — прикидка для человека, в задание идёт расчёт сервера.
+  // Выбор страниц на печать: превью, поле «1-3,7» и сетка — одно и то же. Разбор — копия
+  // printing.pricing.pages_of; сумма здесь — прикидка, в задание идёт расчёт сервера.
   Alpine.data("printPick", (id) => {
     const config = JSON.parse(document.getElementById(id).textContent);
     const word = (n) => (n % 10 === 1 && n % 100 !== 11 ? "страница"
@@ -1695,11 +1574,8 @@ document.addEventListener("alpine:init", () => {
   });
 
   Alpine.data("lecturePlayer", (src) => {
-    // Плеер и счётчик — ЗДЕСЬ, в замыкании, а не в данных компонента. Alpine оборачивает
-    // данные в Proxy, а hls.js разбирает поток в Worker и шлёт туда свои объекты через
-    // postMessage — прокси структурно не клонируется, и разбор падает сразу же:
-    // «Failed to execute 'postMessage' on 'Worker': #<Object> could not be cloned».
-    // Видно это только в браузере: тесты и статический разбор такое пропускают.
+    // Плеер и счётчик — в замыкании, не в данных: Alpine оборачивает данные в Proxy, а hls.js
+    // шлёт свои объекты в Worker через postMessage — прокси не клонируется.
     let player = null;
     let rescues = 0;
     let rescuedAt = 0;  // где стояло воспроизведение при последнем спасении, секунды
@@ -1718,22 +1594,16 @@ document.addEventListener("alpine:init", () => {
           video.addEventListener(type, () => keepFocus(video));
         }
 
-        // Библиотеку тянем, только если её есть на чём запускать: на айфоне MediaSource
-        // нет вовсе (там любой браузер — Safari внутри), hls.js бесполезен, и полмегабайта
-        // телефон качал бы впустую. Проверяем ДО загрузки, а не после.
-        //
-        // Догружаем сами, а не тегом в шапке: тег пришлось бы ставить ДО ядра Alpine
-        // (иначе к init() библиотеки ещё нет), и каждая страница с плеером была бы
-        // обязана про это помнить. Забыли — чёрный прямоугольник без объяснений.
+        // Библиотеку тянем, только если есть MediaSource (на айфоне его нет). Сами, а не тегом
+        // в шапке: тег пришлось бы ставить до ядра Alpine на каждой странице с плеером.
         const library = "MediaSource" in window && await loadHls(this.$el.dataset.library);
         if (library && window.Hls.isSupported()) {
           player = new window.Hls();
           player.on(window.Hls.Events.ERROR, (_, data) => this.rescue(data));
           player.on(window.Hls.Events.MANIFEST_PARSED, () => this.gotLevels());
           player.on(window.Hls.Events.LEVEL_SWITCHED, (_, data) => { this.playing = this.heightOf(data.level); });
-          // Счётчик — про сбои ПОДРЯД: ушли на десять секунд дальше места сбоя, значит, сеть
-          // ожила. Смотрим на само воспроизведение, а не на загрузку кусков: битый кусок
-          // тоже успешно грузится, и по загрузке сбой декодера крутился бы в цикле.
+          // Счётчик — про сбои ПОДРЯД: ушли на 10 с дальше места сбоя — сеть ожила. По
+          // воспроизведению, а не загрузке: битый кусок тоже грузится успешно.
           video.addEventListener("timeupdate", () => {
             if (rescues && video.currentTime > rescuedAt + 10) rescues = 0;
           });
@@ -1742,10 +1612,8 @@ document.addEventListener("alpine:init", () => {
           return;
         }
 
-        // Родной HLS — запасной путь, а не первый. Так советует и сама библиотека:
-        // `canPlayType` отвечает «maybe» даже там, где своего HLS на деле нет (поймали
-        // на движке хрома), а родной плеер не умеет ни пережить обрыв, ни рассказать
-        // о нём. На айфоне же выбора нет, и там эта ветка единственная рабочая.
+        // Родной HLS — запасной путь: `canPlayType` отвечает «maybe» и без HLS, а родной плеер
+        // не переживает обрыв. На айфоне эта ветка единственная.
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = src;
           return;
@@ -1753,9 +1621,8 @@ document.addEventListener("alpine:init", () => {
         this.problem = "Не удалось загрузить проигрыватель. Обнови страницу.";
       },
 
-      // Дорожки известны только после разбора мастер-манифеста: до него их нет вовсе.
-      // В меню кладём не сами объекты библиотеки, а числа и подписи — данные компонента
-      // Alpine оборачивает в Proxy, и такой объект нельзя вернуть библиотеке обратно.
+      // Дорожки — после разбора мастер-манифеста. В меню — числа и подписи, не объекты
+      // библиотеки: из Proxy Alpine их не вернуть.
       gotLevels() {
         this.levels = player.levels
           .map((one, index) => ({ index, height: one.height, label: `${one.height}p` }))
@@ -1768,8 +1635,7 @@ document.addEventListener("alpine:init", () => {
         return player?.levels[index]?.height || 0;
       },
 
-      // Подпись на кнопке. В автовыборе показываем, что идёт НА САМОМ ДЕЛЕ: одно слово
-      // «Авто» не отвечает на вопрос, ради которого сюда и смотрят.
+      // В автовыборе показываем, что идёт на самом деле.
       get label() {
         if (this.choice < 0) return this.playing ? `Авто · ${this.playing}p` : "Авто";
         return `${this.heightOf(this.choice)}p`;
@@ -1782,9 +1648,7 @@ document.addEventListener("alpine:init", () => {
         remember(index < 0 ? 0 : this.heightOf(index));
       },
 
-      // Лекцию смотрят час с лишним, и за это время сеть моргнёт наверняка. Обрыв и сбой
-      // декодера библиотека умеет пережить, если её попросить, — но не бесконечно: без
-      // счётчика безнадёжный случай крутился бы в цикле, добивая и сеть, и батарею.
+      // Обрыв и сбой декодера библиотека переживает по просьбе — но не бесконечно: счётчик.
       rescue(data) {
         if (!data.fatal) return;
         const kinds = window.Hls.ErrorTypes;
@@ -1806,19 +1670,12 @@ document.addEventListener("alpine:init", () => {
     };
   });
 
-  // Аватар: человек сам решает, каким куском фото станет миниатюра. Снимок с телефона
-  // бывает 4000×3000 и вертикальный, и в квадрате от него оставался бы случайный кусок.
-  // Кадр двигают мышью или пальцем, масштаб — ползунком, щипком или колесом.
-  //
-  // Наружу уходит не файл, а уже вырезанный квадрат data-URL'ом в скрытом поле: сервер
-  // всё равно перерисовывает картинку своим Pillow (users/forms.py), а так не нужен ни
-  // второй запрос, ни разбор исходника на сервере. Значение обновляем после каждого
-  // движения, чтобы не ловить отправку формы посреди асинхронной работы канваса.
+  // Аватар: человек сам выбирает квадрат из фото — мышью или пальцем, масштаб ползунком,
+  // щипком или колесом. Наружу — вырезанный квадрат data-URL'ом в скрытом поле (сервер
+  // всё равно пережимает, users/forms.py); значение обновляем после каждого движения.
   const AVATAR_PX = 512;
   Alpine.data("avatarPick", (saved = "", limit = 2000000) => {
-    // Всё, чего не касается разметка, держим ЗДЕСЬ, а не в данных компонента: Alpine
-    // оборачивает свои данные в Proxy, а drawImage подсунутый вместо Image прокси
-    // не принимает. Заодно перетаскивание не дёргает реактивность на каждый кадр.
+    // Всё, чего не касается разметка, — здесь, не в данных: drawImage не принимает Proxy Alpine.
     let img = null;
     let x = 0, y = 0; // левый верхний угол картинки в координатах окошка
     let side = 0; // сторона окошка на экране, css-пиксели
@@ -1836,8 +1693,7 @@ document.addEventListener("alpine:init", () => {
       pick(event) {
         const file = event.target.files[0];
         if (!file) return;
-        // Из гифки канвас берёт один кадр, и она перестала бы двигаться. Такую
-        // оставляем в самом input — уедет файлом, а сервер сохранит как есть.
+        // Гифку канвас сделал бы одним кадром — она уедет файлом из input.
         this.whole = file.type === "image/gif";
         if (!this.whole) event.target.value = "";
         const url = URL.createObjectURL(file);
@@ -1879,8 +1735,7 @@ document.addEventListener("alpine:init", () => {
         y = Math.min(0, Math.max(side - img.naturalHeight * this.scale, y));
       },
 
-      // Масштаб меняем относительно точки, за которую тянут (по умолчанию — центр окошка):
-      // иначе кадр уползает вбок при каждом движении ползунка.
+      // Масштаб — вокруг точки захвата (по умолчанию центр), иначе кадр уползает.
       zoom(next, cx = side / 2, cy = side / 2) {
         if (!img) return;
         next = Math.min(this.max, Math.max(this.min, next));
@@ -1908,9 +1763,7 @@ document.addEventListener("alpine:init", () => {
         );
       },
 
-      // Готовое значение поля. Три состояния: пусто — не трогать, clear — снять,
-      // data-URL — заменить. Пишем после каждого движения, чтобы отправка формы
-      // не пришлась на середину работы канваса.
+      // Значение поля: пусто — не трогать, clear — снять, data-URL — заменить.
       commit() {
         // Гифка уже лежит в файловом поле — строкой её дублировать нечего.
         this.$refs.out.value = this.whole ? "" : (img ? this.crop() : (this.cleared ? "clear" : ""));
@@ -2011,9 +1864,8 @@ document.addEventListener("alpine:init", () => {
     remove(v) { this.selected = this.selected.filter((x) => x !== v); this.changed(); },
   }));
 
-  // Привидение хэллоуинского скина (core/halloween/_ghost.html): нажали — пугает и прячется
-  // до завтра. Помним день, а не срок: «до завтра» — это до смены даты у человека, а не
-  // через сутки. Шведская запись даты — ГГГГ-ММ-ДД, и по местным часам, в отличие от ISO.
+  // Привидение (core/halloween/_ghost.html): нажали — прячется до завтра. Помним дату
+  // по местным часам («sv» даёт ГГГГ-ММ-ДД), а не срок.
   const today = () => new Date().toLocaleDateString("sv");
   Alpine.data("ghost", () => ({
     away: false, scared: false,

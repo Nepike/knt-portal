@@ -1,8 +1,7 @@
 {% load text_extras attachment_extras %}
 {% comment %}
   Галерея на странице: превью сеткой, по клику — просмотрщик. Ждёт images и anonymous.
-  Адреса идут через фильтр media — см. attachments/media.py. У анонимного материала вместо
-  имён файлов — номера: «Иванов_зачётка.jpg» назвал бы автора, а флаг можно поставить и потом.
+  У анонимного материала вместо имён файлов — номера: имя файла назвало бы автора.
 {% endcomment %}
 <div class="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800"
      x-data="lightbox([{% for image in images %}{ url: '{{ image.image|media|escapejs }}', name: '{% if anonymous %}Изображение {{ forloop.counter }}{% else %}{{ image.name|escapejs }}{% endif %}' }{% if not forloop.last %}, {% endif %}{% endfor %}])">

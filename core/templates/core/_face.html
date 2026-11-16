@@ -1,8 +1,5 @@
 {% load attachment_extras %}
-{% comment %}
-  Само лицо: фото или инициалы. Вынесено из core/_avatar.html, чтобы не повторять
-  его в двух ветках — с косметической рамкой и без неё.
-{% endcomment %}
+{# Фото или инициалы — общее для обеих веток core/_avatar.html. #}
 {% if person.photo %}
   <img src="{{ person.photo|media }}" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover">
 {% else %}

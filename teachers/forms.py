@@ -10,8 +10,7 @@ SCORE_FIELDS = tuple(SCORE_LABELS)
 
 
 class ReviewForm(forms.ModelForm):
-    # Тот же потолок, что у картинки комментария, и так же до Pillow: она едет обычным
-    # multipart и держит воркер, пока едет.
+    # Потолок — как у картинки комментария, и так же до Pillow.
     image = CappedImageField(
         label="Картинка", required=False, max_size=uploads.MAX_IMAGE_SIZE,
         error_messages={"invalid_image": uploads.UNREADABLE_PICTURE},
@@ -28,7 +27,7 @@ class ReviewForm(forms.ModelForm):
 
     def clean_image(self):
         image = self.cleaned_data["image"]
-        # Только новую: прежняя картинка — это поле записи, и читать её пришлось бы из хранилища.
+        # Только новую: прежняя — поле записи, её пришлось бы читать из хранилища.
         if not isinstance(image, UploadedFile):
             return image
         if problem := uploads.check_picture(image):

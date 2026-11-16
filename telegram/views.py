@@ -1,13 +1,10 @@
-"""Ящик для архивов аналитики со второго сервера. Человек сюда не ходит: ни форм, ни страниц.
-
-Скрипт шлёт архив одной строкой:
+"""Ящик для архивов аналитики со второго сервера. Скрипт шлёт архив одной строкой:
 
     curl -fsS -H "Authorization: Bearer $ANALYTICS_TOKEN" -F file=@stats.tar.gz -F note="за неделю" \\
         https://knt-mipt.ru/inbox/analytics/
 
-Сайт архив не хранит — ни в R2, ни на диске: байты уезжают через очередь в чат admin
-(`tasks.send_document`). Ответ — JSON с причиной, как у пекарни и агента печати
-(core/agents.py): на той стороне скрипт, ему нужно внятное, а не голый код.
+Архив не хранится: байты едут через очередь в чат admin (tasks.send_document). Ответ — JSON
+с причиной, как в core/agents.py.
 """
 
 import logging
@@ -29,15 +26,13 @@ from .tasks import send_document
 
 logger = logging.getLogger(__name__)
 
-# Байты едут в самой задаче через Redis (256 МБ, очередь не вытесняется) и раздуваются там
-# на треть. Понадобится больше — передавать воркеру через общий диск ./media, а не поднимать предел.
+# Байты едут в задаче через Redis (+треть на base64). Больше — через общий ./media, не поднимать предел.
 MAX_ARCHIVE = 20 * 1024 * 1024
 WRAPPING = 64 * 1024  # multipart-обвязка и заметка поверх самого файла
 PER_HOUR = 30  # зациклившийся скрипт не должен завалить очередь и чат
 NOTE_LIMIT = 500
 
-# Архив узнаём по первым байтам, а не по имени: имя пишет скрипт. Внутрь не смотрим и не
-# распаковываем — поэтому и zip-бомба здесь ничего не сделает.
+# Архив — по первым байтам, не по имени. Внутрь не смотрим: zip-бомба не страшна.
 SIGNATURES = (
     b"PK\x03\x04", b"PK\x05\x06",  # zip (второй — пустой)
     b"\x1f\x8b",                   # gzip, а с ним tar.gz
@@ -71,8 +66,7 @@ def analytics_inbox(request):
     if denied := agents.guard(request, "ANALYTICS_TOKEN"):
         return denied
     too_big = f"архив больше {human_size(MAX_ARCHIVE)}"
-    # По заголовку и ДО разбора тела: лишнего незачем даже читать. Тело без длины
-    # (chunked) поймает проверка размера самого файла ниже.
+    # По заголовку, до разбора тела; chunked поймает проверка размера ниже.
     if declared_size(request) > MAX_ARCHIVE + WRAPPING:
         return refuse(too_big, 413)
     # После токена, а не до: иначе чужие запросы выбирали бы лимит нашего скрипта.
@@ -92,8 +86,8 @@ def analytics_inbox(request):
     }).strip()
     upload.seek(0)
     try:
-        # Соединение — одной попыткой и до отправки: сама отправка при лежащем Redis
-        # переподключается до сотни раз, и скрипт висел бы минутами (так же в pulse/system.py).
+        # Соединение — одной попыткой и до отправки: иначе при лежащем Redis скрипт висел бы
+        # минутами (как в pulse/system.py).
         with celery_app.connection_for_write() as connection:
             connection.ensure_connection(max_retries=0)
             send_document.apply_async(

@@ -1,14 +1,9 @@
-"""Стартовые наборы шапок и фонов профиля.
-
-Своих картинок под эти слоты не было ни одной, и слот без содержимого не проверить.
-Рисовалки общие — `cosmetics/artwork.py`, здесь только рецепты и запись в базу.
+"""Стартовые наборы шапок и фонов профиля (рисовалки — `cosmetics/artwork.py`).
 
     manage.py make_headers                       # показать, что нарисует
     manage.py make_headers --apply
     manage.py make_headers --kind background --apply
     manage.py make_headers --refresh --apply     # перерисовать существующие
-
-Свои картинки можно просто залить через админку — команда нужна только на старте.
 """
 
 import random
@@ -22,7 +17,7 @@ from cosmetics.models import CosmeticItem
 R = CosmeticItem.Rarity
 K = CosmeticItem.Kind
 
-# Рисуем вдвое крупнее показа — ради экранов с удвоенной плотностью.
+# Вдвое крупнее показа — для экранов с удвоенной плотностью.
 SIZES = {K.PROFILE_HEADER: (1536, 256), K.PROFILE_BACKGROUND: (1920, 1080)}
 
 # Имя, редкость, рисовалка. Порядок тот же, в каком лягут в инвентарь.
@@ -39,7 +34,7 @@ HEADERS = [
     ("Туманность", R.MYTHICAL, lambda s: art.stars(art.glow(art.mesh(s, art.NIGHT + art.VIOLET), [(124, 58, 237), (219, 39, 119), (37, 99, 235)], spots=10, radius=300, alpha=140), count=340)),
 ]
 
-# У фона площадь в тридцать раз больше, поэтому пятна крупнее, а звёзд и точек — гуще.
+# У фона площадь в тридцать раз больше: пятна крупнее, звёзды гуще.
 BACKGROUNDS = [
     ("Полночь", R.COMMON, lambda s: art.mesh(s, art.NIGHT * 2 + art.VIOLET)),
     ("Бездна", R.COMMON, lambda s: art.mesh(s, art.OCEAN)),

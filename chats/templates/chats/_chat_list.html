@@ -1,8 +1,6 @@
 {% load chat_extras %}
 {% for item in items %}
-{# Строки-карточки, а не разлинованный список: линейка между каждой парой чатов делит #}
-{# панель на клетки, а выделять нужно один — открытый. #}
-{# data-muted читает JS: беззвучный чат не прибавляет к счётчику в меню (components.js) #}
+{# Строки-карточки: выделять нужно одну — открытый чат. data-muted читает components.js. #}
 <a href="{% url 'chat_detail' item.chat_id %}" data-row="{{ item.chat_id }}"{% if item.muted %} data-muted{% endif %}
    class="flex items-center gap-3 px-3 py-2.5 mx-1.5 my-0.5 rounded-xl transition-colors
           {% if active_id == item.chat_id %}bg-accent/10{% else %}hover:bg-slate-100 dark:hover:bg-slate-800/60{% endif %}">
@@ -21,8 +19,7 @@
       {% if item.other %}{{ item.other.full_name }}{% else %}{{ item.chat.title }}{% endif %}
       {% if item.muted %}<i class="fa-solid fa-bell-slash text-[10px] text-slate-400 ml-0.5" title="Без уведомлений"></i>{% endif %}
     </p>
-    {# Пока в чате печатают, превью последнего сообщения подменяется меткой. Обе строки #}
-    {# в разметке всегда: список перерисовывает htmx, и метку восстанавливает JS. #}
+    {# Метка «печатает» и превью — обе в разметке: после перерисовки метку восстанавливает JS. #}
     <p class="text-xs truncate">
       <span data-typing class="hidden text-accent">печатает…</span>
       <span data-quiet class="text-slate-400">

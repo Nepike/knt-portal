@@ -147,8 +147,7 @@ class BookmarkPageTests(BookmarksBase):
         self.assertIn("Материалы", page)
         self.assertIn("Книги", page)
         self.assertIn("Преподаватели", page)
-        # Пустая группа не рисуется: заголовок над пустотой сообщает только о том,
-        # что курсов не помечено, а это и так видно.
+        # Пустая группа не рисуется.
         self.assertNotIn("Курсы лекций", page)
 
     def test_a_row_leads_to_the_thing_and_says_what_it_is(self):
@@ -160,9 +159,7 @@ class BookmarkPageTests(BookmarksBase):
         self.assertIn("Иродов И. Е.", page)
 
     def test_a_row_is_named_the_way_a_person_would_name_it(self):
-        """`str()` у материала, книги и курса начинается с номера («#249: Зорич») —
-        это подпись для админки. У преподавателя поля `title` нет, и там `str()` как раз
-        и есть фамилия с инициалами."""
+        """Название — полем, а не `str()` (там номер для админки); у преподавателя `str()` — фамилия."""
         self.toggle("book", self.book)
         self.toggle("teacher", self.teacher)
 

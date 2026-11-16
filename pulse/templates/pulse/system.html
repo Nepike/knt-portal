@@ -4,10 +4,7 @@
 {% block tools %}<span class="ml-auto text-xs text-slate-400">на {% now "H:i" %}</span>{% endblock %}
 
 {% block pulse %}
-{% comment %}
-  Заслон наверху: это единственное здесь, что меняет сайт для всех сразу. Включить может
-  тот, у кого есть право на заслон и сам «Проход при закрытии» — иначе закрылся бы и он.
-{% endcomment %}
+{# Заслон наверху: меняет сайт для всех. Включить — с правом на заслон и с «Проходом при закрытии». #}
 <section x-data="{ ask: false }" class="panel p-4 flex flex-wrap items-center gap-x-5 gap-y-3 {% if lockdown.active %}border-rose-300 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30{% elif lockdown.deadline and lockdown.days_left <= 14 %}border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30{% endif %}">
   <i class="fa-solid {% if lockdown.active %}fa-lock text-rose-500{% else %}fa-lock-open text-slate-400{% endif %} text-xl"></i>
   <div class="min-w-0 flex-1 basis-72">

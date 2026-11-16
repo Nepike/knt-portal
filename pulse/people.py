@@ -1,8 +1,5 @@
-"""«Люди» в Пульсе: поиск, подборки, карточка человека и действия над ним.
-
-Действия идут через те же сервисы, что и сайт (economy.services, wall.services), с тем же
-правом, что в админке, и пишутся в историю админки на самого человека — так в его
-истории видно всё, что с ним делали, откуда бы ни делали.
+"""«Люди» в Пульсе: поиск, подборки, карточка и действия — через сервисы сайта, с правом как
+в админке, с записью в историю админки на самого человека.
 """
 
 from django.contrib.auth.forms import PasswordResetForm
@@ -40,8 +37,8 @@ PRESETS = {
     "banned": "С запретами",
     "off": "Выключенные",
 }
-# (группа, как назвать, что даёт). В карточке — только те, что есть в базе: «Модераторов»
-# на проде завели руками, миграции о них не знают.
+# (группа, как назвать, что даёт). В карточке — только существующие: «Модераторов» на проде
+# завели руками.
 RIGHTS = [
     ("Модераторы", "Модератор", "проверяет материалы, книги, отзывы"),
     ("Кураторы", "Куратор чата курса", "ведёт чаты курсов"),
@@ -82,8 +79,8 @@ def find(query="", preset=""):
 
 
 def rights(person):
-    """Права переключателями: (группа, подпись, что даёт, включено). Своё право бывает
-    и выданным напрямую, мимо группы, — такое тоже считается включённым."""
+    """Права переключателями: (группа, подпись, что даёт, включено). Выданное напрямую, мимо
+    группы, тоже считается включённым."""
     existing = {group.name: group for group in Group.objects.filter(name__in=[name for name, *_ in RIGHTS])}
     held = set(person.groups.values_list("name", flat=True))
     direct = set(person.user_permissions.values_list("pk", flat=True))
@@ -109,8 +106,7 @@ def card(person, viewer):
         feed.events(timezone.now(), kinds=["review", "comment"], people=[person.pk], limit=RECENT), viewer,
     )
     wallet = getattr(person, "wallet", None)
-    # Что этому смотрящему можно нажать: то же право, что в админке, а суперпользователя
-    # меняет только суперпользователь.
+    # Можно нажать — с тем же правом, что в админке; суперпользователя меняет только суперпользователь.
     locked = person.is_superuser and not viewer.is_superuser
     can = {
         "print": viewer.has_perm("printing.change_printaccount") and not locked,
@@ -132,7 +128,7 @@ def card(person, viewer):
         "print_banned": bool(account and account.banned),
         "painted": profile.painted if profile else 0,
         "wall_until": profile.banned_until if profile and profile.banned_until and profile.banned_until > timezone.now() else None,
-        # «said», а не «messages»: это имя в шаблоне занято сообщениями сайта (тостами).
+        # «said», а не «messages»: это имя в шаблоне занято тостами.
         "said": Message.objects.filter(author=person, deleted=False).aggregate(n=Count("id"), last=Max("created")),
         "chats": Membership.objects.filter(user=person).count(),
         "rights": [
@@ -142,7 +138,7 @@ def card(person, viewer):
         "wall_bans": WALL_BANS,
         "test_session": TEST_SESSION,
         "owned": UserItem.objects.filter(user=person).count(),
-        # Подарить можно то, чего у человека ещё нет: выдача уже имеющегося ничего не меняет.
+        # Подарить — только то, чего у человека нет.
         "giftable": list(
             CosmeticItem.objects.exclude(owners__user=person).order_by("kind", "rarity", "name")
         ) if can["gift"] else [],
@@ -168,7 +164,7 @@ def ban_wall(request, person, days):
     if days not in WALL_BANS:
         raise Refused("Такого срока нет.")
     try:
-        wall.ban(request.user, person, days)
+        wall.ban(request.user, person, days * 24)
     except wall.WallError as error:
         raise Refused(str(error).capitalize()) from error
     text = f"Стена закрыта: {WALL_BANS[days]}" if days else "Стена открыта"
@@ -207,7 +203,7 @@ def set_right(request, person, name, on):
         person.groups.add(group)
     else:
         person.groups.remove(group)
-        # Выданное напрямую тоже снимаем: иначе переключатель остался бы включённым.
+        # Выданное напрямую тоже снимаем, иначе переключатель остался бы включённым.
         person.user_permissions.remove(*Permission.objects.filter(group=group))
     logged(request, person, f"право «{label}» {'выдано' if on else 'снято'}")
     return f"«{label}»: {'выдано' if on else 'снято'}"
@@ -258,8 +254,7 @@ def password(request, person, how):
 
 
 def test_session(request, person, minutes):
-    """Ключ сессии этого человека — посмотреть сайт его глазами в приватном окне
-    (users/impersonation.py). Только суперпользователю: это вход в чужой аккаунт целиком."""
+    """Ключ сессии человека для приватного окна (users/impersonation.py). Только суперпользователю."""
     if not request.user.is_superuser:
         raise Refused("Сессию для проверки выдаёт только суперпользователь.")
     if minutes not in TEST_SESSION:

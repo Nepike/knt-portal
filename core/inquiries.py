@@ -1,7 +1,5 @@
 """Обращения из поддержки и контактов: записать, проверить гостя, отправить в чат.
-
-Одним путём ходят и форма, и кнопка «Не спам» в админке — сообщение в чате
-у них выходит одинаковым.
+Тем же путём идёт кнопка «Не спам» в админке.
 """
 
 from django.urls import reverse
@@ -21,10 +19,8 @@ CHATS = {
 
 
 def take(request, source, form):
-    """Принять обращение из провалидированной формы. Возвращает запись или None, если
-    адрес выбрал лимит: такое не пишем даже в таблицу — иначе бот, долбящий с одного
-    адреса, заваливал бы её строками. Ни про лимит, ни про фильтр человеку не говорим:
-    спамить в ответ подсказками незачем."""
+    """Принять обращение из провалидированной формы. None — адрес выбрал лимит: такое
+    не пишем даже в таблицу. Человеку ни про лимит, ни про фильтр не говорим."""
     if throttled(f"{CHATS[source][2]}:ip:{client_ip(request)}", FLOOD):
         return None
 
@@ -35,7 +31,7 @@ def take(request, source, form):
         contact=data.get("contact", ""), text=data["text"], had_image=bool(data.get("image")),
         ip=client_ip(request) or None, agent=request.headers.get("user-agent", "")[:200], seconds=form.seconds(),
     )
-    # Вошедший известен по имени, проверять его незачем — фильтр только для гостей.
+    # Фильтр — только для гостей.
     if author is None:
         inquiry.score, hits = spam.score(inquiry.text, inquiry.name, inquiry.contact, inquiry.seconds)
         inquiry.reasons = [[sign, points] for sign, points in hits]

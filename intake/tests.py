@@ -67,11 +67,7 @@ def mvhd(seconds, scale=1000):
 
 
 def make_mp4(width=1920, height=1080, seconds=5.0, faststart=True, audio=False, name="fon.mp4"):
-    """Настоящее дерево коробок mp4 — без картинки внутри, но заголовок честный.
-
-    Так проверяется ровно то, что читает сайт: ffmpeg для этого не нужен ни здесь,
-    ни на сервере (см. docs/media-pipeline.md).
-    """
+    """Настоящее дерево коробок mp4 без картинки — проверяется ровно то, что читает сайт."""
     track = box(b"trak", tkhd(width, height) + (box(b"mdia", box(b"minf", box(b"smhd", bytes(8)))) if audio else b""))
     moov = box(b"moov", mvhd(seconds) + track)
     mdat = box(b"mdat", b"\0" * 64)
@@ -83,8 +79,7 @@ SAMPLE = Path(__file__).parent / "testdata" / "background.mp4"
 
 
 class RealMp4Tests(SimpleTestCase):
-    """Настоящий файл из ffmpeg — чтобы разбор коробок проверялся не только на своих же
-    выдумках. Синтетика ниже перебирает случаи по одному, а этот пришёл из жизни."""
+    """Настоящий файл из ffmpeg — чтобы разбор проверялся не только на своих выдумках."""
 
     def test_the_header_is_read_the_same_as_a_player_would(self):
         with SAMPLE.open("rb") as handle:
@@ -95,8 +90,7 @@ class RealMp4Tests(SimpleTestCase):
         self.assertFalse(info["audio"])
 
     def test_this_very_file_is_refused_for_the_reason_the_check_exists(self):
-        """У образца moov лежит В КОНЦЕ. Ровно эту ошибку загрузивший у себя не увидит:
-        файл у него на диске и открывается мгновенно."""
+        """У образца moov В КОНЦЕ — ровно та ошибка, которую загрузивший у себя не увидит."""
         with SAMPLE.open("rb") as handle:
             self.assertFalse(mp4.probe(handle)["faststart"])
 
@@ -124,8 +118,7 @@ class Mp4Tests(SimpleTestCase):
 
 
 class RecipeTests(SimpleTestCase):
-    """Сверка файла с рецептом. Этой же функцией пекарня проверяет себя перед отправкой,
-    поэтому отказ обязан называть, что именно перепечь."""
+    """Сверка файла с рецептом — ею же пекарня проверяет себя: отказ называет, что перепечь."""
 
     def refusal(self, name="cosmetic-background", size=1024, **kwargs):
         upload = make_mp4(**kwargs)
@@ -158,8 +151,8 @@ class RecipeTests(SimpleTestCase):
         self.assertIn("1536×256", self.refusal("cosmetic-header"))
 
     def test_what_the_site_sends_turns_back_into_the_same_recipe(self):
-        """Круг «сайт отдал → пекарня собрала» обязан быть без потерь: по неполному
-        рецепту вышел бы правдоподобный файл, который отвалится уже на приёмке."""
+        """Круг «сайт отдал → пекарня собрала» — без потерь: по неполному рецепту вышел бы
+        правдоподобный файл, который отвалится на приёмке."""
         back = {name: spec.recipe_from(data) for name, data in spec.payload().items()}
 
         self.assertEqual(back, spec.RECIPES)
@@ -173,8 +166,7 @@ class RecipeTests(SimpleTestCase):
 
 @override_settings(INTAKE_TOKEN=TOKEN)
 class SpecEndpointTests(SimpleTestCase):
-    """Пекарня читает рецепт у сайта: её копия репозитория может быть недельной
-    давности, а требования — сегодняшними."""
+    """Пекарня читает рецепт у сайта: её копия репозитория может отстать."""
 
     def get(self, token=TOKEN):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -192,8 +184,7 @@ class SpecEndpointTests(SimpleTestCase):
         self.assertEqual(self.get(token="ne-tot-token").status_code, 401)
 
     def test_a_strange_header_is_refused_and_not_a_crash(self):
-        """Заголовок — чужой ввод. Свой токен проверен настройкой, присланный проверить
-        нельзя, и сравнение за постоянное время об нелатиницу спотыкается."""
+        """Заголовок — чужой ввод: сравнение за постоянное время спотыкается о не-ASCII."""
         self.assertEqual(self.get(token="токен-кириллицей").status_code, 401)
 
     def test_the_refusal_says_what_header_is_missing(self):
@@ -202,16 +193,13 @@ class SpecEndpointTests(SimpleTestCase):
 
     @override_settings(INTAKE_TOKEN="")
     def test_an_unconfigured_intake_lets_nobody_in(self):
-        """Ручка открыта в интернет без логина, поэтому забытая настройка обязана
-        закрывать дверь, а не открывать её всем."""
+        """Ручка открыта без логина: забытая настройка закрывает дверь, а не открывает."""
         self.assertEqual(self.get().status_code, 503)
         self.assertIn("INTAKE_TOKEN", self.get().json()["error"])
 
     @override_settings(INTAKE_TOKEN="токен-кириллицей")
     def test_a_token_no_client_could_send_counts_as_unconfigured(self):
-        """Заголовки HTTP переносят только латиницу — такой токен пекарня физически
-        не отправит. Принимать его значило бы завести настройку, которая проходит
-        тесты и не работает ни у кого."""
+        """Не-ASCII токен пекарня не отправит: такая настройка прошла бы тесты и не работала бы."""
         answer = self.get(token="токен-кириллицей")
 
         self.assertEqual(answer.status_code, 503)
@@ -219,8 +207,7 @@ class SpecEndpointTests(SimpleTestCase):
 
     @override_settings(INTAKE_TOKEN="хвост после решётки # заметка")
     def test_a_token_with_a_comment_stuck_to_it_is_called_broken(self):
-        """django-environ не срезает хвост после решётки, и `INTAKE_TOKEN=abc # заметка`
-        даёт значение вместе с заметкой. Лучше назвать сломанным сразу."""
+        """django-environ не срезает хвост после решётки: `INTAKE_TOKEN=abc # заметка` — сломан."""
         self.assertEqual(self.get().status_code, 503)
 
 
@@ -237,8 +224,7 @@ def made(duration=600.0, heights=(1080, 720), segments=None, poster=1024):
 
 
 class LadderTests(SimpleTestCase):
-    """Набор HLS меряется описанием, а не файлами: их тысячи, и открыть каждый
-    не может ни сайт, ни пекарня."""
+    """Набор HLS меряется описанием, а не тысячами файлов."""
 
     def refusal(self, **kwargs):
         return spec.check_ladder(spec.RECIPES["lecture"], made(**kwargs)) or ""
@@ -250,8 +236,7 @@ class LadderTests(SimpleTestCase):
         self.assertEqual(self.refusal(duration=101.0, segments=17), "")
 
     def test_a_broken_off_bake_is_caught_by_the_segment_count(self):
-        """Самый вероятный способ получить полулекцию: выпечка оборвалась, манифест
-        короче длительности. Снаружи такой набор выглядит совершенно целым."""
+        """Оборванная выпечка — манифест короче длительности, а снаружи набор выглядит целым."""
         problem = self.refusal(duration=600.0, segments=40)
 
         self.assertIn("40 сегментов", problem)
@@ -301,8 +286,7 @@ class RungTests(SimpleTestCase):
         self.assertEqual(self.rungs(480), [480])
 
     def test_an_odd_height_is_made_even(self):
-        """Округляем только там, где ни одна ступень не подошла и высота берётся
-        от исходника: yuv420p нечётной не бывает, а 479 приезжает после чужого кропа."""
+        """Округляем, только когда высота берётся от исходника: yuv420p нечётной не бывает."""
         self.assertEqual(self.rungs(479), [478])
 
     def test_just_under_a_rung_falls_to_the_next_one(self):
@@ -311,8 +295,7 @@ class RungTests(SimpleTestCase):
 
 
 class LectureFilterTests(SimpleTestCase):
-    """Цепочка фильтров: чистим и режем на ОДНОМ декодировании, иначе самая дорогая
-    часть — чистка — делалась бы заново для каждой дорожки."""
+    """Чистим и режем на ОДНОМ декодировании: иначе чистка шла бы заново на каждую дорожку."""
 
     def test_two_tracks_share_one_decode(self):
         chain = bake.lecture_filter([1080, 720], 30, 60, "1:2:3:5")
@@ -335,8 +318,7 @@ class LectureFilterTests(SimpleTestCase):
 
 
 class DamageCheckTests(SimpleTestCase):
-    """Испечённый набор проходит декодер до заливки (bake.damaged): 16 сен 2026 лекция 564
-    уехала на сайт с битым сегментом, и на маке её нельзя было досмотреть."""
+    """Испечённый набор проходит декодер до заливки (bake.damaged): битый сегмент не уедет на сайт."""
 
     BROKEN = ("[h264 @ 0x62f18fe06140] left block unavailable for requested intra4x4 mode -1\n"
               "[h264 @ 0x62f18fe06140] error while decoding MB 0 26, bytestream 14665\n")
@@ -423,12 +405,7 @@ class ManifestAttributeTests(SimpleTestCase):
 
 
 class TokenAgreementTests(SimpleTestCase):
-    """Сайт и пекарня обязаны одинаково отвечать на вопрос «таким токеном можно?».
-
-    Однажды разошлись: сайт принимал кириллический токен, а пекарня физически не могла
-    его отправить — заголовки HTTP кодируются latin-1. Получалась настройка, которая
-    проходила тесты и не работала ни у кого.
-    """
+    """Сайт и пекарня одинаково отвечают «таким токеном можно?»: заголовки HTTP — latin-1."""
 
     CASES = ["OqRZ7yTn3xK1", "abc#note", "токен-кириллицей", "with space", "a\tb"]
 
@@ -438,10 +415,8 @@ class TokenAgreementTests(SimpleTestCase):
                 self.assertEqual(bool(agents.unusable(token, "INTAKE_TOKEN")), bool(bake.token_problem(token)))
 
     def test_every_door_the_bakery_knocks_on_exists(self):
-        """Адреса ручек пекарня складывает строкой, а не берёт по имени — своего Django
-        у неё нет. Опечатку в такой строке ловить нечем, и нашлась бы она посреди
-        выпечки, когда работа уже сделана, а сказать о ней некому.
-        """
+        """Адреса ручек пекарня складывает строкой (Django у неё нет): опечатка нашлась бы
+        посреди выпечки."""
         source = Path(bake.__file__).read_text(encoding="utf-8")
         doors = sorted(set(re.findall(r'"(/intake/[a-z]+/)"', source)))
 
@@ -518,9 +493,8 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("локальная", whence)
 
     def test_an_error_page_that_is_not_json_still_names_the_code(self):
-        """Ручка, которой на сайте ещё нет, отвечает 404 HTML-страницей, а 502 приезжает
-        от nginx. Разбор в лоб падал бы JSONDecodeError как раз на самой полезной
-        ошибке — «пекарня новее сайта»."""
+        """404 приходит HTML-страницей, 502 — от nginx: разбор в лоб упал бы JSONDecodeError
+        на самой полезной ошибке — «пекарня новее сайта»."""
         page = io.BytesIO(b"<html>Not Found</html>")
         broken = urllib.error.HTTPError("https://knt-mipt.ru/intake/release/", 404, "Not Found", {}, page)
 
@@ -531,13 +505,8 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("404", str(caught.exception))
 
     def test_a_dropped_connection_returns_the_job_instead_of_burning_it(self):
-        """Связь отвалилась посреди задания. Лекция тут ни при чём, печь её можно, —
-        а `fail` зажёг бы человеку красное «не обработалась» из-за чужого VPN.
-
-        И главное: отчитаться пекарня в эту минуту тоже не может, связи-то нет.
-        Падение на самом отчёте убивало демона ровно тогда, когда он должен был пережить
-        осечку и взять следующее задание, — так и случилось 02.09.2026.
-        """
+        """Связь отвалилась посреди задания: `release`, а не `fail`. Отчитаться в эту минуту
+        тоже нельзя — падение на отчёте не должно убивать демона."""
         job = {"id": 17, "recipe": "lecture", "token": "подпись",
                "source": "https://r2/get", "name": "zapis.mkv"}
         knocked = []
@@ -558,9 +527,8 @@ class BakeryTests(SimpleTestCase):
         self.assertNotIn("/intake/fail/", knocked)
 
     def test_after_a_dropped_connection_the_bakery_does_not_come_straight_back(self):
-        """Возвращённое задание стоит в голове очереди, и через секунду пекарня получила бы
-        его же. Так 30.09.2026 одно задание прокрутилось 32767 раз — пока у сайта
-        не переполнился счётчик попыток и `claim` не начал падать пятисоткой у всех."""
+        """Возвращённое задание — в голове очереди: без паузы пекарня тут же взяла бы его
+        снова, и так по кругу."""
         job = {"id": 17, "recipe": "lecture", "token": "подпись",
                "source": "https://r2/get", "name": "zapis.mkv"}
         claims = iter([{"job": job}, KeyboardInterrupt])
@@ -583,9 +551,8 @@ class BakeryTests(SimpleTestCase):
         self.assertEqual(slept, [60])
 
     def test_a_missing_source_is_a_failure_and_not_a_dropped_connection(self):
-        """HTTPError — тоже OSError, и 404 на сырьё уходил в `release`: задание, которое
-        не испечётся никогда, возвращалось в очередь и выдавалось снова, по кругу.
-        Человеку же надо сказать, что запись придётся загрузить заново."""
+        """HTTPError — тоже OSError, но 404 на сырьё — отказ: такое задание не испечётся никогда,
+        человеку надо загрузить запись заново."""
         job = {"id": 17, "recipe": "lecture", "token": "подпись",
                "source": "https://r2/get", "name": "zapis.mkv"}
         told = {}
@@ -614,14 +581,8 @@ class BakeryTests(SimpleTestCase):
         self.assertEqual(code, 0)
 
     def test_stopping_the_bakery_hands_the_job_back_instead_of_failing_it(self):
-        """Ctrl+C — обычный способ выключить пекарню на ночь. Сказать сайту `fail`
-        значило бы зажечь человеку красное «не обработалась» и оставить его так
-        навсегда: из отказа задание вынимают руками. Поэтому `release` — и лекция
-        просто ждёт следующей машины.
-
-        Заодно проверяем, что прерывание идёт дальше: проглоти пекарня его здесь,
-        Ctrl+C переставал бы её останавливать.
-        """
+        """Ctrl+C — обычное выключение на ночь: `release`, а не `fail` (из отказа задание вынимают
+        руками). Прерывание идёт дальше — иначе Ctrl+C перестал бы останавливать пекарню."""
         job = {"id": 1, "recipe": "lecture", "token": "подпись",
                "source": "https://r2/get", "name": "zapis.mkv"}
         knocked = []
@@ -639,18 +600,9 @@ class BakeryTests(SimpleTestCase):
         self.assertNotIn("/intake/fail/", knocked)
 
     def test_a_signal_stops_the_bakery_the_same_way_ctrl_c_does(self):
-        """Ctrl+C — не единственный способ выключить пекарню: systemd посылает SIGTERM,
-        `tmux kill-session` и закрытая консоль — SIGHUP. Умри пекарня от них молча,
-        и выключение стоило бы часа: задание никому не вернули, и запись висит человеку
-        «обрабатывается», пока сайт не сочтёт машину упавшей.
-
-        Запускаем через `main`, а не зовём `catch_stop` напрямую: сама подмена
-        обработчиков стоит одной строки, а вот забыть её на пути запуска — ровно то,
-        что тут может сломаться и чего снаружи не видно.
-
-        Проверяем обработчик, а не доставку сигнала: послать себе SIGHUP посреди прогона
-        нечем — на windows его нет вовсе, а на linux он оборвал бы тесты.
-        """
+        """SIGTERM (systemd) и SIGHUP (tmux, закрытая консоль) — как Ctrl+C: иначе задание
+        висит «обрабатывается» час. Через `main`: забыть подмену на пути запуска — то, что тут
+        ломается. Проверяем обработчик, а не доставку: на Windows SIGHUP нет."""
         before = {name: signal.getsignal(getattr(signal, name)) for name in bake.STOP_SIGNALS}
         try:
             with mock.patch.object(bake, "find_ffmpeg", return_value="ffmpeg"), \
@@ -669,10 +621,7 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("SIGTERM", bake.STOP_SIGNALS)  # список сам мог остаться пустым
 
     def test_the_daemon_says_which_encoder_it_will_use(self):
-        """Молчаливый откат на процессор — самая дорогая неожиданность из возможных:
-        двухчасовая лекция печётся часы вместо двадцати минут. Разовая выпечка кодировщик
-        печатала, а демон молчал, и узнавали об этом по времени первого задания.
-        """
+        """Молчаливый откат на процессор — часы вместо двадцати минут: демон говорит, чем печёт."""
         args = argparse.Namespace(once=True, every=1)
         lines = []
 
@@ -686,11 +635,8 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("видеокарте", bake.encoder_name(bake.NVENC))  # а на карте — говорим
 
     def start(self, argv, trouble):
-        """Запустить пекарню с заданной бедой вместо видеокарты. Возвращает мок `serve`.
-
-        `--offline` тут обязателен: иначе требования пошли бы спрашивать у живого сайта,
-        адрес и токен которого лежат в `.env` разработчика.
-        """
+        """Пекарня с заданной бедой вместо видеокарты; возвращает мок `serve`. `--offline` —
+        иначе требования спрашивались бы у живого сайта из `.env`."""
         with mock.patch.object(bake, "find_ffmpeg", return_value="ffmpeg"), \
                 mock.patch.object(bake, "nvenc_problem", return_value=trouble), \
                 mock.patch.object(bake, "serve", return_value=0) as served, \
@@ -699,14 +645,8 @@ class BakeryTests(SimpleTestCase):
         return served
 
     def test_without_a_card_the_bakery_refuses_to_take_lectures(self):
-        """Вся затея — про машины с видеокартой: на процессоре двухчасовая запись печётся
-        часами, и сайт за это время отдаст задание другой машине (так и вышло с #210).
-        Спрашиваем на входе, а не у задания: взять его и тут же вернуть значило бы
-        отбирать работу у той, что с картой.
-
-        И причину называем ту, что сказал ffmpeg: «нет драйвера», «ffmpeg без nvenc»
-        и «карты не видно» — три разные починки, выяснять их руками человек не должен.
-        """
+        """Без карты двухчасовая запись печётся часами, и сайт отдаст задание другой машине.
+        Отказ — на входе, с причиной от ffmpeg: у разных причин разные починки."""
         with self.assertRaises(SystemExit) as caught:
             self.start(["--serve"], "Cannot load libcuda.so.1")
 
@@ -714,8 +654,7 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("--cpu", str(caught.exception))  # и как настоять, если всё же надо
 
     def test_a_lecture_baked_by_hand_needs_the_card_too(self):
-        """Разовая выпечка лекции — та же работа и то же железо. А ролику косметики
-        карта не нужна: там восемь секунд, процессор берёт их мгновенно."""
+        """Разовая выпечка лекции — то же железо. Ролику косметики карта не нужна."""
         with self.assertRaises(SystemExit) as caught:
             self.start(["lecture", str(Path(bake.__file__))], "No capable devices found")
 
@@ -739,9 +678,8 @@ class BakeryTests(SimpleTestCase):
             self.assertIsNone(bake.nvenc_problem("ffmpeg"))
 
     def test_the_long_phases_tell_the_site_the_machine_is_alive(self):
-        """Скачивание и выпечка не обращаются к сайту вовсе, а вместе это часы. Пока срок
-        шёл от захвата, сайт отбирал задание у работающей машины — стучим из самой работы.
-        """
+        """Скачивание и выпечка к сайту не обращаются часами — стучим из самой работы, иначе
+        сайт отберёт задание."""
         knocked = []
 
         with mock.patch.object(bake, "talk", lambda site, token, where, body: knocked.append(where)):
@@ -754,8 +692,7 @@ class BakeryTests(SimpleTestCase):
         self.assertEqual(knocked, ["/intake/alive/"])
 
     def test_a_taken_job_gets_a_heartbeat_of_its_own(self):
-        """Одна весточка на обе долгие фазы, и обязательно СВОЕГО задания: чужой токен
-        продлевал бы срок работе, которую делает другая машина."""
+        """Одна весточка на обе фазы, и СВОЕГО задания: чужой токен продлевал бы чужую работу."""
         job = {"id": 3, "recipe": "lecture", "token": "подпись",
                "source": "https://r2/get", "name": "z.mkv"}
 
@@ -772,18 +709,15 @@ class BakeryTests(SimpleTestCase):
         self.assertIs(baked.call_args[0][-1], beat)  # и на выпечке та же самая
 
     def test_the_clock_ffmpeg_prints_becomes_seconds(self):
-        """Ход выпечки ffmpeg сообщает временем записи, а не долей. В первые доли секунды
-        там стоит «N/A» — на нём разбор в лоб и падал бы, ровно на первой строке."""
+        """Ход ffmpeg — временем записи; в первые доли секунды там «N/A»."""
         self.assertAlmostEqual(bake.timecode("00:01:23.500000"), 83.5)
         self.assertAlmostEqual(bake.timecode("01:00:00.000000"), 3600.0)
         self.assertIsNone(bake.timecode("N/A"))
         self.assertIsNone(bake.timecode(""))
 
     def test_a_long_phase_says_how_far_it_got_and_how_much_is_left(self):
-        """Тринадцать минут молчания на скачивании сырья неотличимы от зависшей пекарни,
-        и человек снимает работу с полпути — так и вышло 10.09.2026. Отчёт нужен обеим
-        долгим фазам, поэтому проверяем общий пульс: сколько сделано, сколько осталось.
-        """
+        """Долгое молчание фазы неотличимо от зависшей пекарни: пульс говорит, сколько сделано
+        и сколько осталось."""
         said, beats = io.StringIO(), []
         with contextlib.redirect_stdout(said):
             pulse = bake.Pulse(600.0, unit=bake.spell, pace=bake.times)
@@ -798,16 +732,11 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("10%", line)
         self.assertIn("×", line)  # обгон реального времени — по нему и видно, чем печём
         self.assertIn("осталось ~", line)
-        # Ни «N/A», ни чужие ключи, ни нулевой ход строк не дают. Нуль тут не придирка:
-        # ffmpeg печатает его первой же строкой, а «сколько осталось» на нуле сделанного
-        # считается делением на него.
+        # Ни «N/A», ни чужие ключи, ни нулевой ход строк не дают: на нуле «осталось» — деление на ноль.
         self.assertEqual(line.count("\n"), 1)
 
     def test_the_download_reports_its_progress_and_still_writes_every_byte(self):
-        """Фаза, из-за которой всё и затевалось: 3 ГБ на 4 МБ/с — тринадцать минут
-        молчания. Своим циклом вместо `copyfileobj` она стала отчитываться — и заодно
-        появилось место, где легко потерять кусок, поэтому проверяем и вес файла.
-        """
+        """Скачивание отчитывается своим циклом вместо `copyfileobj` — проверяем и вес файла."""
         class Answer:
             headers = {"Content-Length": str(3 * 1024 ** 2)}
 
@@ -841,9 +770,7 @@ class BakeryTests(SimpleTestCase):
         self.assertTrue(beats)  # 16 ГБ по плохому каналу — час, и сайту это надо знать
 
     def test_in_a_live_console_the_line_rewrites_itself(self):
-        """Под tmux на пекарню смотрят живьём, и там строка обязана переписывать себя
-        на месте: тринадцать минут скачивания оставили бы полторы сотни строк. А в логе
-        `\\r` — это мусор, и туда пишется построчно и много реже."""
+        """В живой консоли (tmux) строка переписывает себя; в логе `\\r` — мусор, там построчно."""
         said = LiveOut()
         with contextlib.redirect_stdout(said):
             pulse = bake.Pulse(1024 ** 3, pace=bake.rate)
@@ -858,9 +785,7 @@ class BakeryTests(SimpleTestCase):
         self.assertEqual(pulse.every, bake.PULSE)
 
     def test_the_long_bake_is_watched_and_its_errors_still_come_back(self):
-        """Ход спрашиваем у самого ffmpeg (`-progress`), и настройки эти общие — им место
-        до всего прочего в командной строке. Ответ обязан остаться той же формы, что
-        у `run`: вызывающий смотрит на код возврата и печатает человеку stderr."""
+        """Ход — от ffmpeg (`-progress`, до прочих аргументов). Ответ — той же формы, что у `run`."""
         fake = FakeFFmpeg(["out_time=00:00:05.000000", "progress=end"],
                           code=1, noise="Invalid pixel format\n")
         args = ["ffmpeg", "-i", "z.mkv", "out.m3u8"]
@@ -875,8 +800,7 @@ class BakeryTests(SimpleTestCase):
         self.assertIn("Invalid pixel format", done.stderr)
 
     def test_the_long_bake_goes_through_the_watcher(self):
-        """Дорогая фаза ровно одна, и ход спрашивают у неё. Вернись она к безмолвному
-        `run`, двадцать минут выпечки снова стали бы неотличимы от зависшей пекарни."""
+        """Выпечка идёт через наблюдателя: с безмолвным `run` она неотличима от зависшей."""
         about = {"height": 1080, "fps": 60.0, "duration": 7200.0, "audio": True}
         out = Path(tempfile.mkdtemp(prefix="bake-test-"))
         try:
@@ -891,10 +815,7 @@ class BakeryTests(SimpleTestCase):
         self.assertEqual(asked[0], "ffmpeg")
 
     def test_an_interrupted_bake_takes_the_encoder_down_with_it(self):
-        """`subprocess.run` убивал ребёнка на любой ошибке сам, а с `Popen` это наша
-        забота, и сигнал приходит только питону. Брошенный ffmpeg грел бы карту до утра —
-        и писал бы в каталог, который пекарня уже считает убранным.
-        """
+        """С `Popen` убить ребёнка — наша забота: брошенный ffmpeg грел бы карту до утра."""
         def lines():
             yield "out_time=00:00:05.000000"
             raise KeyboardInterrupt
@@ -910,8 +831,7 @@ class BakeryTests(SimpleTestCase):
 
 
 def made_manifest(duration=600.0, segments=None):
-    # Число сегментов по умолчанию считаем от длительности: на этом сходстве и держится
-    # проверка «заливка не оборвалась», и расходиться в тесте ему незачем.
+    # Сегменты — по длительности: на этом сходстве держится проверка «заливка не оборвалась».
     segments = ceil(duration / spec.RECIPES["lecture"].segment) if segments is None else segments
     return {
         "duration": duration, "poster": POSTER, "poster_bytes": 1024, "master": MASTER,
@@ -934,8 +854,7 @@ def stored(prefix, manifest):
 
 
 class CheckupTests(SimpleTestCase):
-    """Самопроверка пекарни перед каждым походом за работой (bake.checkup): 8 ноя 2026 NVENC
-    на М4 не работал неизвестно сколько, а демон честно ждал заданий."""
+    """Самопроверка пекарни перед каждым походом за работой (bake.checkup)."""
 
     ROOMY = mock.Mock(free=500 * 1024 ** 3)
 
@@ -958,7 +877,7 @@ class CheckupTests(SimpleTestCase):
         self.assertIn("на рабочем диске свободно", problem)
 
     def test_a_check_that_cannot_run_is_a_problem_too(self):
-        """Нет ffmpeg вовсе — это не «всё хорошо», а самая неисправная пекарня из возможных."""
+        """Нет ffmpeg вовсе — не «всё хорошо», а самая неисправная пекарня."""
         with mock.patch.object(bake, "nvenc_problem", side_effect=FileNotFoundError("ffmpeg")):
             self.assertIn("самопроверка не удалась", bake.checkup("ffmpeg", bake.NVENC))
 
@@ -981,7 +900,7 @@ class CheckupTests(SimpleTestCase):
         fetched.assert_not_called()
 
     def test_the_journal_hears_about_a_problem_once_and_about_the_fix(self):
-        """Беда, стоящая сутки, дала бы в journalctl полторы тысячи одинаковых строк."""
+        """Беда, стоящая сутки, не должна давать полторы тысячи одинаковых строк журнала."""
         lines = []
         args = argparse.Namespace(once=False, every=60)
         problems = ["нет карты", "нет карты", "нет карты", ""]
@@ -999,8 +918,7 @@ class CheckupTests(SimpleTestCase):
 
 @override_settings(INTAKE_TOKEN=TOKEN)
 class BakeryHealthTests(TestCase):
-    """Сайт о пекарне (intake/health.py): её неполадка и её молчание — в чат admin при смене
-    и в журнал сбоев каждый раз."""
+    """Сайт о пекарне (intake/health.py): неполадка и молчание — в чат при смене, в журнал сбоев всегда."""
 
     def setUp(self):
         cache.clear()
@@ -1220,10 +1138,8 @@ class QueueTests(TestCase):
         self.assertEqual(MediaJob.objects.get().prefix, prefix)
 
     def test_a_working_machine_does_not_have_its_job_taken_away(self):
-        """Срок идёт от последней вести, а не от захвата. Иначе долгая работа — 16 ГБ
-        сырья по плохому каналу, потом выпечка — уезжала бы к другой машине прямо
-        из-под работающей, и обе делали бы одно и то же (так и вышло с #210 10.09.2026).
-        """
+        """Срок — от последней вести, а не от захвата: иначе долгую работу отдали бы второй
+        машине из-под работающей."""
         token = self.claim()["token"]
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
 
@@ -1231,16 +1147,14 @@ class QueueTests(TestCase):
         self.assertIsNone(self.claim())  # час прошёл, но машина сказала «жива»
 
     def test_a_machine_that_says_nothing_still_loses_the_job(self):
-        """Обратная половина того же: молчание дольше срока — и задание свободно.
-        Без неё упавшая пекарня заморозила бы лекцию навсегда."""
+        """Молчание дольше срока — и задание свободно."""
         self.claim()
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
 
         self.assertIsNotNone(self.claim())
 
     def test_the_replaced_machine_cannot_hold_the_job_by_beating(self):
-        """Задание уже передали — значит, старая пекарня не хозяйка, и продлевать ей
-        нечего. Иначе она удержала бы работу, которую в эту минуту делает другая."""
+        """Задание передали — старая пекарня не хозяйка, продлевать ей нечего."""
         token = self.claim()["token"]
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
         self.claim()
@@ -1248,9 +1162,7 @@ class QueueTests(TestCase):
         self.assertEqual(self.call("intake_alive", token=token).status_code, 409)
 
     def test_handing_in_the_manifest_counts_as_a_word(self):
-        """Правило одно на все ручки: всякое слово пекарни продлевает срок. Манифест
-        приходит сразу после выпечки — самой долгой фазы, — и молчание перед ним уже
-        могло почти исчерпать час."""
+        """Всякое слово пекарни продлевает срок: манифест приходит после долгой выпечки."""
         token = self.claim()["token"]
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
 
@@ -1259,8 +1171,7 @@ class QueueTests(TestCase):
         self.assertIsNone(self.claim())
 
     def test_asking_for_links_counts_as_a_word(self):
-        """Заливка кусков идёт порциями по 200 и длится столько, сколько отдаст канал.
-        Отдельная весточка тут не нужна — сама просьба о ссылках и есть весточка."""
+        """Просьба о ссылках — тоже весточка: заливка порциями длится долго."""
         token = self.claim()["token"]
         self.call("intake_plan", token=token, manifest=made_manifest())
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
@@ -1277,11 +1188,8 @@ class QueueTests(TestCase):
         self.assertIn(f"{prefix}/0/seg00000.m4s", urls["0/seg00000.m4s"])
 
     def test_the_bakery_is_told_what_type_to_declare(self):
-        """Тип записывается в сам объект хранилища и потом уходит браузеру, а на попадании
-        в кеш побеждает именно он. Пекарня раньше не объявляла никакого, и urllib
-        подставлял свой — куски лекций лежали в R2 как `x-www-form-urlencoded`.
-        Угадывать тип на её стороне нельзя: mimetypes на Windows читает реестр.
-        """
+        """Тип записывается в объект и доезжает до браузера — пекарне его называет сайт
+        (mimetypes на её Windows читает реестр)."""
         token = self.claim()["token"]
         self.call("intake_plan", token=token, manifest=made_manifest())
 
@@ -1337,10 +1245,8 @@ class QueueTests(TestCase):
         self.assertEqual((notice.recipient, notice.kind, notice.lecture), (lecture.playlist.uploader, "baked", lecture))
 
     def test_a_second_attempt_sweeps_away_what_the_first_one_uploaded(self):
-        """Задание вернулось в очередь после упавшей пекарни. Папка у второй попытки
-        новая (класть свежие куски поверх недолитых — значит собрать набор из двух
-        выпечек), а недолитое надо СНЯТЬ: иначе каждая осечка оставляла бы в бакете
-        по гигабайту, которого потом ничем не найти."""
+        """Вторая попытка — в новой папке, а недолитое первой снимается: иначе каждая осечка
+        оставляла бы в бакете по гигабайту."""
         first = self.call("intake_plan", token=self.claim()["token"],
                           manifest=made_manifest()).json()["prefix"]
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
@@ -1354,8 +1260,7 @@ class QueueTests(TestCase):
         swept.assert_called_once_with(first)
 
     def test_rebaking_a_lecture_sweeps_away_its_previous_set(self):
-        """Задание вернули в очередь руками из админки. Лекция переезжает на новую
-        папку, и старый набор остаётся никому не нужным."""
+        """Перепечка из админки: лекция переезжает в новую папку, старый набор снимается."""
         lecture = make_lecture()
         lecture.prefix = "lectures/старый"
         lecture.save(update_fields=["prefix"])
@@ -1375,9 +1280,7 @@ class QueueTests(TestCase):
         swept.assert_called_once_with("lectures/старый")
 
     def test_a_bakery_stopped_by_hand_gives_the_job_straight_back(self):
-        """Ctrl+C на пекарне — не отказ: печь лекцию по-прежнему можно, просто некому
-        в эту минуту. Без этой ручки запись висела бы «обрабатывается» весь
-        CLAIM_TIMEOUT, пока сайт не сочтёт машину упавшей."""
+        """Ctrl+C — не отказ: задание сразу обратно в очередь, а не через CLAIM_TIMEOUT."""
         token = self.claim()["token"]
 
         answer = self.call("intake_release", token=token)
@@ -1389,8 +1292,7 @@ class QueueTests(TestCase):
         self.assertIsNotNone(self.claim())  # следующая берёт сразу, а не через час
 
     def test_the_stopped_bakery_cannot_come_back_to_its_job(self):
-        """Задание к тому времени могла взять другая машина, и доделавшая своё первая
-        снесла бы её папку. Токен умирает вместе с возвратом в очередь."""
+        """Задание могла взять другая машина: токен умирает вместе с возвратом."""
         token = self.claim()["token"]
         self.call("intake_release", token=token)
 
@@ -1418,8 +1320,7 @@ class QueueTests(TestCase):
         self.assertEqual(failure.text, "uploads/abc/zapis.mkv: ffmpeg не справился")
 
     def test_the_worker_that_lost_the_job_cannot_touch_it_any_more(self):
-        """Медленная пекарня не умерла — она просто молчала дольше часа, и задание
-        к тому времени отдали другой. Доделав своё, она снесла бы папку сменщицы."""
+        """Медленная пекарня, у которой задание отдали другой, не снесёт папку сменщицы."""
         first = self.claim()["token"]
         MediaJob.objects.update(claimed_at=timezone.now() - timedelta(seconds=CLAIM_TIMEOUT + 60))
         second = self.claim()["token"]
@@ -1429,9 +1330,8 @@ class QueueTests(TestCase):
         self.assertEqual(self.call("intake_plan", token=second, manifest=made_manifest()).status_code, 200)
 
     def test_a_job_handed_back_over_and_over_is_given_up(self):
-        """Так и было 30.09.2026: пекарня брала задание, тут же спотыкалась, возвращала
-        его — и брала снова. 32767 кругов, потом счётчик переполнился, и `claim` стал
-        падать пятисоткой у всех. Такое задание сломано само, и человеку надо это сказать."""
+        """Задание, которое берут и тут же возвращают, крутилось бы вечно — оно сломано само,
+        и человеку надо это сказать."""
         for _ in range(MAX_TRIES):
             self.call("intake_release", token=self.claim()["token"])
 
@@ -1442,8 +1342,7 @@ class QueueTests(TestCase):
         self.assertIn(f"{MAX_TRIES} раз", Failure.objects.get(source=Failure.Source.BAKERY).text)
 
     def test_a_worn_out_job_does_not_block_the_queue(self):
-        """Очередь идёт от старых к новым, и сломанное задание стоит в самой её голове:
-        не пропусти его — и новые записи не пеклись бы никогда."""
+        """Сломанное задание в голове очереди не должно блокировать новые."""
         MediaJob.objects.update(tries=MAX_TRIES)
         fresh = MediaJob.objects.create(recipe="lecture", source="uploads/def/novaya.mkv")
 
@@ -1451,9 +1350,7 @@ class QueueTests(TestCase):
         self.assertEqual(MediaJob.objects.get(pk=self.job.pk).status, MediaJob.Status.FAILED)
 
     def test_a_person_putting_the_job_back_gives_it_a_fresh_run(self):
-        """Иначе закрытое по пределу задание, возвращённое из админки, закрылось бы снова
-        на первом же `claim`. Номер попытки при этом не сбрасывается — он живёт в токене,
-        и сброс воскресил бы токены прошлых пекарен."""
+        """Возврат из админки — новый заход (tries), но номер попытки не сбрасывается: он в токене."""
         MediaJob.objects.update(status=MediaJob.Status.FAILED, tries=MAX_TRIES, attempts=MAX_TRIES)
         job = MediaJob.objects.get()
         job.status = MediaJob.Status.WAITING
@@ -1467,12 +1364,8 @@ class QueueTests(TestCase):
 
 @override_settings(INTAKE_TOKEN=TOKEN)
 class LeftoverTests(TestCase):
-    """Что остаётся в хранилище после каждого способа не довести выпечку до конца.
-
-    Ключей от бакета у сайта много, а памяти о них — ровно одна строка в базе: пропала
-    она, и папку с гигабайтом кусков потом не найти ничем. Поэтому каждый выход из
-    выпечки проверяется отдельно.
-    """
+    """Что остаётся в хранилище после каждого способа не довести выпечку до конца: память
+    о папке — одна строка в базе, пропала — гигабайт не найти."""
 
     def setUp(self):
         self.lecture = make_lecture()
@@ -1510,9 +1403,7 @@ class LeftoverTests(TestCase):
         return mock.patch("lectorium.tasks.drop_prefix")
 
     def test_a_job_sent_back_to_the_queue_keeps_the_set_until_the_new_one_is_ready(self):
-        """Задание вернули в очередь из админки, чтобы перепечь. Папка задания в этот
-        момент — набор ОПУБЛИКОВАННОЙ лекции, и снять её значит погасить лекцию
-        на всё время новой выпечки, а при осечке — навсегда."""
+        """Перепечка из админки: папка задания — набор ОПУБЛИКОВАННОЙ лекции, её не снимаем."""
         live = self.bake()
         MediaJob.objects.update(status=MediaJob.Status.WAITING)
 
@@ -1536,8 +1427,7 @@ class LeftoverTests(TestCase):
         self.assertEqual([call.args[0] for call in swept.call_args_list], [live])
 
     def test_a_failure_sweeps_what_had_already_been_uploaded(self):
-        """Самый обычный отказ — оборвавшаяся ЗАЛИВКА, то есть папка уже с гигабайтом
-        кусков. Повтора может и не быть, и тогда ждать его нечего."""
+        """Обычный отказ — оборвавшаяся ЗАЛИВКА: папка с кусками снимается сразу."""
         token = self.claim()
         prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
 
@@ -1548,9 +1438,7 @@ class LeftoverTests(TestCase):
         self.assertEqual(MediaJob.objects.get().prefix, "")
 
     def test_a_stopped_bakery_sweeps_what_it_had_already_uploaded(self):
-        """Останавливают чаще всего на заливке — она дольше всего. Папка к этой минуте
-        уже с гигабайтом кусков, а следующая выпечка заведёт свою: брошенную потом
-        не найти ничем, ночная уборка занятые заданием папки не трогает."""
+        """Остановка на заливке: недолитую папку снимаем — уборка занятые заданием не трогает."""
         token = self.claim()
         prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
 
@@ -1561,8 +1449,7 @@ class LeftoverTests(TestCase):
         self.assertEqual(MediaJob.objects.get().prefix, "")
 
     def test_a_stopped_bakery_does_not_touch_the_lecture_that_is_still_playing(self):
-        """Перепечка, прерванная руками. Папка задания в этот момент — набор
-        ОПУБЛИКОВАННОЙ лекции, и снять её значило бы погасить лекцию насовсем."""
+        """Прерванная перепечка: набор опубликованной лекции не трогаем."""
         live = self.bake()
         MediaJob.objects.update(status=MediaJob.Status.WAITING)
         token = self.claim()
@@ -1589,8 +1476,7 @@ class LeftoverTests(TestCase):
         self.assertEqual(Failure.objects.get().text, f"«{self.lecture.title}»: ffmpeg упал")
 
     def test_deleting_a_lecture_mid_bake_takes_the_leftovers_with_it(self):
-        """Задание уезжает каскадом, и вместе с ним пропадает единственная память
-        о недолитой папке и о сырье в десятки гигабайт."""
+        """Задание уезжает каскадом — с ним уходят недолитая папка и сырьё."""
         token = self.claim()
         prefix = self.call("intake_plan", token=token, manifest=made_manifest()).json()["prefix"]
 
@@ -1630,11 +1516,7 @@ class LeftoverTests(TestCase):
 
 
 class DjangoFreeTests(SimpleTestCase):
-    """`spec` и `mp4` уезжают с пекарней на чужую машину, где Django нет вовсе.
-
-    Случайный `from django...` в них ничего не сломает здесь — и обнаружится на той
-    машине, у человека, который просто хотел испечь фон. Поэтому проверяем отсюда.
-    """
+    """`spec` и `mp4` уезжают с пекарней туда, где Django нет: случайный импорт нашёлся бы там."""
 
     def test_the_bakery_half_imports_without_django(self):
         code = "import intake.spec, intake.mp4, sys; print('django' in sys.modules)"

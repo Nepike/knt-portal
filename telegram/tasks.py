@@ -19,15 +19,9 @@ CUT = "\n… обрезано"
 
 
 def fit(text, limit=MESSAGE_LIMIT):
-    """Уложить сообщение в предел телеграма, обрезав с конца.
-
-    Длиннее предела он не принимает вовсе, и повторять такую ошибку бесполезно —
-    уведомление просто пропадало бы. А описание материала или курса длиной не ограничено.
-
-    Обрезать мало: режим HTML не прощает ни оборванного тега, ни незакрытого. Поэтому
-    режем по границе строки (тег на две строки не делится), а когда до неё далеко —
-    посреди строки, но не посреди тега или &-замены; начатое выше обреза закрываем сами.
-    """
+    """Уложить в предел телеграма, обрезав с конца: длиннее он не примет. Режим HTML не прощает
+    оборванного тега: режем по границе строки, а если она далеко — не посреди тега или &-замены;
+    начатое выше обреза закрываем."""
     if len(text) <= limit:
         return text
     cut = text[:limit - len(CUT) - 32]  # запас на закрывающие теги
@@ -47,9 +41,7 @@ def fit(text, limit=MESSAGE_LIMIT):
 
 
 def to_console(chat_name, text):
-    """Разработка: бота и чатов нет, но сообщения видеть полезно — печатаем,
-    как письма (core.mail.DevConsoleBackend). Задача выполняется в воркере,
-    поэтому и печать появится в его окне."""
+    """Разработка: печатаем, как письма (core.mail.DevConsoleBackend), — в окне воркера."""
     sys.stdout.write(f"Телеграм → {chat_name}\n\n{text}\n")
     sys.stdout.write("-" * 79 + "\n")
 
@@ -59,21 +51,17 @@ def _target(chat_name):
     bot = get_bot()
     chat = TelegramChat.objects.filter(name=chat_name).first()
     if not bot or not chat:
-        # Не ошибка: на разработке ни токена, ни чатов нет, и это нормально.
+        # Не ошибка: на разработке ни токена, ни чатов нет.
         logger.info("Телеграм не настроен, сообщение в «%s» не отправлено", chat_name)
         return None, None
     return bot, chat
 
 
-# Телеграм ходит через прокси в заблокированный API — падений будет хватать.
-# Повторяем, но недолго: несостоявшееся уведомление не потеря, всё то же есть на сайте.
-# Сетевые ошибки долетают сюда, потому что telebot.apihelper.RETRY_ON_ERROR выключен;
-# включить его — значит отдать повторы библиотеке, которая уснёт до 30с внутри задачи.
+# Повторы недолгие: уведомление не потеря. RETRY_ON_ERROR в telebot выключен — иначе библиотека
+# спала бы до 30 с внутри задачи.
 @shared_task(autoretry_for=(RequestException,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def send_message(chat_name, text, parse_mode="HTML"):
-    """Отправка уже готового текста. Рендер остаётся в веб-процессе (см. notify):
-    сюда объекты не передать, воркер — отдельный процесс.
-    """
+    """Отправка готового текста; рендер — в веб-процессе (notify)."""
     if settings.TELEGRAM_CONSOLE:
         return to_console(chat_name, text)
 
@@ -85,8 +73,7 @@ def send_message(chat_name, text, parse_mode="HTML"):
 
 
 def _attached(chat_name, text, parse_mode, method, **attachment):
-    """Вложение с подписью. Длинный текст телеграм в подпись не пустит — тогда шлём его
-    обычным сообщением, а вложение следом: разорванное на две части всё равно лучше обрезанного."""
+    """Вложение с подписью. Длинный текст — отдельным сообщением, вложение следом."""
     bot, chat = _target(chat_name)
     if not bot:
         return
@@ -108,8 +95,7 @@ def send_photo(chat_name, text, image, name="image.png", parse_mode="HTML"):
 
 @shared_task(autoretry_for=(RequestException,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def send_document(chat_name, text, document, name, parse_mode="HTML"):
-    """Файл как есть (архив аналитики, telegram/views.py) — base64-строкой в задаче, как
-    картинка: сайт его нигде не хранит, а воркер живёт в отдельном контейнере."""
+    """Файл как есть (архив аналитики) — base64-строкой в задаче: сайт его не хранит."""
     if settings.TELEGRAM_CONSOLE:
         return to_console(chat_name, f"{text}\n\n[файл {name}]")
     _attached(chat_name, text, parse_mode, "send_document", document=b64decode(document), visible_file_name=name)

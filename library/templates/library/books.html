@@ -1,8 +1,7 @@
 {% extends "core/base.html" %}
 
 {% block title %}Библиотека{% endblock %}
-{# Лента без конца: подвал под ней всё равно недостижим, а мелькать при подгрузке #}
-{# успевает. Ссылки из него — внизу боковой панели, они там на экране всегда. #}
+{# Подвала нет: под бесконечной лентой он недостижим; его ссылки — в боковой панели. #}
 {% block footer %}{% endblock %}
 
 {% block content %}
@@ -12,18 +11,12 @@
 </div>
 
 {% comment %}
-  Один hx-get на всю форму: строка поиска шлёт input, селекты и сортировка — change
-  (см. changed() в components.js). Адрес обновляет сама вьюха заголовком HX-Push-Url.
-  hx-history="false" запрещает класть страницу в кеш истории: htmx хранит там innerHTML,
-  и «назад» вернул бы пустое поле поиска при отфильтрованном списке. Вместо кеша —
-  честный перезапрос (refreshOnHistoryMiss в base.html), фильтры и так все в адресе.
+  Поиск шлёт input, селекты и сортировка — change (changed() в components.js); адрес — HX-Push-Url
+  из вьюхи. hx-history="false": снимок htmx вернул бы на «назад» пустой поиск.
 {% endcomment %}
 <form hx-get="{% url 'book_list' %}" hx-target="#book-list" hx-history="false"
       hx-trigger="input delay:300ms, change delay:100ms" class="mb-5">
-  {% comment %}
-    Поиск строкой во всю ширину, под ним фильтры пилюлями и сортировка — тот же вид, что
-    в лектории (core/_filter_pill.html). На телефоне пилюли становятся обычными полями в столбик.
-  {% endcomment %}
+  {# Как в лектории: поиск во всю ширину, под ним пилюли (core/_filter_pill.html). #}
   <div class="relative">
     <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"></i>
     <input name="q" value="{{ q }}" placeholder="Название или автор…" autocomplete="off"
@@ -36,7 +29,7 @@
     <div x-data="segmented('{{ sort }}')" class="self-end sm:self-auto sm:ml-auto inline-flex rounded-btn border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-0.5 text-sm">
       <input type="hidden" name="sort" x-ref="field" :value="value">
       {% for value, label in sorts %}
-      {# цвет только через :class — статикой Alpine его потом не снимет и активными окажутся все #}
+      {# Цвет — только через :class: статичный Alpine не снимет, и активными станут все. #}
       <button type="button" @click="pick('{{ value }}')" class="px-3 py-1.5 rounded-md transition"
               :class="value === '{{ value }}' ? 'bg-accent/10 text-accent font-medium' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'">{{ label }}</button>
       {% endfor %}
@@ -45,9 +38,8 @@
 </form>
 
 {% comment %}
-  grid-cols-1 обязателен, хотя колонка и так одна: без него ширину колонки задаёт
-  содержимое (auto), и на телефоне карточки книг растягивали страницу вдвое шире экрана.
-  grid-cols-1 — это minmax(0, 1fr), то есть колонке разрешено быть уже своего содержимого.
+  grid-cols-1 обязателен: без него ширину колонки задаёт содержимое, и на телефоне страница
+  шире экрана. grid-cols-1 = minmax(0, 1fr).
 {% endcomment %}
 <div id="book-list" class="skin-peek-card grid gap-3 grid-cols-1 lg:grid-cols-2">
   {% include "library/_book_list.html" %}

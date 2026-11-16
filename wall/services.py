@@ -1,30 +1,39 @@
-"""Работа с доской: заряды, закраска, стирание, смена цвета, инструменты модератора.
+"""Всё, что меняет доску, идёт здесь: журнал и состояние в согласии.
 
-Всё, что меняет доску, идёт через эти функции — они держат журнал и нынешнее
-состояние в согласии и считают заряды по часам сервера, а не по обещаниям браузера.
+Placement.user — автор состояния клетки после события, а не тот, кто нажал: отмена и откат
+возвращают клетке прежнего автора. Поэтому «состояние до события» — это предыдущая запись
+журнала по той же клетке.
 """
 
+import logging
+import random
+from collections import defaultdict
 from datetime import timedelta
 
+from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Min
 from django.utils import timezone
 
 from economy import rewards
+from notifications import services as notices
 
 from . import palette, rules
-from .events import notify_area, notify_pixel
-from .models import Board, Pixel, Placement, ProtectedArea, WallProfile
+from .events import notify_area
+from .models import FOREVER, Board, Pixel, Placement, ProtectedArea, WallProfile
+
+logger = logging.getLogger(__name__)
 
 MODERATOR = "wall.moderate_wall"
+STAMPER = "wall.stamp_wall"
+SKIP = 255  # в карте штампа: клетку не трогать (прозрачное)
+
+FROZEN = "этот участок закрыт от правок"
+STRANGER = "стереть можно только свой пиксель, чужой закрашивают"
 
 
 class WallError(Exception):
-    """Поставить не дали, причина — в тексте."""
-
-
-class NoCharges(WallError):
-    """Пиксели кончились. Отдельный класс: интерфейсу тут надо показать таймер."""
+    """Не дали, причина — в тексте."""
 
 
 def profile_of(user):
@@ -32,46 +41,70 @@ def profile_of(user):
     return profile
 
 
-def status(profile, now=None):
-    """Сколько зарядов сейчас и когда придёт следующий (None — копилка полна)."""
-    now = now or timezone.now()
-    _settle(profile, now)
-    if profile.charges >= rules.MAX_CHARGES:
-        return profile.charges, None
-    return profile.charges, profile.charged_at + rules.CHARGE_INTERVAL
+# --- кисть и ластик ---
 
 
 @transaction.atomic
-def paint(user, board, x, y, color, free=False):
-    """Закрасить клетку — хоть пустую, хоть чужую. Цвет выбирает сам человек.
+def draw(user, board, cells):
+    """Мазок: [(x, y, цвет)], цвет 0 — стереть. Закрытый участок и чужое стирание мазок не
+    ломают: такие клетки возвращаются в rejected {(x, y): причина}, интерфейс вернёт им вид.
+    Модератору можно всё. Возвращает (placements, rejected)."""
+    profile = _ready(user, board)
+    wanted = _cells(board, cells)
+    moderator = user.has_perm(MODERATOR)
+    rejected = {} if moderator else {at: FROZEN for at in _frozen(board, wanted)}
+    erasing = [at for at, color in wanted.items() if color == palette.EMPTY and at not in rejected]
+    if erasing and not moderator:
+        now = _states(board, erasing)
+        for at in erasing:
+            color, owner = now.get(at, (palette.EMPTY, None))
+            if color != palette.EMPTY and owner != user.pk:
+                rejected[at] = STRANGER
+    allowed = {at: color for at, color in wanted.items() if at not in rejected}
+    _spend(user, len(allowed))
+    placements = _write_many(board, allowed, user)
+    _count(profile, sum(1 for placement in placements if placement.color != palette.EMPTY))
+    return placements, rejected
 
-    free — режим художника: модератор кладёт цвет без заряда, этим на старте доски
-    задают первые рисунки. Всем остальным мазок стоит заряда.
-    """
-    profile = _ready(user, board, x, y)
+
+def paint(user, board, x, y, color):
+    """Одна клетка кистью; отказ — исключением."""
     _check_color(color)
-    if free:
-        require_moderator(user)
-    else:
-        _take_charge(profile)
-    return _record(board, x, y, color, user)
+    placements, rejected = draw(user, board, [(x, y, color)])
+    if rejected:
+        raise WallError(rejected[(x, y)])
+    return placements[0] if placements else None
+
+
+def erase(user, board, x, y):
+    placements, rejected = draw(user, board, [(x, y, palette.EMPTY)])
+    if rejected:
+        raise WallError(rejected[(x, y)])
+    return placements[0] if placements else None
 
 
 @transaction.atomic
-def erase(user, board, x, y):
-    """Стереть свой пиксель. Бесплатно: ошибка кисти не должна стоить заряда.
-
-    Чужой стереть нельзя — его закрашивают. Так у любой порчи остаётся цвет автора,
-    а на опустевшей клетке всё равно виден тот, кто её опустошил (журнал пишем и тут).
-    Модератору чужое стирать можно: без этого непотребство пришлось бы закрашивать.
-    """
-    _ready(user, board, x, y)
-    pixel = Pixel.objects.select_for_update().filter(board=board, x=x, y=y).exclude(color=palette.EMPTY).first()
-    if pixel is None:
-        raise WallError("клетка и так пустая")
-    if pixel.user_id != user.pk and not user.has_perm(MODERATOR):
-        raise WallError("стереть можно только свой пиксель, чужой закрашивают")
-    return _record(board, x, y, palette.EMPTY, user)
+def undo(user, board, ids):
+    """Отменить свои события (id из ответа на мазок). Клетка возвращается к состоянию до
+    события — с прежним автором, — только если с тех пор её никто не менял."""
+    _ready(user, board)
+    # Мазок мог пройти по клетке дважды: проверяем по последнему событию, возвращаем к первому.
+    spans = {}
+    for pk, x, y, color in board.placements.filter(pk__in=ids[: rules.STROKE_MAX], user=user).values_list("pk", "x", "y", "color"):
+        first, last, last_color = spans.get((x, y), (pk, pk, color))
+        spans[(x, y)] = (min(first, pk), max(last, pk), color if pk >= last else last_color)
+    now = _states(board, list(spans))
+    back = {}
+    for (x, y), (first, _, color) in spans.items():
+        if now.get((x, y), (palette.EMPTY, None)) != (color, user.pk):
+            continue
+        before = (
+            board.placements.filter(x=x, y=y, id__lt=first)
+            .order_by("-id").values_list("color", "user_id").first()
+        )
+        back[(x, y)] = before or (palette.EMPTY, None)
+    _spend(user, len(back))
+    return _restore(board, back)
 
 
 # --- инструменты модератора ---
@@ -89,44 +122,49 @@ def fill(user, board, area, color):
 
 @transaction.atomic
 def rollback(user, board, area, moment):
-    """Вернуть прямоугольник к состоянию на указанный момент.
-
-    Ради этого журнал и ведётся. Для испорченного рисунка это правильнее ручной
-    затирки: под мазком грифера восстанавливается то, что там было, а не дыра.
-    """
+    """Вернуть прямоугольник к моменту — с прежними авторами."""
     require_moderator(user)
     x1, y1, x2, y2 = _area(board, area)
     was = {}
-    # Один проход по журналу вместо запроса на клетку: у прямоугольника в тысячу
-    # клеток это тысяча запросов против одного.
     events = (
         board.placements
         .filter(x__range=(x1, x2), y__range=(y1, y2), created__lte=moment)
-        .order_by("id").values_list("x", "y", "color")
+        .order_by("id").values_list("x", "y", "color", "user_id")
     )
-    for x, y, color in events.iterator():
-        was[(x, y)] = color
-    cells = {
-        (x, y): was.get((x, y), palette.EMPTY)
+    for x, y, color, owner in events.iterator():
+        was[(x, y)] = (color, owner)
+    back = {
+        (x, y): was.get((x, y), (palette.EMPTY, None))
         for y in range(y1, y2 + 1) for x in range(x1, x2 + 1)
     }
-    return _write_many(board, cells, user)
+    return _restore(board, back)
 
 
 @transaction.atomic
-def stamp(user, board, cells):
-    """Положить готовую картинку разом: {(x, y): цвет}.
-
-    Инструмент консоли, а не доски: ни зарядов, ни потолка на площадь тут нет — стартовый
-    арт раскладывать порциями по четыре тысячи клеток бессмысленно. Права всё равно
-    спрашиваем: чужой цвет кладёт только модератор, откуда бы он ни пришёл.
-    """
+def rollback_person(user, board, person, since):
+    """Убрать правки человека с момента since: каждая его клетка возвращается к тому, что было
+    до его первой правки в ней. Где после него рисовал другой, не трогаем."""
     require_moderator(user)
-    for (x, y), color in cells.items():
-        if not board.holds(x, y):
-            raise WallError(f"клетка ({x}, {y}) вне доски")
-        _check_color(color, empty_too=True)
-    return _write_many(board, cells, user)
+    firsts = {
+        (x, y): first for x, y, first in
+        board.placements.filter(user=person, created__gte=since)
+        .values_list("x", "y").annotate(first=Min("id")).values_list("x", "y", "first")
+    }
+    if not firsts:
+        return []
+    now = _states(board, list(firsts))
+    firsts = {at: first for at, first in firsts.items() if now.get(at, (None, None))[1] == person.pk}
+    was = {}
+    if firsts:
+        events = (
+            board.placements.filter(id__lt=max(firsts.values()))
+            .order_by("id").values_list("pk", "x", "y", "color", "user_id")
+        )
+        for pk, x, y, color, owner in events.iterator(chunk_size=5000):
+            first = firsts.get((x, y))
+            if first is not None and pk < first:
+                was[(x, y)] = (color, owner)
+    return _restore(board, {at: was.get(at, (palette.EMPTY, None)) for at in firsts})
 
 
 def protect(user, board, area, note=""):
@@ -143,13 +181,89 @@ def unprotect(user, board, pk):
     ProtectedArea.objects.filter(board=board, pk=pk).delete()
 
 
-def ban(user, target, days):
-    """Закрыть человеку доску, не трогая остальной сайт. days=0 — снять запрет."""
+@transaction.atomic
+def ban(user, target, hours, reason=""):
+    """Закрыть человеку доску на hours часов (-1 — навсегда, 0 — снять). Остальной сайт не трогаем.
+    Сам человек узнаёт об этом колокольчиком."""
     require_moderator(user)
     profile = profile_of(target)
-    profile.banned_until = timezone.now() + timedelta(days=days) if days else None
-    profile.save(update_fields=["banned_until"])
+    if hours:
+        profile.banned_until = FOREVER if hours < 0 else timezone.now() + timedelta(hours=hours)
+        profile.ban_reason = reason.strip()[:200]
+        profile.banned_by = user
+    else:
+        was = profile.banned
+        profile.banned_until, profile.ban_reason, profile.banned_by = None, "", None
+    profile.save(update_fields=["banned_until", "ban_reason", "banned_by"])
+    if hours:
+        term = "навсегда" if profile.forever else "до " + timezone.localtime(profile.banned_until).strftime("%d.%m %H:%M")
+        notices.wall_banned(target, user, f"{term}{' · ' + profile.ban_reason if profile.ban_reason else ''}")
+    elif was:
+        notices.wall_unbanned(target, user)
     return profile
+
+
+def bans():
+    """Кому доска закрыта сейчас — для панели модератора."""
+    return (
+        WallProfile.objects.filter(banned_until__gt=timezone.now())
+        .select_related("user", "banned_by").order_by("banned_until")
+    )
+
+
+# --- штамп картинки ---
+
+
+def fit(width, height, rgba):
+    """Картинку width×height (RGBA, по 4 байта) — в коды палитры: по байту на клетку, SKIP —
+    прозрачное. Тот же подбор цвета, что у wall_draw: так подложку видят в цветах доски."""
+    if not (0 < width <= 255 and 0 < height <= 255) or len(rgba) != width * height * 4:
+        raise WallError("непонятная картинка")
+    known = {}
+    codes = bytearray(width * height)
+    for index in range(width * height):
+        red, green, blue, alpha = rgba[index * 4: index * 4 + 4]
+        if alpha < 128:
+            codes[index] = SKIP
+            continue
+        key = (red, green, blue)
+        if key not in known:
+            known[key] = palette.nearest(red, green, blue)
+        codes[index] = known[key]
+    return bytes(codes)
+
+
+@transaction.atomic
+def stamp(user, board, cells, only_empty=False):
+    """Положить готовую картинку разом: {(x, y): цвет}. Без потолка и награды. Без права
+    модератора закрытые участки обходятся. Клетки ложатся слоями по цветам."""
+    if not user.has_perm(STAMPER) and not user.has_perm(MODERATOR):
+        raise WallError("нужно право наносить картинки")
+    for (x, y), color in cells.items():
+        if not board.holds(x, y):
+            raise WallError(f"клетка ({x}, {y}) вне доски")
+        _check_color(color, empty_too=True)
+    if not user.has_perm(MODERATOR):
+        frozen = _frozen(board, cells)
+        cells = {at: color for at, color in cells.items() if at not in frozen}
+    if only_empty:
+        now = _states(board, list(cells))
+        cells = {at: color for at, color in cells.items() if now.get(at, (palette.EMPTY, None))[0] == palette.EMPTY}
+    return _write_many(board, layered(cells), user)
+
+
+def layered(cells):
+    """Порядок записи (он же порядок таймлапса): слоями по цветам, крупные первыми, внутри
+    слоя вперемешку — картинка проступает целиком, а не выезжает строками."""
+    groups = defaultdict(list)
+    for spot, code in cells.items():
+        groups[code].append(spot)
+    order = {}
+    for code, spots in sorted(groups.items(), key=lambda pair: -len(pair[1])):
+        random.shuffle(spots)
+        for spot in spots:
+            order[spot] = code
+    return order
 
 
 # --- чтение ---
@@ -163,24 +277,34 @@ def snapshot(board):
     return bytes(buffer)
 
 
+def owners(board):
+    """Кто и когда поставил каждую клетку: (люди [(id, имя)], номер человека в списке на клетку
+    с единицы — 0 никто, секунды от открытия доски на клетку)."""
+    people = {}
+    who = [0] * (board.width * board.height)
+    when = [0] * (board.width * board.height)
+    for pixel in board.pixels.select_related("user").iterator(chunk_size=5000):
+        if pixel.user is None:
+            continue
+        number = people.setdefault(pixel.user_id, (len(people) + 1, pixel.user.full_name))[0]
+        index = pixel.y * board.width + pixel.x
+        who[index] = number
+        when[index] = max(0, int((pixel.placed - board.created).total_seconds()))
+    return [(pk, name) for pk, (_, name) in sorted(people.items(), key=lambda pair: pair[1][0])], who, when
+
+
 def version(board):
     """Номер последнего события: им клиент догоняет пропущенное после обрыва связи."""
     return board.placements.aggregate(last=Max("id"))["last"] or 0
 
 
-# Время в таймлапсе нужно только на подпись под ползунком, поэтому берём его у каждого
-# N-го события, а не у каждого: на семестр это пара тысяч чисел вместо полумиллиона.
+# Время для подписи под ползунком таймлапса — у каждого N-го события.
 MARK_EVERY = 256
 
 
 def journal(board):
-    """Весь журнал доски: отметки времени и события подряд, по три байта на событие.
-
-    Доска на любой момент — это первые N событий, наложенные на пустое полотно; ровно
-    так её и собирает браузер, перематывая таймлапс. Отдельного «состояния на момент T»
-    на сервере нет и не нужно: пробежать пятнадцать тысяч байтовых записей в памяти
-    дешевле, чем один раз сходить за ними в базу.
-    """
+    """Весь журнал доски: отметки времени и события по три байта. Доску на момент собирает
+    браузер — первые N событий на пустом полотне."""
     events = bytearray()
     marks = []
     start = None
@@ -195,31 +319,25 @@ def journal(board):
 
 
 def history(board, x, y, limit=20):
-    """Кто трогал клетку, новое сверху. Со стираниями — иначе мстить будет некому."""
+    """Кто менял клетку, новое сверху, со стираниями."""
     return board.placements.filter(x=x, y=y).select_related("user")[:limit]
 
 
 def require_moderator(user):
-    """Публичная: вьюхам она нужна до того, как они пойдут искать чужие записи."""
+    """Публичная: вьюхам нужна до поиска чужих записей."""
     if not user.has_perm(MODERATOR):
         raise WallError("нужны права модератора Стены")
 
 
 def require_admin(user):
-    """Строже, чем модератор. Модератор правит рисунки, а закрыть доску — это конец
-    сезона сразу для всех, такое доверяем только сотрудникам сайта."""
+    """Строже модератора: новая доска — конец сезона для всех."""
     if not user.is_staff:
         raise WallError("новую доску открывает только администратор")
 
 
 @transaction.atomic
 def open_board(user, title, width=None, height=None):
-    """Закрыть нынешнюю доску и открыть новую, пустую.
-
-    Старая никуда не девается: и рисунок, и журнал остаются в базе, просто со страницы
-    её сменяет чистая. Поэтому «сбросить историю» — это не удаление, а начало нового
-    сезона, к прошлому всегда можно вернуться.
-    """
+    """Закрыть нынешнюю доску и открыть новую того же размера; старая с журналом — в архив."""
     require_admin(user)
     title = title.strip()[:100]
     if not title:
@@ -230,7 +348,6 @@ def open_board(user, title, width=None, height=None):
         closing.is_active = False
         closing.closed = now
         closing.save(update_fields=["is_active", "closed"])
-    # Размер по умолчанию наследуем у прошлой доски: сезон меняется, привычка нет.
     return Board.objects.create(
         title=title,
         width=width or (closing.width if closing else Board._meta.get_field("width").default),
@@ -247,6 +364,19 @@ def _check_color(code, empty_too=False):
         raise WallError("нет такого цвета")
 
 
+def _cells(board, cells):
+    """Мазок из запроса: проверенный и без повторов {(x, y): цвет}; повтор — последний цвет."""
+    if len(cells) > rules.STROKE_MAX:
+        raise WallError(f"за раз — не больше {rules.STROKE_MAX} клеток")
+    wanted = {}
+    for x, y, color in cells:
+        if not board.holds(x, y):
+            raise WallError("клетка вне доски")
+        _check_color(color, empty_too=True)
+        wanted[(x, y)] = color
+    return wanted
+
+
 def _area(board, area):
     """Прямоугольник из четырёх чисел: углы приводим к порядку, размер ограничиваем."""
     x1, x2 = sorted((area[0], area[2]))
@@ -258,96 +388,104 @@ def _area(board, area):
     return x1, y1, x2, y2
 
 
-def _ready(user, board, x, y):
+def _frozen(board, cells):
+    """Клетки из cells, лежащие в закрытых участках."""
+    areas = list(board.areas.values_list("x1", "y1", "x2", "y2"))
+    return {
+        (x, y) for x, y in cells
+        if any(x1 <= x <= x2 and y1 <= y <= y2 for x1, y1, x2, y2 in areas)
+    }
+
+
+def _states(board, cells):
+    """Нынешнее {(x, y): (цвет, автор)} для перечня клеток — одним запросом по их рамке."""
+    if not cells:
+        return {}
+    xs = [x for x, _ in cells]
+    ys = [y for _, y in cells]
+    wanted = set(cells)
+    rows = board.pixels.filter(x__range=(min(xs), max(xs)), y__range=(min(ys), max(ys)))
+    return {
+        (x, y): (color, owner)
+        for x, y, color, owner in rows.values_list("x", "y", "color", "user_id")
+        if (x, y) in wanted
+    }
+
+
+def _ready(user, board):
     """Общие проверки и запертый профиль: дальше его можно менять без гонок."""
     if not board.is_active:
         raise WallError("доска закрыта")
-    if not board.holds(x, y):
-        raise WallError("клетка вне доски")
     profile_of(user)
     profile = WallProfile.objects.select_for_update().get(user=user)
-    if profile.banned_until and profile.banned_until > timezone.now():
+    if profile.banned:
         raise WallError("доска для тебя закрыта")
-    if not user.has_perm(MODERATOR) and board.areas.filter(
-        x1__lte=x, x2__gte=x, y1__lte=y, y2__gte=y,
-    ).exists():
-        raise WallError("этот участок закрыт от правок")
     return profile
 
 
-def _settle(profile, now):
-    """Догнать заряды до текущего момента. Не сохраняет."""
-    if profile.charges >= rules.MAX_CHARGES:
-        profile.charged_at = now
+def _spend(user, cells):
+    """Потолок от скриптов: rules.PER_MINUTE клеток в минуту. Кэш лёг — пропускаем."""
+    if not cells or user.has_perm(MODERATOR):
         return
-    gained = (now - profile.charged_at) // rules.CHARGE_INTERVAL
-    if gained <= 0:
+    key = f"wall:rate:{user.pk}"
+    try:
+        used = cells if cache.add(key, cells, 60) else cache.incr(key, cells)
+    except ValueError:  # окно истекло между add и incr
+        cache.set(key, cells, 60)
+        used = cells
+    except Exception:  # noqa: BLE001 — какой именно, зависит от бекенда кэша
+        logger.exception("Кэш недоступен, потолок Стены пропускает")
         return
-    profile.charges = min(rules.MAX_CHARGES, profile.charges + gained)
-    if profile.charges >= rules.MAX_CHARGES:
-        profile.charged_at = now  # копилка полна, обрывки времени копить незачем
-    else:
-        # Именно сдвиг, а не «сейчас»: недокапавшийся заряд не должен обнуляться.
-        profile.charged_at += gained * rules.CHARGE_INTERVAL
+    if used > rules.PER_MINUTE:
+        raise WallError("слишком быстро — подожди минуту")
 
 
-def _take_charge(profile):
-    """Списать заряд за мазок. Сюда попадает ТОЛЬКО обычная закраска: режим художника
-    и консоль идут мимо, и токенов за них поэтому не бывает."""
-    _settle(profile, timezone.now())
-    if profile.charges < 1:
-        raise NoCharges("пиксели кончились")
-    profile.charges -= 1
-    profile.painted += 1
-    profile.save(update_fields=["charges", "charged_at", "painted"])
-    # Платим полусотнями: строка в журнал на каждый мазок превратила бы ленту операций
-    # в шум, за которым не видно ни одной другой награды.
-    if profile.painted % rewards.WALL_BATCH == 0:
+def _count(profile, cells):
+    """В счёт награды — не больше rules.COUNTED_PER_DAY клеток в сутки (по Москве)."""
+    today = timezone.localdate()
+    if profile.counted_on != today:
+        profile.counted_on, profile.counted_today = today, 0
+    add = min(cells, rules.COUNTED_PER_DAY - profile.counted_today)
+    if add <= 0:
+        return
+    before = profile.painted
+    profile.painted += add
+    profile.counted_today += add
+    profile.save(update_fields=["painted", "counted_on", "counted_today"])
+    if profile.painted // rewards.WALL_BATCH > before // rewards.WALL_BATCH:
         rewards.sync(profile.user)
 
 
-def _record(board, x, y, color, user):
-    now = timezone.now()
-    Pixel.objects.update_or_create(
-        board=board, x=x, y=y, defaults={"color": color, "user": user, "placed": now},
-    )
-    placement = Placement.objects.create(board=board, x=x, y=y, color=color, user=user, created=now)
-    # Рассылка после фиксации: иначе откат транзакции оставил бы у всех на полотне
-    # пиксель, которого в базе нет. Заодно рассылают все, кто пишет через _record.
-    transaction.on_commit(lambda: notify_pixel(placement))
-    return placement
+def _restore(board, back):
+    """Вернуть клеткам состояния {(x, y): (цвет, автор)}."""
+    colors = {at: color for at, (color, _) in back.items()}
+    authors = {at: owner for at, (_, owner) in back.items()}
+    return _write_many(board, colors, None, authors)
 
 
-def _write_many(board, cells, user):
-    """Пачка клеток одним заходом: два запроса на всё и одно событие в сокет.
-
-    Поштучно вышло бы столько запросов и столько сообщений, сколько клеток, — заливка
-    прямоугольника легла бы и на базу, и на каждого, кто в этот момент смотрит на доску.
-
-    Порядок клеток сохраняем: в нём они лягут в журнал, а журнал — это таймлапс.
-    """
+def _write_many(board, cells, user, authors=None):
+    """Пачка клеток одним заходом: два запроса и одно событие в сокет. Порядок клеток — порядок
+    журнала, то есть таймлапса. authors — свой автор у каждой клетки (отмена, откат)."""
     if not cells:
         return []
     now = timezone.now()
-    keys = list(cells)
-    current = {
-        (x, y): color
-        for x, y, color in board.pixels.filter(
-            x__range=(min(x for x, _ in keys), max(x for x, _ in keys)),
-            y__range=(min(y for _, y in keys), max(y for _, y in keys)),
-        ).values_list("x", "y", "color")
-    }
-    # Клетки, где и так нужный цвет, не трогаем: незачем засорять ими журнал и историю.
-    changed = {at: color for at, color in cells.items() if current.get(at, palette.EMPTY) != color}
+    current = _states(board, list(cells))
+    if authors is None:
+        # Кисть тем же цветом клетку не меняет — и авторство чужого рисунка не перехватывает.
+        def owner(at):
+            return user.pk
+        changed = {at: color for at, color in cells.items() if current.get(at, (palette.EMPTY, None))[0] != color}
+    else:
+        owner = authors.get
+        changed = {at: color for at, color in cells.items() if current.get(at, (palette.EMPTY, None)) != (color, owner(at))}
     if not changed:
         return []
-
     Pixel.objects.bulk_create(
-        [Pixel(board=board, x=x, y=y, color=color, user=user, placed=now) for (x, y), color in changed.items()],
+        [Pixel(board=board, x=x, y=y, color=color, user_id=owner((x, y)), placed=now) for (x, y), color in changed.items()],
         update_conflicts=True, update_fields=["color", "user", "placed"], unique_fields=["board", "x", "y"],
     )
     placements = Placement.objects.bulk_create(
-        [Placement(board=board, x=x, y=y, color=color, user=user, created=now) for (x, y), color in changed.items()]
+        [Placement(board=board, x=x, y=y, color=color, user_id=owner((x, y)), created=now) for (x, y), color in changed.items()]
     )
     transaction.on_commit(lambda: notify_area(board.pk, placements))
     return placements

@@ -1,8 +1,7 @@
 {# Единый пузырь: первая отрисовка, отправка, догрузка. data-id — курсор ленты #}
 {# oob=True — обновление уже показанного: htmx заменит элемент с тем же id на месте #}
 {% load chat_extras %}
-{# Разделитель дня. СНАРУЖИ пузыря: перерисовка одного сообщения (правка, реакция, #}
-{# удаление) меняет только его самого, и дата над ним обязана это пережить. #}
+{# Разделитель дня — СНАРУЖИ пузыря: перерисовка сообщения его не трогает. #}
 {% if m.day_break %}<div data-day="{{ m.created|date:'Y-m-d' }}" class="self-center my-2 px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-500 dark:text-slate-400 select-none">{{ m.created|day_label }}</div>{% endif %}
 {# Черта «непрочитанные»: с неё чат и открывается. Тоже снаружи пузыря — подмену переживает #}
 {% if unread_from and m.pk == unread_from %}
@@ -17,19 +16,11 @@
 {% else %}
 {% with own=m|is_own:user %}
 {% comment %}
-  Все сообщения в одной колонке и с аватаром слева — своё в том числе. Оно отличается
-  цветом пузыря и подписью «Вы», а не стороной экрана: при чередовании сторон правая
-  половина ленты пустует под каждым чужим сообщением, а в чате курса их большинство.
-
-  Ширину держим сами (max-w-3xl mx-auto), а не полем страницы: мессенджер занимает экран
-  целиком, и строка в тысячу пикселей читалась бы уже плохо.
-
-  У пачки — идущих подряд сообщений одного автора — аватар и имя только у первого
-  (pack_start, chats/views.py). У остальных на месте аватара пустое место той же ширины.
+  Все сообщения в одной колонке с аватаром слева: своё отличают цвет и «Вы», а не сторона —
+  иначе половина ленты пустует. В пачке (pack_start, chats/views.py) аватар и имя — у первого.
 {% endcomment %}
 <div id="msg-{{ m.id }}" data-id="{{ m.id }}" {% if at and m.pk == at %}data-at {% endif %}{% if oob %}hx-swap-oob="outerHTML" {% endif %}class="w-full max-w-3xl mx-auto flex gap-2{% if m.pack_start %} mt-2{% endif %}">
 
-  {# Аватар у первого сообщения пачки, у остальных на его месте пустое место той же ширины #}
   {% if m.pack_start %}
   <a href="{% url 'profile' m.author_id %}" class="shrink-0">{% include "core/_avatar.html" with person=m.author box="w-8 h-8 rounded-[22%]" text="text-[11px]" only %}</a>
   {% else %}
@@ -46,12 +37,9 @@
          {% if own or is_chat_admin %}data-del-url="{% url 'message_delete' m.pk %}"{% endif %}{% endif %}>
 
       {% comment %}
-        Имя ВНУТРИ пузыря, а не над ним: снаружи оно выравнивалось по краю коробки, а
-        текст внутри отодвинут падингом — и подпись выглядела съехавшей влево.
-        В ЛС имени нет вовсе: собеседник один, и он в шапке.
+        Имя внутри пузыря: снаружи оно съезжало от текста. В ЛС имени нет. inline-block —
+        растянутая ссылка уводила в профиль с пустого места.
       {% endcomment %}
-      {# inline-block, а не block: растянутая на весь пузырь ссылка уводила в профиль #}
-      {# и оттуда, где никакого имени нет — с пустого места справа от него. #}
       {% if m.pack_start and chat.kind != "dm" %}
       <a href="{% url 'profile' m.author_id %}" class="inline-block text-xs font-semibold text-accent hover:underline">{% if own %}Вы{% else %}{{ m.author.full_name }}{% endif %}</a>
       {% endif %}
@@ -59,7 +47,7 @@
       {% if m.reply_to %}
       <div @click.stop="document.getElementById('msg-{{ m.reply_to_id }}')?.scrollIntoView({ behavior: 'smooth', block: 'center' })"
            class="border-l-2 border-accent pl-2 my-0.5 text-xs opacity-80 cursor-pointer">
-        {# Так же, как подписан сам пузырь: «Вы» или Фамилия Имя — а не одно имя, как было #}
+        {# Подпись как у пузыря: «Вы» или Фамилия Имя #}
         <span class="font-medium">{% if not m.reply_to.author %}—{% elif m.reply_to.author_id == user.pk %}Вы{% else %}{{ m.reply_to.author.full_name }}{% endif %}</span>
         {# цитата не должна переживать удаление оригинала #}
         <span class="block truncate">{% if m.reply_to.deleted %}<i class="opacity-70">сообщение удалено</i>{% else %}{{ m.reply_to|preview|truncatechars:60 }}{% endif %}</span>
@@ -75,13 +63,9 @@
       {# С реакциями время живёт в их строке — отступ всегда одинаковый #}
       {% if m.text %}<p class="text-sm leading-snug whitespace-pre-line break-words [&_a]:text-accent [&_a]:underline [&_a]:break-all">{{ m|body }}</p>{% endif %}
       {% comment %}
-        Реакции прокручиваются вбок: перенос растил бы пузырь, а их у сообщения бывает много.
-
-        Фон чипа — затемнение самого пузыря, а не белый: белый на светло-сером пузыре
-        читался ярким пятном, а в тёмной теме проваливался. Своя реакция — сплошной
-        акцент: на пузыре любого цвета видно, что нажимал именно ты.
+        Реакции прокручиваются вбок (data-sideways — свайп ответа сюда не лезет). Фон чипа —
+        затемнение пузыря, своя реакция — сплошной акцент.
       {% endcomment %}
-      {# data-sideways — тут свой жест вбок (прокрутка), и свайп для ответа сюда не лезет #}
       <div data-sideways class="flex items-center gap-1 mt-1 -mx-1 px-1 overflow-x-auto overscroll-contain">
         {% for emoji, count, mine in summary %}
         <button type="button" hx-post="{% url 'message_react' m.pk %}" hx-vals='{"emoji": "{{ emoji }}"}'

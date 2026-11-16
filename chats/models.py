@@ -13,11 +13,7 @@ REACTIONS = ["👍", "❤️", "🔥", "😂", "😮", "😢",]
 
 
 def unread_total(user):
-    """Непрочитанные во всех чатах — для бейджа в меню.
-
-    Беззвучные не в счёт: смысл «без уведомлений» ровно в том, чтобы чат не дёргал.
-    Своё число у такого чата остаётся — оно видно в его строке списка, только серым.
-    """
+    """Непрочитанные во всех чатах для бейджа в меню; беззвучные не в счёт."""
     return (
         Message.objects.filter(
             chat__memberships__user=user,
@@ -40,8 +36,7 @@ class Chat(models.Model):
     kind = models.CharField("тип", max_length=10, choices=KIND_CHOICES, default="dm")
     title = models.CharField("название", max_length=100, blank=True)
 
-    # Курс адресуем парой «год поступления + ступень»: номер курса растёт каждый сентябрь,
-    # год — нет; ступень нужна, потому что бакалавры и магистры одного набора — разные люди.
+    # Курс — «год поступления + ступень»: номер курса меняется каждый сентябрь, год — нет.
     admission_year = models.PositiveSmallIntegerField("год поступления", null=True, blank=True)
     stage = models.CharField("ступень обучения", max_length=20, choices=Team.STAGE_CHOICES, blank=True)
 
@@ -122,9 +117,7 @@ class MembershipQuerySet(models.QuerySet):
         )
         return self.annotate(
             unread=Count("chat__messages", filter=unseen),
-            # Позвали ли меня в непрочитанном. Отдельным EXISTS, а не ещё одним Count:
-            # число упоминаний никому не нужно, а факт — да, и он показывается даже
-            # у беззвучного чата: «без уведомлений» не значит «не зовите по имени».
+            # Позвали ли меня в непрочитанном — EXISTS (нужен факт); и у беззвучного чата.
             called=Exists(
                 Message.objects.filter(
                     chat_id=OuterRef("chat_id"),
@@ -145,8 +138,7 @@ class Membership(models.Model):
         null=True, blank=True, related_name="+",
     )
     is_admin = models.BooleanField("администратор", default=False)
-    # Беззвучный чат не попадает в общий счётчик и в заголовок вкладки (unread_total),
-    # но своё число в списке сохраняет — серым. TODO: учесть и в push/email-уведомлениях.
+    # Беззвучный — вне общего счётчика (unread_total), своё число в списке серым. TODO: push/email.
     muted = models.BooleanField("без уведомлений", default=False)
     # Закреплённые идут первыми, дальше — по времени последнего сообщения.
     pinned = models.BooleanField("закреплён", default=False)
@@ -180,9 +172,7 @@ class Message(models.Model):
     )
     # Вложения — со стороны attachments: File.message и Image.message.
 
-    # Кого позвали в сообщении. Считается по тексту при сохранении (chats/mentions.py):
-    # связь нужна, чтобы подсветку не приходилось угадывать по именам при каждой отрисовке,
-    # и чтобы «меня упомянули» можно было спросить у базы одним условием.
+    # Кого позвали (chats/mentions.py): подсветка и «меня упомянули» — одним условием в базе.
     mentions = models.ManyToManyField(
         settings.AUTH_USER_MODEL, verbose_name="упомянуты", related_name="mentioned_in", blank=True,
     )

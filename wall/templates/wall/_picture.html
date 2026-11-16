@@ -1,0 +1,57 @@
+{% comment %}
+  Картинка поверх доски. Подложка — для всех и только в этом браузере: по ней рисуют руками.
+  Штамп — та же картинка, нанесённая разом; нужно право stamp_wall (или модератора).
+{% endcomment %}
+<div class="space-y-4">
+  <p class="text-slate-500 dark:text-slate-400">Эскиз поверх доски — по нему удобно рисовать. Остаётся в этом браузере, другим не виден.</p>
+  <label class="btn btn-secondary w-full cursor-pointer">
+    <i class="fa-solid fa-upload"></i><span x-text="tpl ? 'Другая картинка' : 'Выбрать картинку'"></span>
+    <input type="file" accept="image/*" class="sr-only" @change="pickTemplate">
+  </label>
+
+  <template x-if="tpl">
+    <div class="space-y-4">
+      <p class="text-slate-500 dark:text-slate-400">Тяни картинку по доске, зелёный уголок — размер.</p>
+      <div class="flex items-center gap-2">
+        <label for="tpl-width">Ширина</label>
+        <input id="tpl-width" type="number" min="1" :max="width" :value="tpl.w" @change="sizeTemplate(+$event.target.value)"
+               class="w-20 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+        <span class="text-slate-500 dark:text-slate-400" x-text="`кл. · высота ${tpl.h}`"></span>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        <button type="button" @click="sizeTemplate(tpl.iw)" class="btn btn-ghost !px-2.5">1:1</button>
+        <button type="button" @click="fitTemplate()" class="btn btn-ghost !px-2.5">Во всю доску</button>
+        <button type="button" @click="centerTemplate()" class="btn btn-ghost !px-2.5">По центру</button>
+      </div>
+      <label class="flex items-center gap-3">
+        Прозрачность
+        <input type="range" min="0.1" max="1" step="0.05" x-model.number="tpl.alpha" @input="invalidate()" @change="saveTemplate()" class="flex-1 accent-accent">
+      </label>
+      <label class="checkbox"><input type="checkbox" x-model="tpl.on" @change="saveTemplate(); invalidate()">показывать</label>
+      <label class="checkbox"><input type="checkbox" x-model="tpl.pixel" @change="saveTemplate(); refit()">в цветах палитры — как ляжет на доску</label>
+      <p class="text-slate-500 dark:text-slate-400 tabular-nums" x-text="`${tpl.w} × ${tpl.h} клеток, угол в ${tpl.x}, ${tpl.y}`"></p>
+      <button type="button" @click="dropTemplate()" class="btn btn-ghost !px-2.5 !text-rose-600 dark:!text-rose-400"><i class="fa-solid fa-trash"></i>Убрать картинку</button>
+
+      <template x-if="can.stamp">
+        <div class="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+          <h2 class="wall-h">Штамп</h2>
+          <label class="checkbox"><input type="checkbox" x-model="stampOnlyEmpty">только пустые клетки — чужие рисунки не трогать</label>
+          <div class="rounded-xl bg-slate-50 dark:bg-slate-800/60 p-3 space-y-1">
+            <p x-show="!stampStats">Подбираю цвета…</p>
+            <template x-if="stampStats">
+              <div class="space-y-1">
+                <p><b x-text="stampStats.cells"></b> клеток · <span x-text="stampStats.colors"></span> цветов</p>
+                <p x-show="stampStats.others" class="text-amber-700 dark:text-amber-300"
+                   x-text="stampOnlyEmpty ? `${stampStats.others} занятых клеток пропустит` : `перекрасит ${stampStats.others} чужих клеток`"></p>
+                <p x-show="stampStats.frozen" class="text-sky-700 dark:text-sky-300" x-text="`${stampStats.frozen} в закрытых участках — пропустит`"></p>
+                <p x-show="stampStats.outside" class="text-slate-500" x-text="`${stampStats.outside} за краем доски — не войдут`"></p>
+              </div>
+            </template>
+          </div>
+          <button type="button" @click="applyStamp()" :disabled="busy || !stampStats || !stampStats.cells" class="btn btn-primary w-full">Нанести на доску</button>
+          <p class="text-xs text-slate-500 dark:text-slate-400">В таймлапсе картинка проявится слоями по цветам.</p>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>

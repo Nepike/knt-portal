@@ -1,8 +1,5 @@
-"""Печать для студентов: загрузка, выбор страниц, очередь.
-
-Документ сайт не открывает: превью и заливку приносит агент на М4, здесь — показ, выбор,
-лимит и очередь. Раздел открыт всем вошедшим; кому печатать нельзя — галочка «печать
-запрещена» в PrintAccount (админка): раздел он видит, загрузить и напечатать не может.
+"""Печать для студентов: загрузка, выбор страниц, очередь. Документ открывает агент на М4.
+Раздел открыт всем вошедшим; запрет — галочка в PrintAccount (админка).
 """
 
 import json
@@ -26,8 +23,8 @@ from .models import Printer, PrintJob
 from .pricing import DARK, BadSelection, pages_of, selection_of
 
 FOLDER = "printing"
-# Ровно то, что умеет агент (tools/print_agent.SIGNATURES — их сверяет тест). Таблиц нет
-# намеренно: XLSX печатается непредсказуемо, и проще попросить сохранить его в PDF.
+# Ровно то, что умеет агент (tools/print_agent.SIGNATURES, сверяет тест). Таблиц нет: XLSX
+# печатается непредсказуемо.
 ACCEPTED = (".pdf", ".doc", ".docx", ".odt", ".rtf", ".ppt", ".pptx", ".odp", ".jpg", ".jpeg", ".png")
 UPLOADS_PER_HOUR = 20
 JOBS_SHOWN = 30
@@ -54,8 +51,7 @@ def refusal(name, size):
 
 
 def _printer():
-    """Под чей PPD разбирать загруженное. Все наши принтеры — A4, так что любой работающий;
-    печатать человек потом выберет сам."""
+    """Под чей PPD разбирать: все наши принтеры — A4, любой работающий."""
     printers = list(Printer.objects.filter(active=True))
     return next((printer for printer in printers if printer.online), printers[0] if printers else None)
 
@@ -70,8 +66,7 @@ def home(request):
         "jobs": request.user.print_jobs.select_related("printer")[:JOBS_SHOWN],
         "accept": ",".join(ACCEPTED),
         "max_size": size_text(),
-        # Тот же компонент, что у материалов (fileForm в components.js), но своя подпись:
-        # папка печати и свой потолок веса. Частями не льём — 50 МБ уходят одним PUT.
+        # Компонент fileForm, но своя папка и потолок; частями не льём — 50 МБ уходят одним PUT.
         "upload": json.dumps({
             "direct": direct_upload(), "maxSize": max_size(), "signUrl": reverse("print_sign"),
             "each": reverse("print_upload"), "maxFiles": 1, "single": True, "forbidden": [],
@@ -128,16 +123,14 @@ def upload(request):
         if found is None:
             return refuse("Файл не доехал до хранилища — загрузи его заново")
         key, name = found
-        # Задание по этому файлу уже есть: ответ на первую отправку потерялся, и форма
-        # повторила запрос. Второго задания на тот же файл не заводим.
+        # Задание по файлу уже есть — ответ на первую отправку потерялся. Второго не заводим.
         if job := PrintJob.objects.filter(source_key=key, user=request.user).first():
             return _opened(job, as_json)
         try:
             size = file_storage().size(key)
         except FileNotFoundError:
             return refuse("Файл не доехал до хранилища — загрузи его заново")
-        # Размер в подписи не участвует: положить по ссылке можно сколько угодно,
-        # и настоящий вес виден только теперь.
+        # Размер в подписи не участвует: настоящий вес виден только теперь.
         if problem := refusal(name, size):
             file_storage().delete(key)
             return refuse(problem)
@@ -205,8 +198,7 @@ def job(request, uuid):
 
 @require_GET
 def status(request, uuid):
-    """Опрос со страницы задания. Сменилось состояние — перерисовать страницу целиком:
-    у каждого своя раскладка (превью, выбор, кнопки), и заплатки к ней были бы хрупче."""
+    """Опрос со страницы задания. Сменилось состояние — перерисовать страницу: раскладки разные."""
     job = _own(request, uuid)
     if request.GET.get("was") != job.status:
         return HttpResponse(headers={"HX-Refresh": "true"})

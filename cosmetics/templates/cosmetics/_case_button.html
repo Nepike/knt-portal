@@ -1,8 +1,6 @@
 {% comment %}
-  Кнопка открытия кейса — на витрине, в окне «что внутри» и под рулеткой («ещё раз»).
-  Ждёт case с пометками cosmetics.cases.on_show; ghost — вторая кнопка рядом с главной;
-  ask — сперва переспросить (на витрине: кейс там открывают мимоходом, а трата необратима).
-  hx-disabled-elt: второе нажатие, пока первый ответ в пути, открыло бы второй кейс.
+  Кнопка открытия кейса: витрина, «что внутри», «ещё раз». Ждёт case (cosmetics.cases.on_show);
+  ghost — вторая кнопка; ask — переспросить (на витрине). hx-disabled-elt — против второго кейса.
 {% endcomment %}
 {% if case.collected %}
 <button type="button" disabled class="btn {% if ghost %}btn-ghost{% else %}btn-primary{% endif %} self-start whitespace-nowrap">Всё собрано</button>

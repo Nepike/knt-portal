@@ -1,7 +1,4 @@
-{% comment %}
-  Поля комментария: и в композере, и в ответе, и в правке. Ждёт form и submit.
-  Картинка одна, её разметка общая с отзывами — attachments/_image_pick.html.
-{% endcomment %}
+{# Поля комментария: композер, ответ, правка. Ждёт form и submit. Картинка — attachments/_image_pick.html. #}
 {% csrf_token %}
 {# Все ошибки разом: полей всего три, и у каждого своя разметка — вешать сообщение на поле негде #}
 {% for error in form.errors.values %}

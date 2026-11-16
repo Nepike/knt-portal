@@ -47,17 +47,12 @@ def _may_edit(user, book):
 
 
 def _query(params):
-    """Выбранный подбор строкой запроса.
-
-    Пустые параметры выбрасываем, иначе в адресе висело бы «?q=&subject=&term=&sort=popular».
-    `page` тоже: он про порцию, а не про подбор, — вернувшись со страницы книги, человек
-    ждёт список, а не третью его страницу.
-    """
+    """Подбор строкой запроса — без пустых параметров и без `page`: он про порцию, а не про подбор."""
     return urlencode({key: value for key, value in params.items() if value and key != "page"})
 
 
 def _filters_url(request):
-    """Адрес списка с текущими фильтрами: такую ссылку можно переслать, а F5 не сбросит поиск."""
+    """Адрес списка с текущими фильтрами."""
     query = _query(request.GET)
     return f"{request.path}?{query}" if query else request.path
 
@@ -75,9 +70,7 @@ def book_list(request):
     if sort not in SORTS:
         sort = "popular"
 
-    # Скачивания подзапросом, а не annotate(Sum): аннотация считает по джойну, и как
-    # только фильтр по предметам/семестрам начнёт матчить больше одной строки на книгу
-    # (мультивыбор), сумма молча удвоится. Подзапрос от джойнов не зависит.
+    # Скачивания подзапросом, а не annotate(Sum): с джойном фильтра по m2m сумма удвоится.
     totals = File.objects.filter(book=OuterRef("pk")).values("book").annotate(n=Sum("downloads")).values("n")
     books = (
         visible(request.user)
@@ -103,9 +96,8 @@ def book_list(request):
         return render(request, "library/books.html", context)
 
     response = render(request, "library/_book_list.html", context)
-    # Адрес меняем сами заголовком, а не hx-push-url на форме: так в строку уходят
-    # только непустые фильтры. Догрузка порций адрес не трогает — каждая порция
-    # завела бы свою запись в истории, и «назад» пришлось бы жать по разу на порцию.
+    # Адрес — заголовком, а не hx-push-url: в него только непустые фильтры. Догрузка адрес
+    # не трогает: иначе запись в истории на каждую порцию.
     if not request.GET.get("page"):
         response["HX-Push-Url"] = _filters_url(request)
     return response
@@ -118,11 +110,9 @@ def book_detail(request, pk):
     notifications.seen(request.user, book=book)
     return render(request, "library/book_detail.html", {
         "book": book,
-        # Ссылка «Библиотека» ведёт не в начало списка, а туда, откуда пришли: подбор
-        # приезжает сюда в адресе карточки. Иначе поиск и фильтры слетали бы на каждой
-        # открытой книге — как было до этого.
+        # «Библиотека» — туда, откуда пришли: подбор приезжает в адресе карточки.
         "back_url": _list_url(request.GET),
-        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        # Закладка в шапке; что помечать — знает страница.
         "bookmark": bookmark_button(request.user, book),
         "may_edit": _may_edit(request.user, book),
         "may_moderate": _may_moderate(request.user),
@@ -145,8 +135,7 @@ def book_edit(request, pk=None):
     file_errors = []
     if request.method == "POST":
         file_errors = check_uploads(request.FILES.getlist("files")) + check_pending(request)
-        # Книга — это и есть файл. Без него она бесполезна, в отличие от материала,
-        # где есть текст и картинки.
+        # Книга без файла бесполезна (у материала есть текст).
         if not _files_left(request, book):
             file_errors.append("Добавь хотя бы один файл — без него книги не будет.")
         if form.is_valid() and not file_errors:
@@ -158,8 +147,7 @@ def book_edit(request, pk=None):
             book.save()
             form.save_m2m()
             sync_files(request, book)
-            # Модератор, публикуя своё новое или отклонённое, идёт МИМО book_review,
-            # где награда и дописывается (то же было и у материалов).
+            # Модератор, публикующий своё, идёт мимо book_review — награда здесь.
             if book.is_published:
                 rewards.sync(book.uploader)
                 if request.user != book.uploader:
@@ -201,8 +189,7 @@ def book_delete(request, pk):
 
 @require_POST
 def book_review(request, pk):
-    """Решение модератора. Отсюда и со страницы книги, и из общей очереди —
-    отвечаем по-разному: очередь ждёт htmx-кусок, страница книги — редирект."""
+    """Решение модератора: из очереди — htmx-кусок, со страницы книги — редирект."""
     if not _may_moderate(request.user):
         return HttpResponseForbidden("Проверять книги может только модерация.")
 

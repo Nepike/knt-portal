@@ -8,7 +8,7 @@
       <p class="text-xs text-slate-400 mt-0.5">Студент ^&amp;## курса</p>
     </div>
     {% else %}
-    {# TODO (M5 profiles): косметика — рамка аватара/фон карточки #}
+    {# TODO: косметика — рамка аватара и фон карточки. #}
     <a href="{% url 'profile' r.author_id %}">{% include "core/_avatar.html" with person=r.author box="w-10 h-10 rounded-lg ring-1 ring-slate-200 dark:ring-slate-700" text="text-sm" only %}</a>
     <div class="min-w-0 flex-1">
       <p class="font-medium text-sm leading-tight"><a href="{% url 'profile' r.author_id %}" class="hover:text-accent transition-colors">{{ r.author.full_name }}</a>{% if r.author_id == user.pk %} <span class="text-xs font-normal text-accent">— ваш отзыв</span>{% endif %}</p>

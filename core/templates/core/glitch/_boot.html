@@ -1,8 +1,6 @@
 {% comment %}
-  Экран «взлома» — раз в день при первом заходе (класс glitch-boot ставит
-  core/glitch/_head.html). Две с половиной секунды, уходит сам — анимацией, без скрипта:
-  не загрузись скрипт, страница всё равно откроется. Нажатие пропускает (boot в glitch.js).
-  Имя — только своё.
+  Экран «взлома» раз в день (класс glitch-boot ставит _head.html). Уходит сам анимацией,
+  без скрипта; нажатие пропускает (boot в glitch.js).
 {% endcomment %}
 <div class="skin-boot" aria-hidden="true" x-data="boot" @click="skip()" @animationend.self="skip()">
   <div class="skin-boot-lines">

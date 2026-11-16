@@ -25,12 +25,8 @@ PAGE_SIZE = 20  # материалов в порции
 
 
 def visible(user):
-    """Неопубликованный материал видят только автор и модерация.
-
-    Имя публичное: этим же запросом приложение комментариев проверяет, что человеку
-    вообще положено видеть обсуждение — иначе по прямому адресу можно было бы
-    открыть и лайкать чужой черновик.
-    """
+    """Неопубликованное видят только автор и модерация. Публичная: ею comments проверяет доступ
+    к обсуждению."""
     if _may_moderate(user):
         return Material.objects.all()
     return Material.objects.filter(Q(status=Material.Status.APPROVED) | Q(uploader=user))
@@ -63,8 +59,7 @@ def material_list(request):
     materials = filters.apply(materials, chosen)
     filters.narrow(form, visible(request.user), chosen)
 
-    # Год здесь — год, когда материал был актуален, поэтому свежие сверху; id последним,
-    # иначе на границе порций материалы с одинаковым ключом перескакивают.
+    # Свежий год сверху; id последним — иначе на границе порций одинаковые ключи перескакивают.
     ordered = materials.distinct().order_by("-year", "-created", "-id")
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
 
@@ -72,8 +67,7 @@ def material_list(request):
         "page": page, "materials": page.object_list, "form": form,
         # Фильтры едут в ссылку каждой карточки — со страницы материала есть куда вернуться.
         "filters": filters.query(request.GET),
-        # Заголовок года не должен повториться на стыке порций: сравниваем с годом
-        # элемента, стоящего прямо перед первым на этой странице.
+        # Год с конца прошлой порции: заголовок на стыке не повторяем.
         "carry_year": ordered[page.start_index() - 2].year if page.number > 1 else None,
     }
     if not request.headers.get("HX-Request"):
@@ -82,8 +76,7 @@ def material_list(request):
     if request.GET.get("page"):
         return render(request, "materials/_material_list.html", context)
 
-    # Сменили фильтр — вместе со списком возвращаем и сам блок фильтров: наборы вариантов
-    # в остальных селектах после этого другие.
+    # Сменили фильтр — вместе со списком и блок фильтров: варианты в селектах другие.
     response = render(request, "materials/_material_list.html", {**context, "refresh_filters": True})
     response["HX-Push-Url"] = filters.url(request)
     return response
@@ -99,14 +92,13 @@ def material_detail(request, pk):
     notifications.seen(request.user, material=material)
     return render(request, "materials/material_detail.html", {
         "material": material,
-        # Ссылка «Материалы» ведёт не в начало списка, а туда, откуда пришли: фильтры
-        # приезжают сюда в адресе карточки.
+        # «Материалы» — туда, откуда пришли: фильтры приезжают в адресе.
         "back_url": _list_url(request.GET),
         "may_edit": _may_edit(request.user, material),
         "may_moderate": _may_moderate(request.user),
-        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        # Закладка в шапке; что помечать — знает страница.
         "bookmark": bookmark_button(request.user, material),
-        # Лента — из приложения комментариев: она одна на материалы и лекции.
+        # Лента — из приложения comments.
         **comments_context(request.user, material),
     })
 
@@ -120,7 +112,7 @@ def material_edit(request, pk=None):
     form = MaterialForm(request.POST or None, instance=material)
     file_errors, image_errors = [], []
     if request.method == "POST":
-        # Файлов может не быть вовсе — в отличие от книги, у материала есть текст.
+        # Файлы не обязательны: у материала есть текст.
         file_errors = check_uploads(request.FILES.getlist("files")) + check_pending(request)
         image_errors = check_images(request.FILES.getlist("images"))
         if form.is_valid() and not file_errors and not image_errors:
@@ -134,9 +126,7 @@ def material_edit(request, pk=None):
             form.save_m2m()
             sync_files(request, material)
             sync_images(request, material)
-            # Модератор, публикуя своё новое или отклонённое, идёт МИМО material_review,
-            # где награда и дописывается. Без этого вызова токены за работу ждали бы
-            # следующего входа в систему — и человек решал бы, что их не дали вовсе.
+            # Модератор, публикующий своё, идёт мимо material_review — награда здесь.
             if material.is_published:
                 rewards.sync(material.uploader)
                 if request.user != material.uploader:

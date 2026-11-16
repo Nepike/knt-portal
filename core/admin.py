@@ -117,8 +117,7 @@ class FailureAdmin(admin.ModelAdmin):
 
 @admin.register(Inquiry)
 class InquiryAdmin(admin.ModelAdmin):
-    """Обращения из поддержки и контактов. Пишет их сама форма (core/inquiries.py); отсюда —
-    только смотреть, удалять и вернуть в чат живого человека, которого отсеял фильтр."""
+    """Обращения (пишет core/inquiries.py). Здесь — смотреть, удалять и вернуть отсеянное в чат."""
 
     list_display = ("created", "source", "verdict", "score", "who", "short")
     list_filter = ("verdict", "source")

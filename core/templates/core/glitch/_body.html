@@ -1,13 +1,7 @@
 {% load quest_extras %}
 {% comment %}
-  Глитч-скин, конец <body>.
-
-  Окна «ОТКАЗАНО» от запертого переключателя темы: каждое нажатие — ещё одно окно
-  лесенкой, до пяти, текст злее с каждым разом (denied в core/js/glitch.js). Имя — только
-  своё: «Илья, хватит.»
-
-  Данные для порчи названий карточек и пасхалки в консоли браузера — подсказки квеста
-  из базы (quest.Clue), под занавеской (veil в quest_extras). Читает их glitch.js.
+  Глитч-скин, конец <body>: окна «ОТКАЗАНО» от запертого переключателя темы (denied в
+  glitch.js) и подсказки квеста из базы под занавеской (veil) — их читает glitch.js.
 {% endcomment %}
 <div x-data="denied('{{ request.user.name|default:''|escapejs }}')" @skin-denied.window="add()"
      @keydown.escape.window="windows.pop()">

@@ -32,16 +32,13 @@ class CosmeticItemAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
-        # Прежние файлы снимаем после коммита: страница идёт одной транзакцией, и при
-        # откате запись останется со старым файлом. У формы списка поля stale нет.
+        # Прежние файлы — после коммита: при откате запись осталась бы со старым. У формы списка stale нет.
         for storage, name in getattr(form, "stale", ()):
             transaction.on_commit(partial(storage.delete, name))
 
     @admin.display(description="")
     def preview(self, obj):
-        """Обложка. В списке всегда картинка, даже у видео: страниц по 100 вещей,
-        и сотня автоплеев положила бы браузер. lazy тоже обязателен — вместе они
-        под 35 МБ, и без него список тянул бы весь каталог до первой отрисовки."""
+        """Обложка. В списке всегда картинка, даже у видео, и lazy: сотня автоплеев положила бы браузер."""
         return format_html(
             '<img src="{}" loading="lazy" style="width:56px;height:56px;background:#334">',
             media_url(obj.image),
@@ -49,8 +46,7 @@ class CosmeticItemAdmin(admin.ModelAdmin):
 
     @admin.display(description="как выглядит")
     def preview_big(self, obj):
-        """На странице вещи — то же, что увидит студент: видео играет, картинка стоит.
-        Вещь тут одна, автоплей ничего не перегрузит."""
+        """На странице вещи — как у студента: видео играет. Вещь одна, автоплей не перегрузит."""
         if not obj.pk:
             return "—"
         box = "width:280px;background:#334;border-radius:12px"
@@ -63,12 +59,12 @@ class CosmeticItemAdmin(admin.ModelAdmin):
 
     @admin.display(description="цена")
     def worth(self, obj):
-        """Своя цена или та, что вышла из вида и редкости, — чтобы не считать в уме."""
+        """Своя цена или по таблице вида и редкости."""
         return obj.cost if obj.price is not None else f"{obj.cost} (по таблице)"
 
     @admin.display(description="видео", boolean=True, ordering="video")
     def live(self, obj):
-        """В списке обложки стоячие, и без этой отметки не видно, какие вещи анимированы."""
+        """В списке обложки стоячие — отметка, какие вещи анимированы."""
         return bool(obj.video)
 
     @admin.display(description="у скольких", ordering="_owners")
@@ -107,8 +103,8 @@ class CaseAdmin(admin.ModelAdmin):
 
     @admin.display(description="шансы и средняя цена выпавшего")
     def odds_and_worth(self, obj):
-        """Чтобы цену кейса ставить не вслепую: средняя цена выпавшей вещи по нынешним
-        ценам — для того, у кого из набора ещё ничего нет. Считается по сохранённому набору."""
+        """Средняя цена выпавшей вещи по нынешним ценам — чтобы ставить цену кейса не вслепую.
+        По сохранённому набору."""
         items = list(obj.items.all()) if obj.pk else []
         if not items:
             return "набор пуст"

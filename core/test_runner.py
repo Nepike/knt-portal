@@ -8,26 +8,19 @@ from django.test.utils import override_settings
 
 
 class MediaIsolatedRunner(DiscoverRunner):
-    """Тесты пишут файлы во временный каталог и НИКОГДА в R2.
-
-    Хранилище у FileField выбирается один раз при импорте моделей, поэтому
-    override_settings его уже не переубедит — подменяем объект прямо в поле.
-    Проходим по ВСЕМ моделям, а не по списку: иначе новое файловое поле однажды
-    появится, про подмену забудут, и тесты молча полезут в боевой бакет.
-    """
+    """Тесты пишут файлы во временный каталог, никогда в R2. Хранилище FileField выбрано
+    при импорте моделей — подменяем его в полях ВСЕХ моделей, чтобы не забыть новое поле."""
 
     def setup_test_environment(self, **kwargs):
         super().setup_test_environment(**kwargs)
         from knt.celery import app as celery_app
 
-        # Фоновые задачи выполняем на месте: тестам не нужен ни Redis, ни воркер.
-        # propagates — чтобы упавшая задача валила тест, а не тонула в логе.
+        # Задачи выполняются на месте; propagates — упавшая задача валит тест.
         celery_app.conf.task_always_eager = True
         celery_app.conf.task_eager_propagates = True
 
         self._media = tempfile.TemporaryDirectory()
-        # SITE_THEME — обычный вид сайта, какой бы месяц ни стоял на календаре: скин тест
-        # включает явно. Иначе один и тот же набор в октябре и в ноябре проверял бы разное.
+        # Обычный вид сайта в любой месяц: скин тест включает сам.
         self._override = override_settings(MEDIA_ROOT=self._media.name, SITE_THEME="default")
         self._override.enable()
 

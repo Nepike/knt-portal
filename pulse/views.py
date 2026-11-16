@@ -68,8 +68,7 @@ def feed_page(request):
     events = feed.events(cursor or timezone.now(), [kind] if kind in feed.KINDS else None, who)
     actions.offered(events, request.user)
 
-    # День — заголовком над первой строкой дня. Предыдущий приезжает с курсором: иначе
-    # порция, начатая посреди дня, повторила бы его заголовок.
+    # День — заголовком над первой строкой дня; предыдущий приезжает с курсором, чтобы не повторить.
     today, previous = timezone.localdate(), request.GET.get("day", "")
     for event in events:
         event.day = _day(event.when, today)
@@ -96,8 +95,7 @@ def feed_page(request):
 
 
 def _done(request, text):
-    """Ответ на действие: htmx получает строку на месте карточки и тост, обычный
-    запрос — возврат в Сводку с сообщением."""
+    """Ответ на действие: htmx — строка на месте карточки и тост, обычный запрос — в Сводку."""
     if request.headers.get("HX-Request"):
         return render(request, "pulse/_done.html", {"text": text})
     messages.success(request, text)

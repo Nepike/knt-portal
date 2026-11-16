@@ -1,8 +1,5 @@
 {% extends "core/error.html" %}
-{% comment %}
-  Отказ проверки CSRF (django.views.csrf.csrf_failure). Обычный случай у нас — форма, открытая
-  до входа в другой вкладке: вход меняет ключ, и старая форма приходит с прежним.
-{% endcomment %}
+{# Отказ CSRF. Обычно — форма, открытая до входа в другой вкладке: вход меняет ключ. #}
 {% block title %}Форма устарела{% endblock %}
 {% block code %}403{% endblock %}
 {% block command %}./form --submit{% endblock %}

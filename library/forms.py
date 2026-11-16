@@ -9,7 +9,7 @@ from .models import Book
 
 
 class BookFilterForm(forms.Form):
-    """Фильтры списка. Поисковая строка живёт отдельно в шаблоне — у неё своя разметка с лупой."""
+    """Фильтры списка; строка поиска — в шаблоне, у неё своя разметка."""
 
     subject = forms.ModelChoiceField(
         label="Предмет", queryset=Subject.objects.all(), required=False, widget=AccentSelect(search=True),

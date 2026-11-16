@@ -1,7 +1,4 @@
-{% comment %}
-  Форма отдельным партиалом: при ошибках вьюха возвращает только её, htmx меняет
-  на месте. Успех — редирект, который HtmxMiddleware превращает в HX-Redirect.
-{% endcomment %}
+{# При ошибках htmx меняет форму на месте, успех — HX-Redirect. #}
 <form id="book-form" method="post" enctype="multipart/form-data" class="relative flex flex-col gap-5"
       hx-post="{{ request.path }}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="outerHTML"
       x-data="fileForm({{ upload_limits }}, {{ saved_files }})" @htmx:confirm="beforeSend($event)"
@@ -9,9 +6,8 @@
       @htmx:xhr:progress="track($event)">
   {% csrf_token %}
   {% comment %}
-    Пока файлы летят в хранилище, форму трогать нельзя: подложить ещё файлов —
-    значит не увидеть их в прогрессе. Накрываем, а не выключаем полями: disabled
-    у fieldset выкинул бы поля из отправки вместе с csrf и токенами.
+    Пока файлы летят, форма накрыта: новые файлы не попали бы в прогресс. Не disabled у fieldset —
+    тот выкинул бы из отправки и csrf, и токены.
   {% endcomment %}
   <div x-show="percent !== null" x-cloak @drop.prevent @dragover.prevent
        class="absolute inset-0 z-10 rounded-2xl bg-slate-50/50 dark:bg-slate-950/50 cursor-progress"></div>

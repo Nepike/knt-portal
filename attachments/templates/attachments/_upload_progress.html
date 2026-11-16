@@ -1,7 +1,4 @@
-{% comment %}
-  Общая шкала загрузки под кнопками формы. Тоже опирается на fileForm.
-  z-20 — выше накладки, иначе «Отменить» окажется под ней и не нажмётся.
-{% endcomment %}
+{# Шкала загрузки (fileForm). z-20 — выше накладки, иначе «Отменить» не нажмётся. #}
 <div x-show="percent !== null" x-cloak class="relative z-20 mt-3">
   <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
     <div class="h-full bg-accent transition-[width] duration-150" :style="{ width: percent + '%' }"></div>

@@ -39,7 +39,7 @@ class WeekFilter(admin.SimpleListFilter):
 class PrintJobAdmin(admin.ModelAdmin):
     list_display = ("created", "who", "name", "status", "pages", "sides", "price", "printer", "outside_m4")
     list_filter = ("status", WeekFilter, "printer", "outside_m4")
-    # Человек — поиском, а не фильтром: список фильтра вывел бы сбоку все триста фамилий.
+    # Человек — поиском: фильтр вывел бы все триста фамилий.
     search_fields = ("user__email", "user__surname", "user__name", "name")
     list_select_related = ("user", "printer")
     actions = ("mark_failed",)
@@ -59,8 +59,7 @@ class PrintJobAdmin(admin.ModelAdmin):
 
     @admin.action(description="Пометить «не вышло» (страницы вернутся в лимит)")
     def mark_failed(self, request, queryset):
-        # Для `unknown`, когда у лотка проверили, что листов нет, и для зависшего в очереди.
-        # Напечатанное и закрытое не трогаем: «не вышло» про done было бы неправдой.
+        # Для `unknown` (у лотка листов нет) и зависшего. Напечатанное и закрытое не трогаем.
         stuck = queryset.filter(status__in=(*PrintJob.ACTIVE, PrintJob.Status.UNKNOWN))
         done = stuck.update(
             status=PrintJob.Status.FAILED, reason="отмечено вручную в админке", finished_at=timezone.now(),
@@ -70,8 +69,7 @@ class PrintJobAdmin(admin.ModelAdmin):
 
 @admin.register(PrintAccount)
 class PrintAccountAdmin(admin.ModelAdmin):
-    # Запретить печать: «Добавить», найти человека, галочка. Если строка уже есть — галочка
-    # прямо в списке.
+    # Запретить печать: «Добавить», найти человека, галочка; у существующей строки — галочка в списке.
     list_display = ("user", "weekly_limit", "banned", "this_week")
     list_editable = ("banned",)
     list_filter = ("banned",)

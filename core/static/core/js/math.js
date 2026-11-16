@@ -1,5 +1,4 @@
-// Формулы в тексте. arithmatex (core/markup.py) уже вынул их из-под разбора markdown
-// и вернул обёрнутыми в \( \) и \[ \] — автоподстановщику остаётся пройтись по .prose.
+// Формулы: arithmatex (core/markup.py) уже обернул их в \( \) и \[ \] — KaTeX проходит по .prose.
 function renderMath(root) {
   const blocks = root.matches(".prose") ? [root] : root.querySelectorAll(".prose");
   blocks.forEach((element) =>
@@ -17,8 +16,7 @@ function renderMath(root) {
 // Скрипт грузится с defer, поэтому слушатель успевает встать до DOMContentLoaded.
 document.addEventListener("DOMContentLoaded", () => renderMath(document.body));
 
-// Комментарий, добавленный или исправленный без перезагрузки, приезжает куском через htmx.
-// Саму страницу htmx тоже объявляет загруженной — её уже отрисовал слушатель выше.
+// Куски htmx (комментарий без перезагрузки); саму страницу уже отрисовал слушатель выше.
 document.addEventListener("htmx:load", (event) => {
   if (event.detail.elt !== document.body) renderMath(event.detail.elt);
 });

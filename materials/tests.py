@@ -136,7 +136,6 @@ class MaterialListTests(TestCase):
         self.assertContains(response, f"{self.lectures.get_absolute_url()}?term={self.first.pk}")
 
     def test_the_card_names_who_uploaded_it_unless_asked_not_to(self):
-        # По фамилии загрузившего материалы ищут не реже, чем по предмету.
         uploader = make_user("up@t.local")
         uploader.surname = "Загрузчиков"  # не «Иванов»: тот же ФИО и у того, кто смотрит
         uploader.save(update_fields=["surname"])
@@ -161,8 +160,7 @@ class MaterialListTests(TestCase):
         self.assertNotContains(chunk, "hx-swap-oob")
 
     def test_there_is_no_search_by_title_here(self):
-        """Поиск по названию есть в лектории и библиотеке; в материалах ищут фильтрами.
-        Чужой `q` из адреса поэтому ничего не отбирает и в ссылки не переносится."""
+        """Поиска по названию тут нет: чужой `q` ничего не отбирает и в ссылки не переносится."""
         page = self.get(q="физике")
 
         self.assertNotContains(page, 'name="q"')
@@ -233,7 +231,6 @@ class MaterialDetailTests(TestCase):
         return material
 
     def test_the_back_link_returns_to_the_same_selection(self):
-        # Ссылка «Материалы» вела в начало списка и стирала подбор, с которым сюда пришли.
         material = self.make()
         self.client.force_login(self.reader)
 
@@ -432,7 +429,6 @@ class GalleryTests(TestCase):
         self.assertFalse(Image.objects.filter(pk=first.pk).exists())
 
     def test_a_photo_browsers_cannot_show_is_refused_with_a_reason(self):
-        """Так на сайт попал HEIC: у картинок галереи проверялся только размер."""
         from attachments.tests import heic
 
         response = self.client.post(reverse("material_new"), self.fields(images=heic()))
@@ -449,9 +445,8 @@ class GalleryTests(TestCase):
         self.assertFalse(Image.objects.exists())
 
     def test_the_key_takes_its_extension_from_the_content_and_not_the_name(self):
-        """По расширению ключа объекту назначается тип. Снимок, названный «фото.txt»,
-        иначе уехал бы браузеру текстом — и на его месте был бы пустой квадрат. А имени
-        в ключе нет вовсе: ключ читается из адреса картинки (attachments.uploads.scrubbed)."""
+        """Тип объекта — по расширению ключа, а оно — по содержимому. Имени в ключе нет: ключ
+        читается из адреса картинки (attachments.uploads.scrubbed)."""
         self.client.post(reverse("material_new"), self.fields(images=make_image("Иванов_фото.txt")))
 
         image = Image.objects.get()
@@ -483,9 +478,7 @@ class GalleryTests(TestCase):
 
 
 class SelfPublishRewardTests(TestCase):
-    """Модератор, публикуя работу своей же правкой, идёт МИМО material_review — там
-    награда и дописывалась. Токенов не было до следующего входа в систему, и человек
-    решал, что их не дали вовсе."""
+    """Модератор, публикуя своё правкой, идёт мимо material_review — награду даёт material_edit."""
 
     @classmethod
     def setUpTestData(cls):

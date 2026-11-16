@@ -1,5 +1,4 @@
-"""«Сводка» Пульса: цифры периода из живых таблиц. Ночного снимка нет намеренно —
-график по дням не стоит отдельной таблицы, а всё остальное считается на лету."""
+"""«Сводка» Пульса: цифры периода из живых таблиц, без ночного снимка."""
 
 from datetime import timedelta
 
@@ -25,8 +24,7 @@ from users.models import LoginEvent, User, UserSession
 
 PERIODS = {"day": "Сегодня", "week": "7 дней", "month": "30 дней"}
 DEFAULT = "week"
-# Столько молчания — и человек уже не «на сайте». Отметка активности освежается раз
-# в пять минут (users/sessions.py), меньше брать бессмысленно.
+# Столько молчания — и человек уже не «на сайте»: отметка активности свежеет раз в пять минут.
 ONLINE = timedelta(minutes=15)
 # За столько дней до срока оплаты он попадает в «Требует внимания».
 DEADLINE_SOON = 14
@@ -40,8 +38,7 @@ def since(period, now=None):
 
 
 def _visited(edge):
-    """Заходившие с edge: по последнему входу и по отметке активности сессий. Одного
-    входа мало — сессия живёт две недели, и человек ходит по сайту, не входя заново."""
+    """Заходившие с edge: по входу и по активности сессий — сессия живёт две недели без входа."""
     return User.objects.filter(is_active=True).filter(Q(last_login__gte=edge) | Q(sessions__seen__gte=edge)).distinct()
 
 
@@ -137,7 +134,7 @@ def attention(edge, now=None):
     state = f"в очереди {jobs['queued']}" if jobs["queued"] else "очередь пуста"
     if jobs["failed"]:
         state += f" · не вышло {jobs['failed']}"
-    # Своя неполадка пекарни и её молчание — важнее счёта заданий: работа из-за них стоит.
+    # Неполадка и молчание пекарни — важнее счёта заданий.
     troubles = [f"{name}: {problem}" for name, problem in Bakery.objects.exclude(problem="").values_list("name", "problem")]
     if health.silent():
         troubles.append("молчит, а записи ждут")

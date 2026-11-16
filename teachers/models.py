@@ -121,8 +121,7 @@ class Review(models.Model):
         return f"{self.author} → {self.teacher}"
 
     def is_detailed(self):
-        """Есть что читать — текст или картинка. Такие отзывы видны всегда и им ставят
-        лайки; голые оценки сворачиваются под кнопку."""
+        """Есть текст или картинка: такие видны всегда и их лайкают; голые оценки свёрнуты."""
         return bool(self.text or self.image)
 
     def overall(self):

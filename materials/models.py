@@ -29,8 +29,7 @@ class Material(Moderated):
     year = models.PositiveSmallIntegerField("год", default=current_year)
     created = models.DateTimeField("дата добавления", default=timezone.now)
 
-    # Файлы и изображения материала — в приложении attachments (File/Image с FK сюда),
-    # доступ по related_name: material.files, material.images
+    # Файлы и картинки — приложение attachments: material.files, material.images.
 
     class Meta:
         verbose_name = "материал"
@@ -43,5 +42,4 @@ class Material(Moderated):
     def get_absolute_url(self):
         return reverse("material_detail", args=[self.pk])
 
-    # Обсуждение живёт в приложении `comments` — одно на материалы и лекции,
-    # доступ по related_name: material.comments
+    # Обсуждение — приложение comments: material.comments.

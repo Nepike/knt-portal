@@ -24,8 +24,7 @@ class AnnouncementForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Курсы — по нынешнему составу групп, как на странице студентов: «6 курс», за которым
-        # никого нет, предлагать незачем.
+        # Курсы — по нынешнему составу групп, как на странице студентов.
         self.fields["courses"].choices = course_choices()
 
     def clean_link(self):

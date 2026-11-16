@@ -19,10 +19,7 @@
         {% include "core/inputs.html" with field=form.courses %}
         {% include "core/inputs.html" with field=form.teams %}
       </div>
-      {% comment %}
-        Сколько получат — пересчитывается при каждом выборе курса или группы: разослать
-        всем по ошибке, забыв выбрать курс, — то, от чего эта строка и стоит над кнопкой.
-      {% endcomment %}
+      {# Сколько получат — пересчитывается на каждый выбор: против рассылки всем по ошибке. #}
       <p class="text-sm font-medium" hx-post="{% url 'pulse_announcement_audience' %}" hx-trigger="load, change from:closest form"
          hx-include="closest form" hx-swap="innerHTML">&nbsp;</p>
       <div><button type="submit" class="btn btn-primary"><i class="fa-solid fa-bullhorn"></i>Разослать</button></div>
@@ -40,7 +37,7 @@
         {{ one.created|date:"j E, H:i" }} · {% if one.author %}{{ one.author.full_name }}{% else %}—{% endif %} · {{ one.audience }}
       </p>
       <a href="{{ one.get_absolute_url }}" class="text-sm line-clamp-3 hover:text-accent">{{ one.text|markdown|striptags }}</a>
-      {# div, а не p: форма внутри p закрывает абзац, и кнопки выпадали из скрытого подтверждения #}
+      {# div, а не p: форма внутри p закрывает абзац #}
       <div class="text-xs text-slate-500 dark:text-slate-400">
         получили {{ one.sent }} · прочитали {{ one.read }}
         {% if may_remove %}

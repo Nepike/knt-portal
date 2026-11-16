@@ -7,9 +7,8 @@ register = template.Library()
 
 @register.simple_tag
 def error_skin():
-    """Скин страницы ошибки. 400 и 500 Django рисует вовсе без контекста — без запроса и без
-    context processors, — поэтому день считаем здесь сами. Из событийных скинов на ошибки
-    идёт только глитч: потёки хэллоуина там были не к месту, а «взлом» — к месту."""
+    """Скин страницы ошибки. 400 и 500 Django рисует без контекста — день считаем сами.
+    На ошибки идёт только глитч."""
     theme, classes = today()
     if theme != "glitch":
         return {"theme": "default", "classes": ""}
@@ -18,11 +17,7 @@ def error_skin():
 
 @register.tag
 def capture(parser, token):
-    """{% capture имя %}…{% endcapture %} — отрисованное содержимое в переменную.
-
-    Нужен там, где содержимое блока требуется дважды: блок с одним именем в шаблоне
-    бывает только один.
-    """
+    """{% capture имя %}…{% endcapture %} — отрисованное в переменную: когда блок нужен дважды."""
     bits = token.split_contents()
     if len(bits) != 2:
         raise template.TemplateSyntaxError("capture ждёт одно имя: {% capture имя %}")

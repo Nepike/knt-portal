@@ -1,7 +1,4 @@
-{% comment %}
-  Оценки записи. Кнопки заменяют сами себя ответом сервера — счётчик и подсветка
-  приезжают уже посчитанными, и на клиенте ничего складывать не надо.
-{% endcomment %}
+{# Оценки записи: кнопки заменяет ответ сервера, счётчик уже посчитан. #}
 <div id="lecture-reactions" class="flex items-center gap-2 mt-3">
   <button type="button" hx-post="{% url 'lecture_like' lecture.pk %}"
           hx-target="#lecture-reactions" hx-swap="outerHTML"

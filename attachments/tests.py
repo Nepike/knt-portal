@@ -1,7 +1,4 @@
-"""Прямая загрузка в хранилище: подпись ссылки и приём уже загруженного файла.
-
-Владельцем берём книгу — она проще всех, но проверяется код attachments.
-"""
+"""Вложения: хранилище, адреса, раздача, загрузки, очистка картинок. Владелец в тестах — книга."""
 import ast
 import json
 import os
@@ -294,11 +291,7 @@ class MediaImageTests(TestCase):
 
 @override_settings(FILES_BASE_URL="https://files.example", ALLOWED_HOSTS=["testserver", "files.example"])
 class FilesHostTests(TestCase):
-    """Загруженное людьми отдаётся только с домена файлов.
-
-    Подпись от домена не зависит, и тот же адрес открывался на домене сайта — то есть
-    чужой файл оказывался в одном origin с куками сессии.
-    """
+    """Загруженное людьми — только с домена файлов: иначе чужой файл в одном origin с куками сессии."""
 
     def setUp(self):
         key = file_storage().save("images/board.png", ContentFile(b"png"))
@@ -378,8 +371,7 @@ OURS = "https://knt-mipt.ru"
 
 
 class ManifestRewriteTests(SimpleTestCase):
-    """Плеер идёт по именам, написанным в манифесте, а у нас каждый адрес подписан —
-    значит манифест нельзя отдать как есть."""
+    """Манифест переписывается: у нас каждый адрес подписан."""
 
     def rewritten(self, text, key="lectures/abc/0/index.m3u8"):
         return hls.rewrite(key, text).splitlines()
@@ -391,8 +383,7 @@ class ManifestRewriteTests(SimpleTestCase):
         self.assertEqual(hls_key(lines[4].split("/")[2]), "lectures/abc/0/seg00000.m4s")
 
     def test_the_address_inside_a_tag_is_rewritten_too(self):
-        """`#EXT-X-MAP` — это init-кусок, без которого сегменты не декодируются вовсе,
-        а лежит его имя внутри тега, не отдельной строкой."""
+        """`#EXT-X-MAP` — init-кусок; его имя внутри тега, не отдельной строкой."""
         line = next(x for x in self.rewritten(MEDIA_PLAYLIST) if x.startswith("#EXT-X-MAP"))
 
         self.assertIn("/hls/", line)
@@ -453,12 +444,8 @@ class HlsDeliveryTests(TestCase):
         self.assertEqual(self.client.get(hls_url("lectures/abc/net.m3u8")).status_code, 404)
 
     def test_a_segment_is_cached_by_the_browser_for_good(self):
-        """Без `immutable` браузер держит сегмент, но на каждый переспрашивает
-        «не изменилось?» — и запрос всё равно доходит до нас. На пересмотре лекции
-        это лишний круг на каждые 6 секунд видео, поймано на боевом трафике.
-
-        Врать тут нечем: в ключе uuid, перезапись запрещена, а подпись входит в адрес —
-        сменится ключ подписи, сменится и адрес."""
+        """Без `immutable` браузер на каждый сегмент переспрашивает «не изменилось?». Врать
+        нечем: в ключе uuid, перезапись запрещена, подпись входит в адрес."""
         with override_settings(MEDIA_ACCEL=True):
             rule = self.client.get(hls_url(self.segment))["Cache-Control"]
 
@@ -466,9 +453,8 @@ class HlsDeliveryTests(TestCase):
         self.assertIn("max-age=31536000", rule)
 
     def test_without_nginx_the_segment_is_not_cached_for_a_year(self):
-        """Так живёт разработка: ответ — редирект на подписанную ссылку хранилища,
-        а та живёт сутки. Год кеша означал бы, что назавтра браузер идёт по протухшей
-        подписи и видео молча перестаёт заводиться."""
+        """В dev ответ — редирект на подписанную ссылку хранилища, она живёт сутки: год кеша
+        означал бы протухшую подпись назавтра."""
         response = self.client.get(hls_url(self.segment))
 
         self.assertEqual(response.status_code, 302)
@@ -526,12 +512,8 @@ class PlayerHeadersTests(TestCase):
         return hls_url(file_storage().save("lectures/abc/0/seg_1.m4s", ContentFile(b"x")))
 
     def test_a_segment_under_nginx_carries_no_permission_of_ours(self):
-        """Байты сегмента идут из хранилища мимо нас, и разрешение ставит nginx.
-
-        Наш заголовок туда всё равно не доезжает, зато остаётся ВТОРЫМ источником
-        одного и того же. Однажды оба сработали разом, браузер увидел два разрешения,
-        счёл это ошибкой и отверг ответ — так лекторий и лёг 30.08.2026.
-        """
+        """Под nginx разрешение ставит nginx; наше стало бы вторым, а два разрешения браузер
+        отвергает."""
         with override_settings(MEDIA_ACCEL=True):
             response = self.client.get(self.segment(), headers={"Origin": OURS})
 
@@ -552,9 +534,7 @@ class PlayerHeadersTests(TestCase):
             self.assertEqual(self.get()["Access-Control-Allow-Origin"], OURS)
 
     def test_a_segment_is_declared_a_video_and_not_a_form(self):
-        """`.m4s` не знает ни один mimetypes, и без своего списка сегмент уезжал
-        браузеру как `application/octet-stream`, а из хранилища — и вовсе как
-        `application/x-www-form-urlencoded`."""
+        """`.m4s` не знает ни один mimetypes: без своего списка сегмент уезжал бы чем попало."""
         with override_settings(MEDIA_ACCEL=True):
             response = self.client.get(self.segment())
 
@@ -629,9 +609,7 @@ class R2StorageTests(SimpleTestCase):
         self.assertIsInstance(media_storage(), R2Storage)
 
     def test_every_thread_shares_one_connection(self):
-        """Под ASGI каждый запрос — свой новый поток. Соединение на поток значило сессию
-        boto3 на каждую картинку: ~240 мс процессора и воркер web с 130 до ~360 МБ за пару
-        часов (замер 7 ноя 2026)."""
+        """Под ASGI каждый запрос — свой поток; соединение на поток — сессия boto3 на каждую картинку."""
         storage = r2_storage()
         seen, links = [], []
 
@@ -666,12 +644,8 @@ NGINX_BUILTIN = {"uri", "host", "slice_range", "upstream_cache_status", "http_or
 
 
 class NginxConfigTests(SimpleTestCase):
-    """Два файла nginx связаны переменными, и разъезжаются они молча.
-
-    Проверять здесь, а не на сервере, потому что там это уже авария: сниппет, попросивший
-    переменную, которой нет, роняет ВЕСЬ nginx — вместе с двумя чужими сайтами на той же
-    машине. Ровно так и вышло 30.08.2026.
-    """
+    """Два файла nginx связаны переменными. Необъявленная переменная роняет весь nginx,
+    вместе с чужими сайтами на той же машине."""
 
     def setUp(self):
         root = settings.BASE_DIR
@@ -684,8 +658,7 @@ class NginxConfigTests(SimpleTestCase):
             re.findall(r"^\s*set\s+\$(\w+)\s", text, re.M))
 
     def used(self, text):
-        """Переменные, которые файл читает. Строки-комментарии не в счёт — там и примеры,
-        и рассказ о том, чего в конфиге уже нет."""
+        """Переменные, которые файл читает. Строки-комментарии не в счёт."""
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         return {name for name in re.findall(r"\$(\w+)", code) if not name.isdigit()}
 
@@ -749,13 +722,8 @@ class NginxConfigTests(SimpleTestCase):
         self.assertNotIn("/srv/knt/media", self.code(self.site))
 
     def test_the_cors_map_says_the_same_as_the_settings(self):
-        """Список источников в nginx — вынужденная копия CSRF_TRUSTED_ORIGINS: настроек
-        Django nginx не читает. Копия, за которой никто не следит, однажды разъедется,
-        и лекции перестанут заводиться ровно на том домене, что забыли.
-
-        Читаем prod.py разбором, а не импортом: боевые настройки требуют переменных
-        окружения, которых в тестах нет.
-        """
+        """Список источников в nginx — копия CSRF_TRUSTED_ORIGINS: настроек Django nginx не
+        читает. prod.py читаем разбором: боевые настройки требуют переменных окружения."""
         block = re.search(r"map \$http_origin \$cors_origin \{(.*?)\}", self.site, re.S)
         in_nginx = set(re.findall(r'"(https://[^"]+)"\s+"https://', block.group(1)))
 
@@ -768,13 +736,10 @@ class NginxConfigTests(SimpleTestCase):
         self.assertEqual(in_nginx, set(ast.literal_eval(found.value)))
 
 
-# Бакет объявляем явно: без него ручки загрузки честно отвечают «прямая загрузка
-# недоступна», и весь этот набор проверял бы только эту ветку. Настоящий R2_BUCKET
-# берётся из .env, а он есть не у каждого, кто запускает тесты.
+# Бакет — явно: без него ручки отвечают «прямая загрузка недоступна», и набор проверял бы только это.
 @override_settings(R2_BUCKET="knt-files")
 class MultipartTests(TestCase):
-    """Многочастная загрузка: сырьё лекции — гигабайты, одним PUT такое не принять,
-    а главное — на сорока минутах отдачи связь оборвётся почти наверняка."""
+    """Многочастная загрузка: сырьё лекции — гигабайты, а за час отдачи связь оборвётся."""
 
     def setUp(self):
         self.user = make_user()
@@ -949,7 +914,7 @@ class UploadLimitTests(TestCase):
         self.user = make_user()
 
     def test_an_ordinary_person_keeps_the_ordinary_ceiling(self):
-        """Самый большой файл материала на проде — 319 МБ (7 ноя 2026), а было 4 ГБ на файл."""
+        """Обычному человеку — потолок материала, а не одиночного PUT."""
         with mock.patch("attachments.uploads.direct_upload", return_value=True):
             self.assertEqual(max_upload_size(self.user), MAX_MATERIAL_SIZE)
 
@@ -1007,10 +972,7 @@ class ScheduleTests(TestCase):
 
 
 class DropPrefixBatchTests(SimpleTestCase):
-    """Ветка для бакета: поштучно у двухчасовой лекции это 2400 запросов в чужую сеть.
-
-    Локальным хранилищем её не проверить — а работать она будет как раз на бою.
-    """
+    """Ветка для бакета: поштучно у двухчасовой лекции — 2400 запросов. На диске её не проверить."""
 
     def test_keys_go_in_batches_of_a_thousand(self):
         storage = fake_storage()
@@ -1049,12 +1011,8 @@ def _chunk(kind, data):
 
 
 def huge_png(width, height, name="огромная.png"):
-    """PNG, чей заголовок обещает width×height точек, а пикселей внутри нет.
-
-    Такой и шлёт нападающий: проверка по заголовку должна отказать до разбора. Настоящая
-    картинка на сотню мегапикселей заняла бы в тесте столько же памяти, от скольких
-    защищает проверка. open и verify его принимают: verify сверяет только суммы кусков.
-    """
+    """PNG, чей заголовок обещает width×height точек, а пикселей внутри нет — как от
+    нападающего. open и verify его принимают: verify сверяет только суммы кусков."""
     raw = (
         b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 1, 0, 0, 0, 0))
@@ -1589,10 +1547,8 @@ class AdoptUploadTests(TestCase):
         self.assertFalse(storage.exists(forgotten))
 
     def test_cleanup_leaves_alone_a_recording_still_waiting_for_the_bakery(self):
-        """Сырьё лекции записью `File` не становится вовсе — оно живёт ключом в задании
-        и ждёт, когда за ним придёт пекарня. А пекарня может стоять выключенной неделю:
-        без этой оговорки уборка сносила бы сырьё из-под очереди, и лекция падала бы
-        с «нет такого файла» вместо того, чтобы испечься."""
+        """Сырьё лекции записью `File` не становится — оно ждёт пекарню ключом в задании,
+        иногда неделю."""
         queued = self.put(key="uploads/queued/Лекция.mkv")
         baked = self.put(key="uploads/baked/Испечённая.mkv")
         MediaJob.objects.create(recipe="lecture", source=queued)
@@ -1604,13 +1560,11 @@ class AdoptUploadTests(TestCase):
         call_command("clean_uploads", "--apply", verbosity=0)
 
         self.assertTrue(storage.exists(queued))
-        # У закрытого задания сырьё снимает своя задача сразу после `commit`; если она
-        # почему-то не доехала, остаток — обычная сирота, за неё эта команда и отвечает.
+        # У закрытого задания остаток сырья — обычная сирота.
         self.assertFalse(storage.exists(baked))
 
     def test_cleanup_keeps_the_source_of_a_job_that_did_not_work_out(self):
-        """Задание возвращают в очередь из админки — «поставил ждёт, и следующая пекарня
-        возьмёт снова». Без сырья такой повтор просто упал бы второй раз."""
+        """Задание возвращают в очередь из админки — без сырья повтор упал бы снова."""
         key = self.put(key="uploads/failed/Лекция.mkv")
         MediaJob.objects.create(recipe="lecture", source=key, status=MediaJob.Status.FAILED)
         os.utime(file_storage().path(key), (0, 0))
@@ -1627,8 +1581,7 @@ class AdoptUploadTests(TestCase):
         return prefix
 
     def test_cleanup_sweeps_a_set_nobody_points_at(self):
-        """Имя папке даёт приёмка и тут же пишет его в задание. Осталась без хозяина —
-        значит хозяина потеряли, а весит она гигабайты и в базе её больше нет нигде."""
+        """Папка без хозяина весит гигабайты, а в базе о ней больше ни строки."""
         orphan = self.stale_set("lectures/бесхозный")
 
         call_command("clean_uploads", "--apply", verbosity=0)
@@ -1678,8 +1631,7 @@ class BlobCleanupTests(TestCase):
         self.assertFalse(self.storage.exists(key))
 
     def test_photo_of_a_user_is_dropped(self):
-        # Фото живёт в чужом приложении: раньше сигнал был только на File и Image,
-        # и такие блобы оставались в бакете навсегда.
+        # Фото живёт в чужом приложении — сигнал висит на всех файловых полях.
         self.user.photo = ContentFile(b"png", name="avatar.png")
         self.user.save()
         key = self.user.photo.name
@@ -1743,9 +1695,8 @@ class BlobCleanupTests(TestCase):
             self.assertTrue(key.endswith(".pdf"), key)
 
     def test_a_direct_upload_key_fits_it_too(self):
-        """Прямая загрузка ходит мимо `upload_to` и кладёт ключ в поле сама. Имя ей
-        приходит от браузера, обрезанное только до 150 символов, — и без этой же мерки
-        обычный студенческий заголовок давал пятисотку вместо сохранённого материала."""
+        """Прямая загрузка кладёт ключ в поле сама, мимо `upload_to`, а имя от браузера —
+        до 150 символов: ключ обязан влезть в поле."""
         long_name = "Конспект по общей физике. Механика и термодинамика. 1 семестр 2024.pdf"
         key = new_key(long_name)
 
@@ -1754,7 +1705,7 @@ class BlobCleanupTests(TestCase):
         self.assertTrue(key.endswith(".pdf"), key)
         # Папка на ключ по-прежнему своя: по ней `drop_source` снимает сырьё целиком.
         self.assertEqual(len(key.split("/")), 3, key)
-        # И он правда ложится в базу — ради этого всё и затевалось.
+        # И он правда ложится в базу.
         book = Book.objects.create(title="Книга", status=Book.Status.APPROVED, uploader=self.user)
         File.objects.create(book=book, name="конспект", file=key, size=1)
 
@@ -1824,8 +1775,7 @@ class BucketCleanupTests(TestCase):
         )
 
     def test_uploads_under_another_prefix_are_not_even_listed(self):
-        """Бакет у разработки и прода один: уборка из разработки иначе оборвала бы
-        загрузки, которые прямо сейчас идут на проде."""
+        """Бакет у dev и прода один: уборка из dev оборвала бы загрузки прода."""
         _, api = self.clean(location="dev")
         self.assertEqual(api.list_multipart_uploads.call_args.kwargs["Prefix"], "dev/")
 

@@ -1,18 +1,11 @@
 {% load attachment_extras %}
 {% comment %}
-  Выбор аватара. Ждёт `field` (скрытое поле с готовым квадратом), `file_field` (запасной
-  путь для гифок), `person` (чьё фото уже в базе) и `limit` (сколько влезает в POST).
-
-  Обычная картинка режется на клиенте и уезжает строкой в `field`, а сам файл из input
-  вычищается — см. avatarPick в core/static/core/js/components.js. Гифка наоборот:
-  канвас взял бы из неё один кадр, поэтому она остаётся в файловом поле и едет как есть.
+  Выбор аватара. Ждёт `field` (скрытое поле с квадратом), `file_field` (гифки), `person` и
+  `limit`. Картинка режется на клиенте (avatarPick в components.js); гифка едет файлом как есть.
 {% endcomment %}
 <div x-data="avatarPick('{{ person.photo|media }}', {{ limit }})" class="flex flex-col items-center gap-3">
 
-  {% comment %}
-    Окошко кадра нарисовано всегда, даже когда файла ещё нет: fit() меряет по нему
-    сторону, а у скрытого через x-show элемента ширина нулевая.
-  {% endcomment %}
+  {# Окошко кадра есть всегда: fit() меряет по нему сторону, а у скрытого x-show ширина нулевая. #}
   <div x-ref="frame"
        @pointerdown="down($event)" @pointermove="move($event)"
        @pointerup="up($event)" @pointercancel="up($event)" @wheel.prevent="wheel($event)"
@@ -28,7 +21,7 @@
 
   <input x-ref="out" type="hidden" name="{{ field.html_name }}">
 
-  {# Ползунок масштаба. x-model не берём: он пишет scale ДО обработчика, и zoom() увидел бы уже новое значение вместо прежнего #}
+  {# Ползунок без x-model: тот пишет scale до обработчика, и zoom() не увидел бы прежнее значение #}
   <div x-show="picked && !whole" x-cloak class="flex items-center gap-3 w-56">
     <i class="fa-solid fa-image text-[10px] text-slate-400"></i>
     <input type="range" :min="min" :max="max" :step="(max - min) / 100" :value="scale"

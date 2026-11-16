@@ -272,7 +272,7 @@ class RewardTests(TestCase):
         return sum(row.amount for row in rows)
 
     def test_everyone_gets_the_welcome_grant(self):
-        # Иначе у 253 человек из 328 не было бы ни одной покупки: они ничего не заливали.
+        # Стартовые — каждому, даже ничего не заливавшему.
         rewards.sync(self.user)
 
         self.assertEqual(wallet_of(self.user).balance, rewards.WELCOME)
@@ -304,11 +304,8 @@ class RewardTests(TestCase):
         )
 
     def test_a_deleted_material_does_not_block_the_next_one(self):
-        """Награда считается ПОШТУЧНО, а не суммой по причине.
-
-        Иначе выходило бы так: человек удалил свой материал, залил новый — число
-        материалов вернулось к прежнему, «положено» тоже, и за новую работу не заплатили.
-        """
+        """Награда ПОШТУЧНО, а не суммой по причине: иначе за новую работу после удаления
+        старой не заплатили бы."""
         first = self.material()
         rewards.sync(self.user)
         first.delete()
@@ -467,8 +464,7 @@ class RewardTests(TestCase):
         self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_CAP * 2)
 
     def test_downloads_of_different_files_add_up(self):
-        """Награда не на файл: иначе журнал зарастал столбиком «+1 скачивают
-        «Программа.pdf»» — 20562 строки на боевых данных."""
+        """Награда не на файл: иначе журнал зарос бы строками «+1 скачивают»."""
         each = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN // 2  # по половине порции
         self.downloaded(each, each)
         rewards.sync(self.user)
@@ -533,11 +529,8 @@ class RewardTests(TestCase):
         self.assertEqual(self.paid(BalanceLog.Reason.DOWNLOAD), rewards.DOWNLOAD_BATCH)
 
     def test_the_remainder_is_not_lost_it_waits(self):
-        """Остаток ниже порога не пропадает: он копится и уходит следующей порцией.
-
-        Файлов тут два, потому что порция равна потолку на файл: одним больше 50 токенов
-        не заработать, и полторы порции набираются только вдвоём.
-        """
+        """Остаток ниже порога копится до следующей порции. Файлов два: порция равна потолку
+        на файл, и полторы порции набираются только вдвоём."""
         step = rewards.DOWNLOAD_BATCH * rewards.DOWNLOADS_PER_COIN
         self.downloaded(step, step // 2)  # порция с половиной
         rewards.sync(self.user)
@@ -577,9 +570,7 @@ class RewardTests(TestCase):
         )
 
     def test_an_approved_course_is_worth_five_materials(self):
-        """Снять пару, дотащить гигабайты до сайта и дождаться выпечки — работа другого
-        порядка, чем выложить конспект. Было вдесятеро, но курсы сделали самые толстые
-        кошельки на сайте, и 18 окт 2026 пользователь снизил награду вдвое."""
+        """Курс — работа другого порядка, чем конспект: награда как за пять материалов."""
         self.course()
         rewards.sync(self.user)
 
@@ -597,9 +588,8 @@ class RewardTests(TestCase):
         self.assertEqual(self.paid(BalanceLog.Reason.PLAYLIST), 500)
 
     def test_a_course_cut_down_to_the_new_rate_gives_back_only_the_rest(self):
-        """Так пересчитаны курсы, оплаченные по 500: строка «−250» с ключом того же курса.
-        Доплачивать её назад sync не станет, а автор, удаливший такой курс сам, отдаёт
-        оставшиеся 250, а не все 500."""
+        """Курс, срезанный строкой «−250» с его ключом: sync её не доплатит, а удаливший
+        автор отдаст оставшиеся 250, а не 500."""
         with mock.patch.object(rewards, "PLAYLIST", 500):
             course = self.course()
             rewards.sync(self.user)
@@ -702,8 +692,7 @@ class RecountCommandTests(TestCase):
 
 
 class WalletPageTests(TestCase):
-    """Полная история кошелька. Отдельная страница нужна была профилю: там влезает
-    десяток последних операций, а по журналу человек ищет конкретную."""
+    """Полная история кошелька: в профиле — только последние операции."""
 
     def setUp(self):
         self.user = make_user()
@@ -764,11 +753,8 @@ class WalletPageTests(TestCase):
 
 
 class RegroupMigrationTests(TestCase):
-    """Миграция 0006: пофайловые строки «скачивают» пересобираются в строки-порции.
-
-    Без неё прежние ключи `download|<файл>` не зачлись бы против новых `download|1`,
-    `download|2`… и sync заплатил бы всем повторно — всю сумму целиком.
-    """
+    """Миграция 0006: пофайловые строки «скачивают» → строки-порции. Без неё ключи
+    `download|<файл>` не зачлись бы против `download|1`…, и sync заплатил бы повторно."""
 
     def run_migration(self):
         """Зовём саму функцию миграции, а не гоняем migrate: проверять надо ровно то,
@@ -869,11 +855,7 @@ class RegroupMigrationTests(TestCase):
 
 
 class TakeBackTests(TestCase):
-    """Награда за вещь уходит назад, когда автор удаляет её САМ, — и только тогда.
-
-    Без этого «написал — получил — удалил — написал заново» было фермой: у новой вещи
-    новый ключ, и платили за неё заново.
-    """
+    """Награда уходит назад, когда автор удаляет вещь САМ, — и только тогда."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1121,8 +1103,7 @@ class DeleteOnTheSiteTests(TestCase):
                 self.assertNotIn("HX-Trigger", response.headers)
 
     def test_a_comment_says_it_right_on_the_page(self):
-        """Лента приходит куском, страница не перезагружается — обычное сообщение всплыло
-        бы только на следующей. Поэтому тут оно едет событием для всплывающей плашки."""
+        """Лента приходит куском — сообщение едет событием для всплывающей плашки."""
         response = self.delete(self.author, "comment_delete", self.comment)
 
         self.assertEqual(self.lost(), rewards.LIKE * rewards.LIKE_FROM)

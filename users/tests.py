@@ -45,8 +45,7 @@ def make_user(email="u@t.local", **extra):
 
 
 def keep_capitals(user, email):
-    """Адрес с заглавными буквами, как у заведённых до октября 2026: save() таких
-    уже не оставляет, а в базе они лежат."""
+    """Адрес с заглавными буквами, как у заведённых раньше: save() таких уже не оставляет."""
     User.objects.filter(pk=user.pk).update(email=email)
 
 
@@ -76,7 +75,7 @@ class ProfileTests(TestCase):
         self.assertContains(response, "Иванов")
 
     def test_photo_goes_through_our_address(self):
-        # Не field.url: прямая ссылка на R2 идёт через Cloudflare и до России не доезжает.
+        # Не field.url: прямая ссылка на R2 до России не доезжает.
         self.person.photo = make_image()
         self.person.save(update_fields=["photo"])
 
@@ -190,8 +189,8 @@ class ProfileEditTests(TestCase):
         return response
 
     def blob(self):
-        """Сохранённый файл в памяти. Через FieldFile нельзя: у гифки Pillow держит
-        его открытым ради перемотки кадров, и на windows каталог потом не удаляется."""
+        """Сохранённый файл в памяти. Не через FieldFile: Pillow держит гифку открытой, и на
+        Windows каталог потом не удаляется."""
         with self.person.photo.open("rb") as handle:
             return BytesIO(handle.read())
 
@@ -220,8 +219,7 @@ class ProfileEditTests(TestCase):
         self.assertFalse(self.person.photo)
 
     def test_a_bomb_is_refused_before_it_is_unpacked(self):
-        """PNG в килобайты на 25 Мп — сотня мегабайт на разбор. Отказ приходит по заголовку:
-        пикселей у этой подделки нет, и дойди дело до разбора, ответ был бы «не прочитать»."""
+        """PNG в килобайты на 25 Мп: отказ — по заголовку, до разбора."""
         from attachments.tests import huge_png
 
         bomb = huge_png(5000, 5000).read()
@@ -230,8 +228,7 @@ class ProfileEditTests(TestCase):
         self.assertContains(response, "слишком большая")
 
     def test_a_bomb_pillow_will_not_open_is_called_too_big_too(self):
-        """144 Мп Pillow не открывает сам (AttachmentsConfig.ready). Человеку это то же
-        «слишком большая», а не «не получилось прочитать»."""
+        """144 Мп Pillow не открывает сам — человеку это то же «слишком большая»."""
         from attachments.tests import huge_png
 
         bomb = huge_png(12000, 12000).read()
@@ -240,8 +237,7 @@ class ProfileEditTests(TestCase):
         self.assertContains(response, "слишком большая")
 
     def test_transparency_survives(self):
-        # Аватары с дырками — обычное дело, а плоский белый квадрат в тёмной теме
-        # выглядел бы заплаткой.
+        # Плоский белый квадрат в тёмной теме выглядел бы заплаткой.
         self.post(photo=data_url((400, 400), mode="RGBA", fmt="PNG"))
 
         self.assertEqual(self.saved()[1], "PNG")
@@ -560,8 +556,7 @@ class SessionForCommandTests(TestCase):
 
     def setUp(self):
         self.person = make_user("student@t.local")
-        # Команда пишет предупреждение в лог — в выводе сьюта оно только шумит.
-        # Что запись действительно появляется, проверяет отдельный тест ниже.
+        # Предупреждение команды в выводе сьюта шумит; что оно пишется, проверяет тест ниже.
         logger = logging.getLogger(self.LOGGER)
         self.addCleanup(logger.setLevel, logger.level)
         logger.setLevel(logging.CRITICAL)
@@ -592,8 +587,7 @@ class SessionForCommandTests(TestCase):
         self.assertLess(Session.objects.get().expire_date, timezone.now() + timedelta(minutes=6))
 
     def test_using_it_does_not_stretch_its_life(self):
-        """Срок — момент, а не бездействие: отметка активности пишет в сессию на каждом
-        заходе, и при сроке бездействия «полчаса» длились бы, пока ею пользуются."""
+        """Срок — момент, а не бездействие: иначе отметка активности продлевала бы сессию."""
         key = self.key_from(self.run_command(self.person.email))
         born = Session.objects.get().expire_date
         self.client.cookies[settings.SESSION_COOKIE_NAME] = key
@@ -624,8 +618,7 @@ class SessionForCommandTests(TestCase):
             self.run_command(gone.email)
 
     def test_handing_out_a_session_leaves_a_trace_in_the_log(self):
-        """Единственная запись о том, что под этим человеком кто-то ходил: на самих
-        действиях следа не остаётся, они выглядят как его собственные."""
+        """Единственный след того, что под человеком ходили: действия выглядят как его собственные."""
         with self.assertLogs(self.LOGGER, "WARNING") as log:
             self.run_command(self.person.email)
         self.assertIn(self.person.email, log.output[0])
@@ -671,9 +664,8 @@ class StudentListTests(TestCase):
         self.assertEqual(self.names(self.get(q="Анна")), ["Сидорова Анна"])
 
     def test_the_search_puts_the_closest_hit_first(self):
-        """Порядок поиска идёт ПЕРВЫМ ключом, выбранный — после него. По «ван» сначала
-        Ванин, у которого слово в начале фамилии, и только потом Иванов, где оно
-        в середине, — сколько бы Иванов ни заработал (`core.search`)."""
+        """Порядок поиска — ПЕРВЫМ ключом: по «ван» сначала Ванин, потом Иванов, сколько бы
+        Иванов ни заработал (`core.search`)."""
         vanin = self.person("v@t.local", "Сергей", "Ванин")
         self.earn(self.ivan, 5000)
 
@@ -699,8 +691,7 @@ class StudentListTests(TestCase):
         ])
 
     def test_it_counts_what_was_earned_and_not_what_is_left(self):
-        """Баланс — это заработанное минус потраченное, и топ по нему был бы топом тех,
-        кто ничего не покупает: купил рамку — уехал вниз."""
+        """Топ по балансу был бы топом тех, кто ничего не покупает."""
         self.earn(self.anna, 900)
         spend(self.anna, 850, BalanceLog.Reason.PURCHASE)
         self.earn(self.petr, 100)
@@ -740,8 +731,7 @@ class StudentListTests(TestCase):
         self.assertIn("Без группы", page)  # у Анны группы нет
 
     def test_an_alumnus_is_not_given_a_made_up_group_number(self):
-        """У служебной группы выпускников номер «000000», и «Выпускник · 000000»
-        читается как поломка."""
+        """У служебной группы выпускников номер «000000»: «Выпускник · 000000» — как поломка."""
         alumni = Team.objects.create(
             number="000000", profile="Выпускники", course_code="—",
             stage="bachelor", year_of_admission=Team.ALUMNI_YEAR,
@@ -772,8 +762,7 @@ class StudentListTests(TestCase):
         self.assertEqual(self.names(found), ["Иванов Иван"])
 
     def test_the_courses_offered_are_the_ones_that_exist(self):
-        """Список не зашит: набор групп меняется каждый год, и «6 курс», за которым
-        никого нет, — предложение, ведущее в пустоту."""
+        """Список не зашит: «6 курс», за которым никого нет, не предлагаем."""
         offered = [value for value, _ in self.get().context["form"].fields["course"].choices if value]
 
         self.assertEqual(offered, [str(self.team.get_grade_level())])
@@ -832,8 +821,7 @@ class StudentListTests(TestCase):
         self.assertEqual(page.context["section"], "")
 
 
-# Шапка ведомости — ровно та, что приезжает выгрузкой гугл-формы: с отметкой времени
-# первым столбцом и интересным фактом посередине, до которых нам дела нет.
+# Шапка — как в выгрузке гугл-формы: с отметкой времени и лишними вопросами.
 ROSTER_HEADER = (
     "Отметка времени", "ФИО", "Удобная почта", "ДР", "Группа", "Интересный факт о Вас", "Телеграм",
 )
@@ -880,8 +868,7 @@ class RegisterOneTests(TestCase):
         self.assertIn("password/reset/", mail.outbox[0].body)
 
     def test_the_invitation_link_is_https_on_a_secure_site(self):
-        """Иначе первый запрос с токеном установки пароля шёл бы по сети открытым текстом:
-        браузер нового человека ещё не знает HSTS сайта."""
+        """Иначе токен установки пароля шёл бы открытым текстом: браузер новичка не знает HSTS сайта."""
         self.client.post(reverse("user_new"), {
             "surname": "Сёмин", "name": "Георгий", "email": "egor@t.local", "team": self.team.pk,
         }, secure=True)
@@ -944,8 +931,7 @@ class RosterTests(TestCase):
     """Регистрация курса ведомостью — выгрузкой ответов гугл-формы."""
 
     def setUp(self):
-        # Латинская M — ровно так магистратура записана в базе, а в форме люди пишут
-        # кириллическую. См. LOOKALIKE в roster.py.
+        # Латинская M — как магистратура записана в базе; в форме пишут кириллицей (LOOKALIKE).
         self.team = Team.objects.create(
             number="M07-601", profile="Биотех", course_code="07",
             stage="master", year_of_admission=2025,
@@ -983,8 +969,7 @@ class RosterTests(TestCase):
         self.assertIn("password/reset/", mail.outbox[0].body)
 
     def test_a_group_that_is_not_in_the_base_stops_the_whole_file(self):
-        """Половина курса, заведённая молча, хуже, чем ни одного: узнать потом,
-        кто не попал, будет неоткуда."""
+        """Молча заведённая половина курса хуже, чем никто."""
         answer = self.load([
             line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601"),
             line("Соловьев Александр Алексеевич", "solovev@phystech.edu", "М07-999"),
@@ -995,8 +980,7 @@ class RosterTests(TestCase):
         self.assertContains(answer, "группы «М07-999» нет в базе")
 
     def test_a_latin_letter_in_the_group_number_is_the_same_group(self):
-        """В одной и той же выгрузке соседствуют «М07-601» кириллицей и латиницей —
-        глазами эту разницу не увидеть, и отказ по ней человеку не объяснить."""
+        """«М07-601» кириллицей и латиницей на глаз не различить."""
         self.load([
             line("Бережная Ольга Михайловна", "berezhol@mail.ru", "М07-601"),
             line("Екимова Кристина Сергеевна", "krist@gmail.com", "M07-601"),
@@ -1005,8 +989,7 @@ class RosterTests(TestCase):
         self.assertEqual(self.students().filter(team=self.team).count(), 2)
 
     def test_people_already_on_the_site_are_skipped_and_counted(self):
-        """Выгрузку носят целиком и не по одному разу: ответов прибавилось,
-        а старые никуда не делись."""
+        """Выгрузку носят целиком и не по одному разу."""
         make_user("berezhol@mail.ru")
 
         answer = self.load([
@@ -1020,11 +1003,8 @@ class RosterTests(TestCase):
                             for one in get_messages(answer.wsgi_request)))
 
     def test_a_known_address_in_another_case_is_still_the_same_person(self):
-        """Иначе рядом с Ivan@ завёлся бы ivan@, и войти он не смог бы ни тем ни другим.
-
-        Заглавные буквы именно у ЗАВЕДЁННОГО: сравнение приводит к нижнему регистру
-        обе стороны, и проверять надо ту, что лежит в базе, — вторая приведена всегда.
-        """
+        """Иначе рядом с Ivan@ завёлся бы ivan@. Заглавные — у ЗАВЕДЁННОГО: присланную сторону
+        сравнение приводит всегда."""
         keep_capitals(make_user("berezhol@mail.ru"), "BerezhOl@mail.ru")
 
         self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "M07-601")])
@@ -1090,7 +1070,7 @@ class RosterTests(TestCase):
         self.assertIsNone(User.objects.get(email="berezhol@mail.ru").birthday)
 
     def test_spaces_around_the_answers_do_not_matter(self):
-        """В настоящей выгрузке хвостовой пробел был у трёх ответов из шести."""
+        """Хвостовые пробелы в ответах — обычное дело."""
         self.load([line("Екимова Кристина Сергеевна ", "krist.ekimova@gmail.com ", " M07-601 ")])
 
         self.assertTrue(User.objects.filter(email="krist.ekimova@gmail.com").exists())
@@ -1125,8 +1105,7 @@ class RosterTests(TestCase):
         self.assertFalse(self.students().exists())
 
     def test_a_refused_file_leaves_nothing_behind(self):
-        """Разобранная ведомость живёт ровно один запрос: ни строки в базе, ни следа
-        в сессии. Передумали, обновили страницу, вернулись завтра — начинаем с чистого."""
+        """Разобранная ведомость живёт один запрос: ни строки в базе, ни следа в сессии."""
         self.load([line("Бережная Ольга Михайловна", "berezhol@mail.ru", "М07-999")])
 
         again = self.client.get(reverse("user_new"))
@@ -1254,8 +1233,7 @@ class LoginJournalTests(TestCase):
         self.assertEqual(self.kinds()[-1], "stopped")
 
     def test_sessions_signed_by_the_old_backend_stay_alive(self):
-        """Все сессии на проде записаны на ModelBackend: убери его из списка — и при
-        выкатке разлогинило бы весь сайт."""
+        """Сессии на проде записаны на ModelBackend: без него выкатка разлогинила бы всех."""
         self.client.force_login(self.person, backend="django.contrib.auth.backends.ModelBackend")
 
         self.assertEqual(self.client.get(reverse("profile_edit")).status_code, 200)

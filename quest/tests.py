@@ -105,8 +105,7 @@ class AskTests(QuestCase):
         self.assertEqual(self.ask("ping").json(), {"text": None})
 
     def test_only_console_clues_answer_commands(self):
-        """Подсказку из консоли перенесли в журнал мимо save() — команда у неё осталась,
-        но отвечать на неё консоль уже не должна."""
+        """Подсказку перенесли из консоли в журнал мимо save() — консоль на неё больше не отвечает."""
         clue = Clue.objects.create(place=Clue.Place.COMMAND, command="ping", text="строка журнала")
         Clue.objects.filter(pk=clue.pk).update(place=Clue.Place.LOG)
 
@@ -140,8 +139,7 @@ class AskTests(QuestCase):
         self.assertEqual(self.client.post(reverse("countdown_ask"), {"command": "d"}, REMOTE_ADDR="10.0.0.9").status_code, 200)
 
     def test_every_command_is_counted_and_ones_the_browser_answered_only_counted(self):
-        """Для праздничной страницы: команды, на которые браузер ответил сам, приходят
-        с пометкой local — их считают, но ни о чём не спрашивают."""
+        """Команды с ответом браузера приходят с пометкой local — их считают, ни о чём не спрашивая."""
         Clue.objects.create(place=Clue.Place.COMMAND, command="help", text="подсказка")
 
         self.ask("rm -rf /")
@@ -386,8 +384,7 @@ class UnlockTests(QuestCase):
         self.assertTrue(Unlock.objects.filter(user=self.person).exists())
 
     def test_a_sign_inside_a_fragment_does_not_lock_the_key_for_good(self):
-        """Из админки такое значение не пропустит проверка, но база стерпит: знак чистится
-        так же, как в набранном ключе."""
+        """Знак в значении фрагмента (база стерпит) чистится так же, как в набранном ключе."""
         Fragment.objects.filter(number=2).update(value="b0-b0")
         self.client.force_login(self.person)
 
@@ -646,8 +643,7 @@ class PageClueTests(QuestCase):
         self.assertGreaterEqual(len(lines) - second, 6)
 
     def test_a_clue_comes_round_at_least_once_a_minute(self):
-        """Журнал меняет строку раз в JOURNAL_STEP секунд — круг со всеми подсказками и строкой
-        ключа не должен быть длиннее минуты, но и не короче половины: иначе мелькает."""
+        """Круг журнала со всеми подсказками — не длиннее минуты и не короче половины."""
         for number in range(3):
             Clue.objects.create(place=Clue.Place.LOG, text=f"фрагмент {number}")
         Fragment.objects.create(number=1, value="7f3a")

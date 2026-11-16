@@ -1,9 +1,5 @@
-"""Откуда берутся уведомления. Зовут явно из мест, где случилось событие, — как награды
-(`economy.rewards.sync`), а не сигналами: сигнал на `post_save` не знает, кто и зачем
-сохранял, а правка комментария или смена статуса из админки уведомлять не должны.
-
-Себе уведомление не приходит никогда. Любая перемена — новое, склеенное, прочитанное —
-звонит по сокету человека (`ring`), и все его вкладки переспрашивают число.
+"""Откуда берутся уведомления. Зовут явно из мест события, а не сигналом `post_save`: тот
+не знает, кто и зачем сохранял. Себе не приходит. Любая перемена звонит по сокету (`ring`).
 """
 
 import logging
@@ -68,6 +64,19 @@ def bake_failed(job):
     _bake(job, Kind.BAKE_FAILED)
 
 
+def wall_banned(person, by, note):
+    """Стену закрыли. В note — срок и причина: бан потом могут снять или продлить."""
+    if person.pk != by.pk:
+        Notification.objects.create(recipient=person, kind=Kind.WALL_BAN, actor=by, note=note[:300])
+        ring(person.pk)
+
+
+def wall_unbanned(person, by):
+    if person.pk != by.pk:
+        Notification.objects.create(recipient=person, kind=Kind.WALL_UNBAN, actor=by)
+        ring(person.pk)
+
+
 def _bake(job, kind):
     """Выпечка лекции — автору курса: сама запись автора не хранит, а курс — да."""
     lecture = job.lecture
@@ -108,15 +117,13 @@ def unread(user):
 
 
 def _read(user, about):
-    # Звоним, только если правда что-то прочиталось: страницы материалов открывают
-    # постоянно, и пустой звонок на каждую гонял бы вкладки за тем же числом.
+    # Звоним, только если что-то прочиталось: страницы открывают постоянно.
     if unread(user).filter(about).update(read_at=timezone.now()):
         ring(user.pk)
 
 
 def announce(announcement, people):
-    """Объявление — каждому строкой: колокольчик, «прочитано» и уборка у них общие с
-    остальными уведомлениями. Сколько получило."""
+    """Объявление — каждому строкой. Возвращает, сколько получило."""
     ids = list(people.values_list("pk", flat=True))
     Notification.objects.bulk_create(
         Notification(recipient_id=pk, kind=Kind.ANNOUNCEMENT, actor=announcement.author, announcement=announcement)
@@ -127,17 +134,15 @@ def announce(announcement, people):
 
 
 def withdraw(announcement):
-    """Снять объявление у всех. Звоним тем, у кого оно висело непрочитанным: число у них
-    уменьшится, остальным звонить незачем."""
+    """Снять объявление у всех; звоним тем, у кого оно было непрочитанным."""
     waiting = list(announcement.notifications.filter(read_at=None).values_list("recipient_id", flat=True))
     announcement.delete()
     ring(*waiting)
 
 
 def ring(*user_ids):
-    """Повод вкладкам людей переспросить число — после коммита, иначе они спросили бы
-    раньше, чем строка появилась. Лежит Redis — молчим: число подтянется со следующей
-    страницей, а комментарий из-за колокольчика не должен падать."""
+    """Повод вкладкам переспросить число — после коммита, иначе строки ещё нет. Лежит
+    Redis — молчим: событие из-за колокольчика не падает."""
     if not user_ids:
         return
 

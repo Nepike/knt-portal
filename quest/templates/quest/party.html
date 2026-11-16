@@ -4,10 +4,9 @@
 
 {% block content %}
 {% comment %}
-  Праздник после взлома — 2 декабря (quest.views.party). Числа — настоящие, имён нет.
-  Конфетти здесь сыплется всё время (.party-confetti), на прочих страницах тает за 5 секунд
-  после загрузки (theme/input.css). Карточка рамки — только если рамка за ключ назначена
-  в «Квест → передача». «Твой взлом» гостю закрыт и зовёт войти.
+  Праздник после взлома (quest.views.party): числа настоящие, имён нет. Конфетти — всё время
+  (.party-confetti). Карточка рамки — если рамка назначена в «Квест → передача». Гостю
+  «Твой взлом» закрыт.
 {% endcomment %}
 <div class="party-confetti" aria-hidden="true"></div>
 <section class="flex flex-col gap-4" aria-label="Праздник">
@@ -23,10 +22,7 @@
     </ul>
   </div>
 
-  {% comment %}
-    На широком экране колонок столько, сколько карточек: рамки может и не быть. Уже — по две:
-    втроём в ряд карточки узкие, и ключ в «Твой взлом» мельчал бы до 9 пикселей.
-  {% endcomment %}
+  {# Колонок по числу карточек; уже — по две: втроём ключ в «Твой взлом» мельчал бы. #}
   <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-none xl:grid-flow-col xl:auto-cols-fr">
     <article class="panel p-5 flex flex-col gap-2.5">
       <span class="party-icon" aria-hidden="true"><i class="fa-solid fa-gift"></i></span>
@@ -48,11 +44,7 @@
     <article class="@container panel p-5 flex flex-col gap-2.5">
       <span class="party-icon" aria-hidden="true"><i class="fa-solid fa-terminal"></i></span>
       <h2 class="text-lg font-bold">Твой взлом</h2>
-      {% comment %}
-        Ключ ячейками, как «ключ повреждён» на экране отсчёта: сданное — значением. Одной
-        строкой: между ячейками пробел (KEY_GAP в quest/views.py), а --key-len — длина
-        всей строки в знаках, по ней css подбирает шрифт под ширину карточки.
-      {% endcomment %}
+      {# Ключ ячейками одной строкой: --key-len — длина в знаках, по ней css подбирает шрифт. #}
       <p class="party-key" style="--key-len: {{ mine.length }}" aria-hidden="true">{% for cell in mine.cells %}<span{% if not cell.open %} class="party-key-lost"{% endif %}>{{ cell.text }}</span>{% if not forloop.last %} {% endif %}{% endfor %}</p>
       {% if request.user.is_authenticated %}
       <p class="text-sm leading-relaxed text-slate-500 dark:text-slate-400">Сдано фрагментов: {{ mine.done }} из {{ mine.total }}. {% if mine.unlocked %}Ключ вскрыт — тебе {{ mine.reward }} токенов.{% else %}Ключ остался у взломщиков.{% endif %}</p>

@@ -1,9 +1,5 @@
 {% load text_extras %}
-{% comment %}
-  Карточка книги в очереди. Кнопки бьют по одной вьюхе (book_review) и заменяют
-  саму карточку: решение принято — работать больше не с чем.
-  hx-post на кнопках, а не на форме: так у каждой решение видно прямо в разметке.
-{% endcomment %}
+{# Кнопки — hx-post на book_review, ответ заменяет карточку. #}
 <article id="review-book-{{ item.pk }}" x-data="{ rejecting: false }"
          class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
   <div class="flex items-start gap-3">
@@ -35,7 +31,7 @@
     <a href="{% url 'book_detail' item.pk %}" class="btn btn-ghost ml-auto">Посмотреть</a>
   </div>
 
-  {# Причина обязательна: отказ без объяснения автор не сможет исправить #}
+  {# Причина обязательна: без неё автор не исправит. #}
   <form x-show="rejecting" x-cloak class="flex flex-wrap items-center gap-2 mt-2"
         hx-post="{% url 'book_review' item.pk %}"
         hx-target="#review-book-{{ item.pk }}" hx-swap="outerHTML">

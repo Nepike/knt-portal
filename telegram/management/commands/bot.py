@@ -13,14 +13,12 @@ class Command(BaseCommand):
 
         @bot.message_handler(commands=["get_chat_id"])
         def get_chat_id(message):
-            """Узнать, что вписать в TelegramChat: в группах команда приходит как
-            /get_chat_id@имя_бота — разбирать это telebot умеет сам."""
+            """chat_id для TelegramChat; в группах команда приходит как /get_chat_id@имя_бота."""
             answer = f"chat_id: {message.chat.id}"
             if message.message_thread_id:
                 answer += f"\ntopic_id: {message.message_thread_id}"
             bot.reply_to(message, answer)
 
         self.stdout.write(self.style.SUCCESS("Бот запущен"))
-        # infinity_polling сам держит offset и переживает обрывы сети — ради этого
-        # библиотека и взята вместо ручных запросов к getUpdates.
+        # infinity_polling сам держит offset и переживает обрывы сети.
         bot.infinity_polling()

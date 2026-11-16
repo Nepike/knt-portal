@@ -1,16 +1,9 @@
-"""Перенос картинки на Стену: подгон размера, перевод цветов в палитру, запись.
-
-Нужен на старте доски и для заготовленных артов: руками выложить девять тысяч клеток
-нельзя, а нарисовать эскиз в редакторе и положить его целиком — можно. По умолчанию
-команда ничего не пишет, только показывает, что выйдет, — доска общая, и промах по
-координатам стоит дороже лишнего запуска.
-
-Клетки ложатся слоями по цветам, а не строками: ради таймлапса, где картинка тогда
-проступает целиком, а не выезжает сканером сверху вниз.
+"""Перенос картинки на Стену: подгон размера, перевод в палитру, запись. Без --apply только
+показывает, что выйдет: доска общая. Клетки ложатся слоями по цветам — в таймлапсе картинка
+проступает целиком, а не выезжает строками.
 """
 
-import random
-from collections import Counter, defaultdict
+from collections import Counter
 
 from django.core.management.base import BaseCommand, CommandError
 from PIL import Image
@@ -18,7 +11,7 @@ from PIL import Image
 from users.models import User
 from wall import palette
 from wall.models import Board
-from wall.services import WallError, stamp
+from wall.services import SKIP, WallError, fit, stamp
 
 PREVIEW_ZOOM = 8  # во столько раз крупнее сохраняем примерку: клетки должны быть видны
 
@@ -45,8 +38,7 @@ class Command(BaseCommand):
 
         picture = Image.open(options["image"]).convert("RGBA")
         wide, tall = self._size(board, picture, options["width"])
-        # BOX — усреднение по площади: у пиксель-арта, снятого с экрана, каждая клетка
-        # это ровный квадрат из одинаковых точек, и усреднение возвращает их точный цвет.
+        # BOX — усреднение по площади: у снятого с экрана пиксель-арта клетка — ровный квадрат одного цвета.
         picture = picture.resize((wide, tall), Image.Resampling.BOX)
 
         left = (board.width - wide) // 2 if options["x"] is None else options["x"]
@@ -54,7 +46,7 @@ class Command(BaseCommand):
         if not board.holds(left, top) or not board.holds(left + wide - 1, top + tall - 1):
             raise CommandError(f"{wide}×{tall} в ({left}, {top}) не помещается на {board.width}×{board.height}")
 
-        cells = self._layers(self._map(picture, left, top))
+        cells = self._map(picture, left, top)
         counts = Counter(cells.values())
         self.stdout.write(f"{wide}×{tall} клеток в ({left}, {top}); занято {len(cells)}, цветов {len(counts)}")
         for code, count in counts.most_common(10):
@@ -83,37 +75,12 @@ class Command(BaseCommand):
         return wide, tall
 
     def _map(self, picture, left, top):
-        """Каждой клетке ближайший цвет палитры. Прозрачное пропускаем — так штампуют
-        картинку поверх уже нарисованного, не заливая вокруг неё прямоугольник."""
-        known = {}
-        cells = {}
-        for row in range(picture.height):
-            for column in range(picture.width):
-                red, green, blue, alpha = picture.getpixel((column, row))
-                if alpha < 128:
-                    continue
-                if (red, green, blue) not in known:
-                    known[(red, green, blue)] = palette.nearest(red, green, blue)
-                cells[(left + column, top + row)] = known[(red, green, blue)]
-        return cells
-
-    def _layers(self, cells):
-        """Тот же набор клеток, но в порядке записи: слоями по цветам, крупные первыми.
-
-        Порядок здесь — это порядок в журнале, а значит и в таймлапсе. Построчно
-        картинка проявлялась бы сканером сверху вниз; слоями она проступает целиком,
-        как её клал бы человек — сначала заливка, потом детали. Внутри слоя вперемешку,
-        иначе каждый цвет всё равно шёл бы строками.
-        """
-        groups = defaultdict(list)
-        for spot, code in cells.items():
-            groups[code].append(spot)
-        order = {}
-        for code, spots in sorted(groups.items(), key=lambda pair: -len(pair[1])):
-            random.shuffle(spots)
-            for spot in spots:
-                order[spot] = code
-        return order
+        """Каждой клетке ближайший цвет палитры (services.fit). Прозрачное пропускаем — штамп поверх нарисованного."""
+        codes = fit(picture.width, picture.height, picture.tobytes())
+        return {
+            (left + index % picture.width, top + index // picture.width): code
+            for index, code in enumerate(codes) if code != SKIP
+        }
 
     def _preview(self, cells, left, top, wide, tall, path):
         sheet = Image.new("RGB", (wide, tall), palette.rgb(palette.CONCRETE))

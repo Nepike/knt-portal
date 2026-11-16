@@ -58,9 +58,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     must_change_password = models.BooleanField("сменить пароль при входе", default=True)
 
     photo = models.ImageField("фото", upload_to=photo_upload_to, storage=media_storage, null=True, blank=True)
-    # Одна строка, а не биография: строка встаёт под именем без отдельного блока, влезает
-    # в будущую карточку по наведению, и её легко окинуть взглядом при модерации.
-    # Полотно текста со ссылками на закрытом сайте курса пришлось бы читать целиком.
+    # Одна строка, а не биография: встаёт под именем и легко читается при модерации.
     status = models.CharField("статус", max_length=STATUS_MAX, blank=True)
     birthday = models.DateField("дата рождения", null=True, blank=True)
     phone = models.CharField("телефон", max_length=30, blank=True)
@@ -73,8 +71,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     team = models.ForeignKey("core.Team", verbose_name="группа", on_delete=models.PROTECT, null=True, blank=True, related_name="members",)
     date_joined = models.DateTimeField("дата регистрации", default=timezone.now)
 
-    # Кошелёк — economy.Wallet, надетое и инвентарь — cosmetics.UserItem: полем здесь
-    # им делать нечего, обычный user.save() затирал бы чужую запись.
+    # Кошелёк — economy.Wallet, косметика — cosmetics.UserItem: полем здесь их затирал бы user.save().
     # TODO (M1): назначение группы по умолчанию, бан аккаунта
 
     objects = UserManager()
@@ -101,12 +98,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def full_name(self):
-        """Как человека называют на сайте: сперва фамилия.
-
-        Свойством, а не парой полей в каждом шаблоне: подпись стоит под каждым
-        материалом, отзывом и сообщением, и раньше порядок жил в двух десятках мест —
-        поменять его разом было нельзя, а разъехаться легко.
-        """
+        """«Фамилия Имя» — как человека называют на сайте. Одно место на весь порядок."""
         return f"{self.surname} {self.name}"
 
     @property
@@ -119,12 +111,8 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class LoginEvent(models.Model):
-    """Журнал входов: кто, откуда и когда вошёл, вышел или не смог войти (users/journal.py).
-
-    UserSession для этого не годится: её строка живёт, пока жива сессия, и выход уносит
-    её вместе со следом. Здесь записи живут JOURNAL_DAYS — их убирает ночная задача
-(core/tasks.py).
-    """
+    """Журнал входов (users/journal.py). Не UserSession: выход уносит её строку. Живёт
+    JOURNAL_DAYS (core/tasks.py)."""
 
     class Kind(models.TextChoices):
         LOGIN = "login", "вошёл"
@@ -157,17 +145,9 @@ class LoginEvent(models.Model):
 
 
 class UserSession(models.Model):
-    """Приписка к сессии: чья она, откуда и когда заходили в последний раз.
-
-    Django хранит сессию зашифрованным блобом, и снаружи не видно даже, чья она, —
-    без этой таблицы свои сессии человек не может ни увидеть, ни закрыть.
-
-    Живость определяет НЕ она, а сама django_session: строка привязана каскадом, поэтому
-    выход, `clearsessions` и закрытие с этой страницы уносят приписку сами. Отсюда
-    зависимость: сессии обязаны лежать в базе — в кэше внешнего ключа не на что вешать.
-
-    Первичный id свой, а не ключ сессии: ключ — пароль на предъявителя, и в разметке
-    страницы «мои устройства» ему делать нечего.
+    """Приписка к сессии: чья она, откуда и когда заходили. Живость определяет django_session:
+    строка привязана каскадом, поэтому сессии обязаны лежать в базе. Первичный ключ свой:
+    ключ сессии — пароль на предъявителя, в разметке ему не место.
     """
 
     session = models.OneToOneField(

@@ -1,10 +1,7 @@
 {% comment %}
-  Файловая часть формы — общая для книг и материалов. Живёт ВНУТРИ формы с
-  x-data="fileForm(...)". От вьюхи ждёт max_size_hint, pending, file_errors.
-
-  Строки рисует Alpine, а не шаблонный цикл: порядок меняется перетаскиванием, а вместе
-  со строками едут скрытые input name="order". Удаление отложенное — промах по кнопке
-  не должен стоить файла.
+  Файловая часть формы книг и материалов, внутри x-data="fileForm(...)". Ждёт max_size_hint,
+  pending, file_errors. Строки рисует Alpine: порядок меняют перетаскиванием. Удаление
+  отложенное — промах по кнопке не стоит файла.
 {% endcomment %}
 <div x-ref="list" x-sort="reorderSaved($item, $position)">
   <template x-for="file in saved" :key="file.pk">
@@ -30,10 +27,7 @@
   </template>
 </div>
 
-{% comment %}
-  Файлы, залитые в хранилище до того, как форма вернулась с ошибкой: токен едет
-  обратно скрытым полем, иначе человек заливал бы гигабайты повторно из-за опечатки.
-{% endcomment %}
+{# Залитые до ошибки формы: токен едет обратно скрытым полем, файл не заливают заново. #}
 {% for item in pending %}
 <div class="flex items-center gap-2 mb-2 px-2 py-2 rounded-lg bg-emerald-500/10">
   <i class="fa-solid fa-circle-check text-emerald-500 px-2"></i>
@@ -54,10 +48,7 @@
     <span class="text-xs text-slate-400">до {{ max_size_hint }} на файл</span>
   </label>
 
-  {% comment %}
-    Порядок строк — это и порядок отправки: из этого же списка собираются инпут и токены.
-    Прогресс — заливка самой строки; содержимое relative, иначе заливка накроет его.
-  {% endcomment %}
+  {# Прогресс — заливка самой строки; содержимое relative, иначе заливка накроет его. #}
   <div x-sort="reorderNew($item, $position)">
     <template x-for="(file, index) in items" :key="file.id">
       <div x-sort:item="file.id"
@@ -68,10 +59,7 @@
                 aria-label="Переставить">
           <i class="fa-solid" :class="file.done ? 'fa-circle-check text-emerald-500' : 'fa-grip-vertical text-slate-400'"></i>
         </button>
-        {% comment %}
-          Имя правится сразу при загрузке. Поля идут парами со своим файлом:
-          uploaded-name — к токену, files-name — к файлу в multipart-инпуте.
-        {% endcomment %}
+        {# Поле имени — парой со своим файлом: uploaded-name — к токену, files-name — к файлу в multipart. #}
         <input x-model="file.name" maxlength="150" :name="file.token ? 'uploaded-name' : 'files-name'"
                class="relative min-w-0 flex-1 h-9 rounded-md bg-transparent px-2 text-sm outline-none border border-transparent hover:border-slate-300 dark:hover:border-slate-700 focus:border-accent focus:bg-white dark:focus:bg-slate-900 transition">
         <span class="relative text-xs whitespace-nowrap" :class="file.done ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'"

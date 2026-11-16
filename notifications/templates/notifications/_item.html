@@ -1,17 +1,16 @@
 {% load notification_tags text_extras %}
 {% comment %}
-  Одна строка уведомления — и в панели под колокольчиком, и на странице «Все уведомления».
-  Ведёт через notification_open: та отмечает прочитанным и отправляет к месту.
-  Кто модератор, не пишем: решение — модерации, а не человека.
+  Строка уведомления — в панели и на «Все уведомления». Ведёт через notification_open: та
+  отмечает прочитанным. Модератора не называем: решение — модерации.
 {% endcomment %}
 <a href="{% url 'notification_open' n.pk %}"
    class="flex items-start gap-3 px-4 py-3 hover:bg-slate-100 dark:hover:bg-slate-800 {% if not n.read_at %}bg-accent/10{% endif %}">
   <span class="mt-0.5 w-8 h-8 shrink-0 rounded-[22%] grid place-items-center text-sm
-               {% if n.kind == 'rejected' or n.kind == 'bake_failed' %}bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400
-               {% elif n.kind == 'approved' or n.kind == 'baked' %}bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400
+               {% if n.kind == 'rejected' or n.kind == 'bake_failed' or n.kind == 'wall_ban' %}bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400
+               {% elif n.kind == 'approved' or n.kind == 'baked' or n.kind == 'wall_unban' %}bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400
                {% elif n.kind == 'announcement' %}bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400
                {% else %}bg-accent/15 text-accent{% endif %}" aria-hidden="true">
-    <i class="fa-solid {% if n.kind == 'comment' %}fa-comment{% elif n.kind == 'reply' %}fa-reply{% elif n.kind == 'approved' %}fa-check{% elif n.kind == 'rejected' %}fa-xmark{% elif n.kind == 'baked' %}fa-video{% elif n.kind == 'announcement' %}fa-bullhorn{% else %}fa-triangle-exclamation{% endif %}"></i>
+    <i class="fa-solid {% if n.kind == 'comment' %}fa-comment{% elif n.kind == 'reply' %}fa-reply{% elif n.kind == 'approved' %}fa-check{% elif n.kind == 'rejected' %}fa-xmark{% elif n.kind == 'baked' %}fa-video{% elif n.kind == 'announcement' %}fa-bullhorn{% elif n.kind == 'wall_ban' %}fa-ban{% elif n.kind == 'wall_unban' %}fa-paintbrush{% else %}fa-triangle-exclamation{% endif %}"></i>
   </span>
   <span class="min-w-0 flex-1 text-sm">
     <span class="block {% if not n.read_at %}font-medium{% endif %}">
@@ -29,6 +28,10 @@
         Лекция готова: «{{ n.thing.title }}»
       {% elif n.kind == "announcement" %}
         Объявление: {{ n.announcement.text|markdown|striptags|truncatechars:140 }}
+      {% elif n.kind == "wall_ban" %}
+        Стена для вас закрыта
+      {% elif n.kind == "wall_unban" %}
+        Стена снова открыта для вас
       {% else %}
         Лекция не обработалась: «{{ n.thing.title }}»
       {% endif %}
@@ -44,6 +47,10 @@
         Загрузите запись ещё раз или напишите в поддержку{% if n.note %} · {{ n.note }}{% endif %}
       {% elif n.kind == "announcement" %}
         {% if n.actor %}{{ n.actor.full_name }}{% else %}Команда сайта{% endif %} · нажмите, чтобы увидеть подробности
+      {% elif n.kind == "wall_ban" %}
+        {{ n.note }}
+      {% elif n.kind == "wall_unban" %}
+        Можно рисовать
       {% else %}
         Теперь это видят все
       {% endif %}

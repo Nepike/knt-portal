@@ -3,8 +3,7 @@ from .base import env
 
 DEBUG = False
 SECRET_KEY = env("SECRET_KEY")
-# inbicst.ru и fnbic.ru nginx разворачивает на knt-mipt.ru, до приложения они не доходят —
-# держим их в списке на случай, если однажды перестанет.
+# inbicst.ru и fnbic.ru nginx разворачивает на knt-mipt.ru; в списке — на случай, если перестанет.
 ALLOWED_HOSTS = ["knt-mipt.ru", "inbicst.ru", "fnbic.ru", "files.inbicst.ru"]
 # files. в доверенных источниках не нужен: на него только ходят за файлами, форм там нет.
 CSRF_TRUSTED_ORIGINS = ["https://knt-mipt.ru", "https://inbicst.ru", "https://fnbic.ru"]
@@ -14,9 +13,7 @@ MEDIA_ACCEL = True
 
 DATABASES = {"default": env.db("DATABASE_URL")}
 
-# Статику раздаёт сам Django через whitenoise (nginx только проксирует + TLS).
-# Сразу за SecurityMiddleware, как велит whitenoise, — по имени, а не номером: первым в списке
-# стоит замер медленных запросов.
+# Статику раздаёт whitenoise, сразу за SecurityMiddleware. По имени: первым стоит замер запросов.
 MIDDLEWARE.insert(MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1,  # noqa: F405
                   "whitenoise.middleware.WhiteNoiseMiddleware")
 STORAGES["staticfiles"]["BACKEND"] = "whitenoise.storage.CompressedManifestStaticFilesStorage"  # noqa: F405
@@ -36,8 +33,7 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": "INFO"},
 }
 
-# Воркеров у gunicorn несколько, и сокет клиента живёт в одном из них — Redis тут общая шина:
-# отправитель публикует в своём процессе, получатели слушают в своих.
+# Redis — общая шина: сокеты клиентов живут в разных воркерах gunicorn.
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -49,19 +45,15 @@ CHANNEL_LAYERS = {
 CELERY_BROKER_URL = "redis://redis:6379/1"
 CELERY_RESULT_BACKEND = "redis://redis:6379/2"
 
-# База 3 — кэш. На нём живут ограничители частоты (core/throttle.py): поддержка и
-# восстановление пароля считают обращения с адреса. В памяти процесса этот счётчик
-# был у КАЖДОГО воркера свой, то есть лимит на деле был вдвое выше объявленного
-# и обнулялся любым перезапуском. Своя база, а не общая с очередью: `cache.clear()`
-# у этого бекенда — это FLUSHDB, и на общей базе он унёс бы ещё и задачи Celery.
+# Кэш — база 3, общая для всех воркеров: на ней ограничители (core/throttle.py).
+# Не на базе очереди: cache.clear() — это FLUSHDB.
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": "redis://redis:6379/3",
         "OPTIONS": {
-            # Явные таймауты: у redis-py 6 по умолчанию их нет вовсе, и подвисший Redis
-            # держал бы воркер бесконечно. Кэш — не то, ради чего стоит ждать: две
-            # секунды и мимо (throttled() умеет обходиться без него).
+            # У redis-py 6 таймаутов по умолчанию нет: подвисший Redis держал бы воркер.
+            # throttled() обходится без кэша.
             "socket_connect_timeout": 2,
             "socket_timeout": 2,
         },

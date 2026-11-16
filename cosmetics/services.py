@@ -1,8 +1,5 @@
-"""Выдача вещей и экипировка.
-
-Всё, что меняет инвентарь, идёт через эти функции: правило «одна вещь на слот» держится
-ограничением в базе, но снимать прежнюю приходится ДО того, как надета новая, — иначе
-ограничение и сработает, отказом.
+"""Выдача вещей и экипировка. «Одна вещь на слот» держит ограничение в базе — поэтому прежнюю
+снимаем ДО того, как надета новая.
 """
 
 from django.db import transaction
@@ -54,8 +51,7 @@ def worn(user, kind=CosmeticItem.Kind.AVATAR_FRAME):
 
 
 def rarity_rank(field="rarity"):
-    """Ступень числом — для сортировки. В базе редкость строка, и алфавит ставил бы
-    legendary между epic и mythical, поэтому порядок приходится задавать запросом."""
+    """Ступень числом — для сортировки (в базе редкость строкой)."""
     return Case(
         *[When(**{field: value}, then=step) for step, value in enumerate(CosmeticItem.RARITY_ORDER)],
         default=0, output_field=IntegerField(),
@@ -63,10 +59,8 @@ def rarity_rank(field="rarity"):
 
 
 def inventory(user):
-    """Инвентарь блоками: сперва вид вещи, внутри — от обычной к редкой.
-
-    Порядок обязан приехать из базы готовым: разметка группирует подряд идущие (`regroup`).
-    """
+    """Инвентарь блоками: вид, внутри — от обычной к редкой. Порядок — из базы: разметка
+    группирует подряд идущие (`regroup`)."""
     return (
         UserItem.objects.filter(user=user).select_related("item")
         .annotate(rank=rarity_rank("item__rarity")).order_by("kind", "rank", "item__name")

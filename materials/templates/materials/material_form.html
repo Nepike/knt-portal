@@ -3,7 +3,7 @@
 
 {% block title %}{% if material %}Редактирование материала{% else %}Новый материал{% endif %}{% endblock %}
 
-{# Перетаскивание файлов нужно только здесь — на остальных страницах плагин не грузим #}
+{# Плагин перетаскивания — только здесь. #}
 {% block plugins %}<script defer src="{% static 'core/vendor/alpine-sort.min.js' %}"></script>{% endblock %}
 
 {% block content %}

@@ -1,9 +1,8 @@
 {% load attachment_extras %}
 {% comment %}
-  Строка события — одна на Ленту, свежие тексты Сводки и тексты в карточке человека.
-  Действие спрашивает подтверждение на месте; htmx меняет строку на ответ (_done.html).
-  Цвет точки — вид события; неудачное (неверный пароль, печать не вышла) — красным.
-  dated — показать и дату: в Ленте её дают заголовки дней, в остальных местах их нет.
+  Строка события — для Ленты, Сводки и карточки человека. Действие подтверждается на месте,
+  htmx меняет строку на ответ (_done.html). Точка — цветом вида, неудачное — красным.
+  dated — показать и дату (в Ленте её дают заголовки дней).
 {% endcomment %}
 <article class="flex gap-3 py-3 border-t border-slate-100 dark:border-slate-800 first:border-t-0">
   <span class="w-11 shrink-0 pt-0.5 text-xs tabular-nums text-slate-400">{% if dated %}<span class="block">{{ event.when|date:"d.m" }}</span>{% endif %}{{ event.when|date:"H:i" }}</span>
@@ -16,10 +15,7 @@
     </p>
     {% if event.meta %}<p class="sm:hidden text-xs text-slate-400">{{ event.meta }}</p>{% endif %}
     {% if event.quote %}
-    {% comment %}
-      Длинный текст свёрнут до четырёх строк и разворачивается. Обрезается внутренний
-      абзац, а поля — у обёртки: обрезанный блок с полями показывал кусок пятой строки.
-    {% endcomment %}
+    {# Длинный текст свёрнут до четырёх строк; поля — у обёртки, иначе виден кусок пятой. #}
     <blockquote x-data="{ open: false, long: false }" x-init="long = $refs.text.scrollHeight > $refs.text.clientHeight + 1"
                 class="rounded-r-lg border-l-4 border-accent/30 bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-sm">
       <p x-ref="text" class="whitespace-pre-line break-words line-clamp-4" :class="{ 'line-clamp-4': !open }">{{ event.quote }}</p>

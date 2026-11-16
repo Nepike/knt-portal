@@ -40,7 +40,7 @@ LOCAL_APPS = [
     "notifications",
     "quest",
 ]
-# daphne первым во всём списке — иначе не перехватит runserver и в разработке не будет WebSocket
+# daphne первым — иначе не перехватит runserver, и в dev не будет WebSocket.
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
@@ -53,10 +53,10 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "core.middleware.LockdownMiddleware",
-    # Сайт закрытый: всё требует логина, кроме auth-страниц и явных @login_not_required.
+    # Сайт закрыт: всё требует входа, кроме @login_not_required.
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
     "users.middleware.MustChangePasswordMiddleware",
-    # После аутентификации: отметка «последний запрос» ставится уже известному человеку.
+    # После аутентификации: отметка активности ставится известному человеку.
     "users.sessions.ActivityMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -98,17 +98,13 @@ TIME_ZONE = "Europe/Moscow"
 USE_I18N = True
 USE_TZ = True
 
-# Событийный скин (core/context_processors.py): None — по календарю, имя — принудительно.
-# Принудительно ставят в dev.py, чтобы посмотреть скин до его дат. Тесты так закрепляют
-# обычный вид: иначе набор проверял бы разное в зависимости от месяца (core/test_runner.py).
+# Событийный скин: None — по календарю, имя — принудительно (dev.py; тесты — core/test_runner.py).
 SITE_THEME = None
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
-# Путь машинно-зависимый, как и адрес базы: на время переноса старого сайта медиа
-# уезжает на другой диск, где хватает места под 50+ ГБ.
-# Пустая строка тоже значит «по умолчанию»: в .env переменная обычно объявлена без значения.
+# Пустая строка — тоже «по умолчанию»: в .env переменная обычно без значения.
 MEDIA_ROOT = Path(env("MEDIA_ROOT", default="") or BASE_DIR / "media")
 
 # Прод переопределяет staticfiles на whitenoise (см. prod.py).
@@ -117,19 +113,14 @@ STORAGES = {
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
 
-# Cloudflare R2 для файлов книг и материалов (attachments.storage.media_storage).
-# Пусто — работаем с локальным диском, так живёт разработка.
-# Какой коммит выкачен: «3f2fc8f · 2026-10-26 · Print to EVERYONE». Ставит сборка образа
-# (Dockerfile, ARG KNT_VERSION из деплоя), не .env; в разработке пусто. Показывает Пульс.
+# Выкаченный коммит: «3f2fc8f · 2026-10-26 · …». Ставит сборка образа (ARG KNT_VERSION), в dev пусто.
 SITE_VERSION = env("KNT_VERSION", default="")
 
+# Cloudflare R2. Пусто — локальный диск (dev).
 R2_BUCKET = env("R2_BUCKET", default="")
-# Домен, с которого раздаются пользовательские файлы. Это ДРУГОЙ origin: куки сайта
-# туда не уходят, и проскочивший мимо фильтра html не дотянется до страниц сайта.
-# Пусто — тем же доменом, что и сайт (так живёт разработка).
+# Домен раздачи файлов — другой origin: куки сайта туда не уходят. Пусто — домен сайта (dev).
 FILES_BASE_URL = env("FILES_BASE_URL", default="")
-# nginx умеет X-Accel-Redirect: файл он забирает и кеширует сам, наш процесс
-# освобождается сразу. В разработке nginx нет — там остаётся обычный редирект.
+# X-Accel-Redirect: файл отдаёт nginx, процесс свободен сразу. В dev nginx нет — обычный редирект.
 MEDIA_ACCEL = False
 R2_OPTIONS = {
     "bucket_name": R2_BUCKET,
@@ -141,8 +132,7 @@ R2_OPTIONS = {
     "region_name": "auto",  # у R2 один регион, размещение задаётся при создании бакета
     "signature_version": "s3v4",
     "addressing_style": "path",  # bucket в пути: у R2 нет DNS-имён на бакет
-    # Подписью пользуется наш же nginx, и тут же, — но большой файл он тянет кусками,
-    # и на медленном канале это растягивается. Сутки с запасом.
+    # Подпись читает наш nginx, но большой файл он тянет кусками — сутки с запасом.
     "querystring_expire": 24 * 3600,
     "file_overwrite": False,  # S3-хранилище иначе молча затирает одноимённый файл
     # Ключи уникальны и не переиспользуются, поэтому кешировать можно навсегда.
@@ -154,8 +144,8 @@ TEST_RUNNER = "core.test_runner.MediaIsolatedRunner"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "users.User"
-# Шлагбаум ограничителя впереди (users/backends.py). ModelBackend — тем же путём, что
-# был по умолчанию: под этим именем записаны все живые сессии.
+# Первым — шлагбаум ограничителя (users/backends.py). ModelBackend — прежним путём:
+# на нём записаны живые сессии.
 AUTHENTICATION_BACKENDS = ["users.backends.LoginGate", "django.contrib.auth.backends.ModelBackend"]
 
 LOGIN_URL = "login"
@@ -163,24 +153,18 @@ LOGIN_REDIRECT_URL = "/"  # корень ведёт в материалы; TODO:
 LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_FROM_EMAIL = "КНТ МФТИ <info@knt-mipt.ru>"
-# Django отдаёт письмо в очередь, а настоящей отправкой занимается воркер —
-# бекендом из EMAIL_DELIVERY_BACKEND (в dev он переопределён на консоль).
+# Письмо уходит в очередь; отправляет воркер бэкендом EMAIL_DELIVERY_BACKEND.
 EMAIL_BACKEND = "core.mail.QueuedEmailBackend"
 EMAIL_DELIVERY_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
-# Кэш. В разработке — память процесса: runserver один, делить не с кем, а поднятый
-# контейнер Redis не должен быть условием, без которого не открывается форма входа.
-# Прод переопределяет на Redis (см. prod.py) — там воркеров несколько, и общий счётчик
-# нужен по-настоящему.
+# Кэш в dev — память процесса: форма входа не должна зависеть от Redis. Прод — Redis (prod.py).
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
-# Шина событий чата (только prod, dev держит слой в памяти). socket_timeout задаём явно:
-# он должен быть заметно больше, чем channels_redis ждёт сообщение блокирующим чтением,
-# иначе таймеры гонятся и рвут сокет (ловили это на redis-py с дефолтом в 5с).
+# Шина каналов (только prod). socket_timeout больше блокирующего чтения channels_redis,
+# иначе таймеры гонятся и рвут сокет.
 REDIS_HOSTS = [{"address": "redis://redis:6379/0", "socket_timeout": 30}]  # redis — имя сервиса из compose
 
-# Фоновые задачи. Всё, что ходит в чужую сеть и может подвиснуть, — почта, телеграм —
-# уезжает сюда, чтобы запрос пользователя не ждал чужой сервер. Адрес брокера в dev/prod.
+# Фоновые задачи: всё, что ходит в чужую сеть (почта, телеграм). Брокер — в dev.py и prod.py.
 CELERY_TASK_IGNORE_RESULT = True  # почти всё «выстрелил и забыл»; кому нужен ответ — ignore_result=False
 CELERY_RESULT_EXPIRES = 3600  # ответы редки и нужны недолго, копить их в Redis незачем
 CELERY_TASK_SOFT_TIME_LIMIT = 60  # задача получает исключение и успевает прибраться
@@ -189,24 +173,17 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # Redis может подня�
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # логирование настраивает Django (см. prod.LOGGING)
 CELERY_TIMEZONE = TIME_ZONE  # расписания beat считаются по нему
 
-# Расписание. Будильник — отдельный процесс (`beat` в docker-compose), задачу он кладёт
-# в ту же очередь, что и всё остальное.
-#
-# Ночью, потому что воркер один: уборка обходит весь бакет и на это время займёт его
-# целиком, а письма и телеграм подождут в очереди. В четыре часа их и так нет.
+# Расписание (beat). Ночью: воркер один, а уборка бакета занимает его надолго.
 CELERY_BEAT_SCHEDULE = {
-    # Бэкап базы — раньше уборки: он секундный, а уборка занимает воркер надолго.
+    # Короткие задачи — до долгой уборки бакета.
     "backup-database": {
         "task": "core.tasks.backup_database",
         "schedule": crontab(hour=3, minute=40),
     },
-    # Файлы печати — между бэкапом и уборкой бакета: уборка печати короткая, а та
-    # занимает воркер надолго.
     "sweep-printing": {
         "task": "printing.tasks.sweep_printing",
         "schedule": crontab(hour=3, minute=50),
     },
-    # Журналы входов и сбоев — короткая уборка, до долгой уборки бакета.
     "sweep-journals": {
         "task": "core.tasks.sweep_journals",
         "schedule": crontab(hour=4, minute=0),
@@ -215,15 +192,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "attachments.tasks.sweep_storage",
         "schedule": crontab(hour=4, minute=20),
     },
-    # Молчание агента печати замечает только сайт. Протухшие проверки выбрасываем: пока
-    # воркер занят ночной уборкой, их накопились бы десятки, а нужна одна, свежая.
+    # Молчание агента печати видит только сайт. Протухшие проверки выбрасываем: нужна одна свежая.
     "watch-printers": {
         "task": "printing.tasks.watch_printers",
         "schedule": 60.0,
         "options": {"expires": 50},
     },
-    # И молчание пекарни — тоже (intake/health.py). Тревога там от получаса ожидания,
-    # так что пяти минут хватает с лихвой.
+    # И молчание пекарни (intake/health.py): тревога — от получаса, пяти минут хватает.
     "watch-bakeries": {
         "task": "intake.tasks.watch_bakeries",
         "schedule": 300.0,
@@ -231,23 +206,19 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# Приёмка медиа (docs/media-pipeline.md): по этому токену ходит пекарня. Логин ей
-# не годится — она не человек и в сессии не живёт. Пусто = приёмка закрыта совсем:
-# ручки открыты в интернет без логина, и забытая настройка не должна пускать всех.
+# Токен пекарни (docs/media-pipeline.md). Пусто — приёмка закрыта: её ручки открыты без входа.
 INTAKE_TOKEN = env("INTAKE_TOKEN", default="")
 
-# Печать (docs/printing.md). Агент на М4 ходит по своему токену, а не по INTAKE_TOKEN:
-# пекарню и печать отзывают независимо. Пусто = ручки агента закрыты.
+# Токен агента печати (docs/printing.md), отзывается отдельно от пекарни. Пусто — закрыто.
 PRINT_AGENT_TOKEN = env("PRINT_AGENT_TOKEN", default="")
 PRINT_WEEKLY_PAGES = 100  # сторон A4 в неделю на человека; свой предел — в PrintAccount
-# Внешний адрес сети М4: с него человек «в здании». Не с него — только предупреждение.
+# Внешний адрес сети М4: с него человек «в здании», иначе только предупреждение.
 PRINT_M4_IPS = ("194.50.24.117",)
 PRINT_MAX_FILE_MB = 50
 # Больше недельного лимита: печатают часто одну главу из толстого учебника.
 PRINT_MAX_DOC_PAGES = 300
 
-# Архивы аналитики со второго сервера (telegram/views.py) — уходят в чат admin. Свой токен:
-# отзывается отдельно от пекарни и печати. Пусто = ящик закрыт.
+# Ящик аналитики (telegram/views.py), свой токен. Пусто — закрыт.
 ANALYTICS_TOKEN = env("ANALYTICS_TOKEN", default="")
 
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")

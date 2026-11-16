@@ -93,8 +93,7 @@ class VisibilityTests(LectoriumTests):
 
 
 class FilterTests(LectoriumTests):
-    """Подбор курсов — тот же, что у материалов (core/filters.py), и проверяем его
-    здесь отдельно: общий код легко сломать правкой ради одного из двух разделов."""
+    """Подбор курсов — общий с материалами (core/filters.py): проверяем и тут."""
 
     @classmethod
     def setUpTestData(cls):
@@ -247,8 +246,7 @@ class FilterTests(LectoriumTests):
 
 
 class YearGroupingTests(LectoriumTests):
-    """Курсы разбиты по годам, свежие сверху. Устройство то же, что у материалов
-    (regroup по уже отсортированному списку), и ломается оно так же — на стыке порций."""
+    """Курсы по годам, свежие сверху: regroup по отсортированному списку ломается на стыке порций."""
 
     def setUp(self):
         self.client.force_login(self.author)
@@ -276,7 +274,7 @@ class YearGroupingTests(LectoriumTests):
         self.assertLess(body.index("Новый курс"), body.index("Старый курс"))
 
     def test_the_year_is_written_once_over_the_whole_group(self):
-        """До заголовков год стоял в подписи каждой карточки и повторялся сколько угодно раз."""
+        """Год — один раз над группой, а не в каждой карточке."""
         for number in range(3):
             self.course(f"Курс {number}", 2025)
 
@@ -338,8 +336,7 @@ class DetailTests(LectoriumTests):
         self.assertNotIn("lecturePlayer", page.content.decode())
 
     def test_a_record_still_in_the_oven_does_not_open_a_player(self):
-        """Ссылку на запись пересылают, а обработка идёт час. Папки набора у неё ещё нет,
-        и плеер получил бы адрес в никуда вместо честного «обрабатывается»."""
+        """Запись без набора не открывает плеер: адрес вёл бы в никуда."""
         waiting = Lecture.objects.create(playlist=self.playlist, title="Свежая", order=9, prefix="")
         MediaJob.objects.create(
             recipe="lecture", source="uploads/a/z.mkv", lecture=waiting,
@@ -525,8 +522,7 @@ class SegmentCleanupTests(LectoriumTests):
         self.assertEqual([self.left(prefix) for prefix in prefixes], [0, 0, 0])
 
     def test_files_stay_while_the_lecture_does(self):
-        """Уборка висит на удалении, а не на сохранении: правка названия не должна
-        уносить набор."""
+        """Уборка — на удалении, не на сохранении."""
         lecture = self.make_playlist(lectures=1).lectures.first()
         make_set(lecture.prefix)
 
@@ -566,9 +562,8 @@ class SubmitTests(LectoriumTests):
         )
 
     def source(self, body=b"raw-video"):
-        """Сырьё так, как оно лежит после прямой загрузки: файл в хранилище плюс токен
-        на него. Класть по-настоящему обязательно — вьюха спрашивает у хранилища,
-        доехало ли, и подписью одной не удовлетворяется."""
+        """Сырьё после прямой загрузки: файл в хранилище и токен. Класть по-настоящему: вьюха
+        спрашивает хранилище."""
         key = f"uploads/{uuid4().hex}/zapis.mkv"
         file_storage().save(key, ContentFile(body))
         return adopt_token(key, "zapis.mkv")
@@ -596,9 +591,7 @@ class SubmitTests(LectoriumTests):
         self.assertEqual(self.playlist.lectures.count(), 2)
 
     def test_a_record_that_never_reached_the_bucket_is_refused(self):
-        """Подпись честная, файла нет: браузер оборвался на середине заливки. Ловим тут,
-        иначе задание встало бы в очередь и упало у пекарни через час — а человек
-        всё это время считал бы, что дело сделано."""
+        """Подпись честная, файла нет (браузер оборвался): ловим тут, а не у пекарни через час."""
         answer = self.submit(token=adopt_token("uploads/пусто/zapis.mkv", "zapis.mkv"))
 
         self.assertEqual(self.playlist.lectures.count(), 0)
@@ -607,8 +600,7 @@ class SubmitTests(LectoriumTests):
         self.assertTrue(any("не доехала" in str(one) for one in get_messages(answer.wsgi_request)))
 
     def test_a_record_heavier_than_the_limit_is_refused(self):
-        """Размер в подписанной ссылке не участвует: браузер объявляет его до отправки,
-        а положить по ссылке может сколько угодно. Правду знает только хранилище."""
+        """Размер в подписи не участвует — правду знает только хранилище."""
         with mock.patch("lectorium.views.max_upload_size", return_value=4):
             self.submit()
 
@@ -640,9 +632,7 @@ class SubmitTests(LectoriumTests):
 
 
 class BatchSubmitTests(LectoriumTests):
-    """Пачка записей. Каждая уезжает своим запросом сразу за своим файлом: пачку ставят,
-    чтобы уйти по делам, и вернуться к семи готовым лекциям из десяти лучше, чем к нулю
-    из-за того, что восьмой файл не долетел."""
+    """Пачка записей: каждая — своим запросом за своим файлом, упавшая не уносит остальные."""
 
     def setUp(self):
         cache.clear()  # ограничитель частоты живёт в кэше и переживает тесты
@@ -677,16 +667,14 @@ class BatchSubmitTests(LectoriumTests):
         self.assertEqual([one.order for one in self.playlist.lectures.all()], [0, 1, 2])
 
     def test_a_refusal_comes_back_readable(self):
-        """Причину показывают у СВОЕЙ строки списка, поэтому она нужна текстом,
-        а не сообщением на странице, которую в этот момент никто не перезагружает."""
+        """Причина — у своей строки списка: нужна текстом."""
         answer = self.hand(token=adopt_token("uploads/пусто/zapis.mkv", "zapis.mkv"))
         self.assertEqual(answer.status_code, 400)
         self.assertIn("не доехала", answer.json()["error"])
         self.assertEqual(self.playlist.lectures.count(), 0)
 
     def test_the_same_file_handed_twice_is_one_record(self):
-        """Ответ на первую сдачу потерялся — форма шлёт запрос ещё раз. Вторая лекция на
-        то же сырьё упала бы у пекарни: его снимают, как только испечётся первая."""
+        """Ответ на первую сдачу потерялся, форма шлёт ещё раз: вторая лекция на то же сырьё упала бы."""
         token = self.source()
 
         first, again = self.hand(token=token), self.hand(title="Повтор", token=token)
@@ -696,8 +684,7 @@ class BatchSubmitTests(LectoriumTests):
         self.assertEqual((self.playlist.lectures.count(), MediaJob.objects.count()), (1, 1))
 
     def test_a_repeat_is_accepted_even_after_the_source_is_gone(self):
-        """К повтору запись могла уже испечься, и сырья в хранилище нет — отвечать
-        «не доехала» на то, что давно принято, нельзя."""
+        """К повтору запись могла испечься, а сырьё — уйти: «не доехала» тут неверно."""
         token = self.source()
         self.hand(token=token)
         file_storage().delete(MediaJob.objects.get().source)
@@ -796,13 +783,8 @@ class PlaylistFormTests(LectoriumTests):
         self.assertEqual(Playlist.objects.count(), 0)
 
     def test_the_long_pickers_can_be_searched(self):
-        """Предметов под восемьдесят, преподавателей за сотню — без поиска до нужного
-        приходится листать колесом. Семестрам он, наоборот, ни к чему: их дюжина
-        и они по порядку, а лишнее поле ввода только отнимает первый тык.
-
-        Флаг живёт на виджете (core.widgets), и потерять его при правке формы —
-        дело одной строки: именно так поиск и пропал у предмета до 01.09.2026.
-        """
+        """Предметов и преподавателей — сотни: с поиском. Семестрам он ни к чему. Флаг — на
+        виджете (core.widgets), потерять его при правке формы легко."""
         fields = PlaylistForm().fields
 
         self.assertTrue(fields["subject"].widget.search)
@@ -825,8 +807,7 @@ class PlaylistFormTests(LectoriumTests):
 
 
 class TelegramTests(LectoriumTests):
-    """Модерации в чат — как о материале и книге: очередь на сайте есть, но в неё надо
-    зайти, а курс лекций ждёт проверки неделями."""
+    """Модерации в чат, как о материале: курс лекций ждёт проверки неделями."""
 
     def setUp(self):
         self.keeper = make_user("k@t.local", surname="Хранов")
@@ -1009,12 +990,7 @@ class RecordEditTests(LectoriumTests):
 
 
 class StageTests(LectoriumTests):
-    """Что написано вместо кадра, пока набора нет.
-
-    «Обрабатывается» у записи, до которой пекарня ещё не дошла, — неправда: очередь
-    стоит, пока не включат машину с видеокартой, и человек всё это время ждёт готового
-    с минуты на минуту.
-    """
+    """Что вместо кадра, пока набора нет: не «обрабатывается», пока пекарня не дошла."""
 
     def setUp(self):
         self.playlist = self.make_playlist(lectures=1)
@@ -1052,8 +1028,7 @@ class StageTests(LectoriumTests):
 
 
 class CheckPageTests(LectoriumTests):
-    """Служебная страница: посмотреть набор HLS по ключу его манифеста. Набор бывает
-    залит, но ещё не привязан к лекции, — а другого способа убедиться, что он играет, нет."""
+    """Служебная страница: набор HLS по ключу манифеста, пока он не привязан к лекции."""
 
     def setUp(self):
         self.key = file_storage().save("lectures/abc/master.m3u8", ContentFile(b"#EXTM3U\n"))
@@ -1069,8 +1044,7 @@ class CheckPageTests(LectoriumTests):
         self.assertIn("/hls/", page)
 
     def test_a_missing_key_is_said_out_loud(self):
-        """Иначе плеер молча показывал бы чёрный прямоугольник, и было бы непонятно,
-        то ли выпечка не доехала, то ли раздача сломана."""
+        """Иначе чёрный прямоугольник: не понять, выпечка не доехала или раздача сломана."""
         self.assertIn("нет такого куска", self.open("lectures/net/master.m3u8").content.decode())
 
     def test_a_key_that_is_not_a_manifest_is_refused(self):

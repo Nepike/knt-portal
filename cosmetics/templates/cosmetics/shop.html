@@ -4,18 +4,10 @@
 
 {% block content %}
 {% comment %}
-  Витрина: полки по видам вещей (cosmetics/_shelves.html), под ними кейсы (cosmetics/_cases.html).
-  Порядок и «мне по карману» — форма, которую htmx отправляет на каждое изменение; адрес
-  обновляет вьюха заголовком HX-Push-Url. hx-history="false" — как у лектория: снимок
-  htmx хранит innerHTML, и «назад» вернул бы прежние полки при новой галочке.
-
-  Стрелки клавиатуры листают вещи в открытом окне товара — жмут те же кнопки, что и мышь.
-  Прокрутку они при этом гасят: фокус остаётся на нажатой плитке, и полка под окном
-  уезжала бы вместе с листанием.
-
-  Окно закрывается через close(), а не прямым open = false: если в нём крутится рулетка
-  кейса, первое закрытие докручивает её до конца (roulette отменяет событие offer-closing).
-  Иначе человек закрыл бы окно и так и не узнал, что ему выпало.
+  Витрина: полки (_shelves.html), под ними кейсы (_cases.html). Порядок и «по карману» — форма
+  htmx; адрес — HX-Push-Url из вьюхи; hx-history="false" — «назад» не вернёт прежние полки.
+  Стрелки клавиатуры листают окно товара и гасят прокрутку полки под ним. Окно закрывается
+  через close(): крутящаяся рулетка сначала докручивается (offer-closing).
 {% endcomment %}
 <div class="w-full flex flex-col gap-6"
      x-data="{ open: false, close() { if (window.dispatchEvent(new CustomEvent('offer-closing', { cancelable: true }))) this.open = false } }"
@@ -37,7 +29,7 @@
       </select>
     </form>
     <span class="ml-auto text-sm text-slate-500 dark:text-slate-400">
-      {# id — за ним приходит рулетка кейса: обновить счёт, когда лента встанет #}
+      {# id — сюда рулетка пишет счёт, когда лента встанет #}
       на счету <span id="coins" class="font-bold text-accent tabular-nums">{{ coins }}</span> <i class="fa-solid fa-cent-sign text-xs text-accent"></i>
     </span>
   </div>
@@ -51,14 +43,13 @@
     {% include "cosmetics/_shelves.html" %}
   </div>
 
-  {# Вне #shelves: галочка «мне по карману» кейсы не прячет. Отступ — под липкую шапку: #}
-  {# сюда ведёт ссылка «Открыть кейс» праздничной страницы (quest/party.html) #}
+  {# Вне #shelves: «по карману» кейсы не прячет. scroll-mt — под липкую шапку (ссылка из quest/party.html) #}
   <div id="cases" class="scroll-mt-20">{% include "cosmetics/_cases.html" %}</div>
 
-  {# Окно товара. Содержимое приезжает по htmx, поэтому здесь только рамка и заглушка. #}
+  {# Окно товара: содержимое приезжает по htmx. #}
   <div x-show="open" x-cloak x-transition.opacity @click.self="close()"
        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-    {# Шире, чем нужно тексту: внутри карта страницы, и на узкой рамка аватара становится пятном #}
+    {# Шире тексту: внутри карта страницы #}
     <div id="offer" class="w-full max-w-2xl max-h-[90dvh] overflow-y-auto panel shadow-xl">
       <p class="p-6 text-sm text-slate-400">Загрузка…</p>
     </div>

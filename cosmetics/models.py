@@ -1,8 +1,4 @@
-"""Косметика: предметы, редкости, слоты, инвентарь.
-
-Своё приложение, а не часть economy: там валюта и журнал операций, здесь вещи и то,
-что человек носит. Пересекутся они позже, в магазине, — и пусть пересекутся явно.
-"""
+"""Косметика: предметы, редкости, слоты, инвентарь. Валюта и журнал — в economy."""
 
 from django.conf import settings
 from django.db import models
@@ -20,11 +16,11 @@ class CosmeticItem(models.Model):
         AVATAR_FRAME = "avatar_frame", "рамка аватара"
         PROFILE_HEADER = "profile_header", "шапка профиля"
         PROFILE_BACKGROUND = "profile_background", "фон профиля"
-        # TODO (M5): значок под именем. Новому виду нужны своя плитка (.slot-* в input.css)
-        # и своя строка в cosmetics/specs.py — иначе загрузят что попало.
+        # TODO (M5): значок под именем. Новому виду нужны плитка (.slot-* в input.css) и строка
+        # в cosmetics/specs.py.
 
     class Rarity(models.TextChoices):
-        """Ступени со старого сайта. Подписи там были матерные — смысл сохранён, слова нет."""
+        """Ступени со старого сайта."""
 
         COMMON = "common", "обычная"
         RARE = "rare", "редкая"
@@ -32,17 +28,11 @@ class CosmeticItem(models.Model):
         LEGENDARY = "legendary", "легендарная"
         MYTHICAL = "mythical", "мифическая"
 
-    # Ступени по возрастанию. В базе редкость — строка, и сортировка по ней алфавитная:
-    # «legendary» оказывался бы между «epic» и «mythical». Отсюда явный порядок.
+    # Ступени по возрастанию: в базе это строка, алфавит поставил бы legendary между epic и mythical.
     RARITY_ORDER = (Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY, Rarity.MYTHICAL)
 
-    # Цена по виду и ступени. Проставлять её каждой из полусотни вещей руками незачем:
-    # ступень ровно про это и есть, а вид решает, сколько места вещь занимает. Рамка — мера;
-    # фон примерно в полтора раза дороже — кроет всю страницу профиля и почти всегда видео;
-    # шапка дешевле — узкая полоса под именем.
-    # Цифры — решение пользователя 18 окт 2026: со стартовых 500 должно хватать не на одну
-    # вещь, а хотя бы на две редкие рамки. У половины людей на счету столько и есть.
-    # Новый вид вещи — новая строка; без неё вещь стоит как самая дорогая (см. cost).
+    # Цена по виду и ступени. Рамка — мера, фон дороже (вся страница, почти всегда видео),
+    # шапка дешевле. Новый вид — новая строка, иначе вещь стоит как самая дорогая (cost).
     PRICES = {
         Kind.PROFILE_HEADER: {
             Rarity.COMMON: 50, Rarity.RARE: 150, Rarity.EPIC: 350, Rarity.LEGENDARY: 900, Rarity.MYTHICAL: 2500,
@@ -60,16 +50,9 @@ class CosmeticItem(models.Model):
     rarity = models.CharField("редкость", max_length=20, choices=Rarity.choices, default=Rarity.COMMON, db_index=True)
     note = models.CharField("описание", max_length=200, blank=True)
 
-    # `image` — «как вещь выглядит картинкой»: у рамки это сама APNG-анимация, у шапки
-    # и фона — постер. `video` необязателен и старше: есть он — рисуем <video>, нет — <img>.
-    # Оба поля у одной вещи, а не два предмета: постер виден в те доли секунды, пока
-    # видео не готово, и в витрине до подстановки источника. Поэтому постер обязан быть
-    # КАДРОМ ЭТОГО ЖЕ видео — от чужой картинки виден скачок (проверить это нечем,
-    # держится на команде из docs/media-pipeline.md).
-    #
-    # Видео только у непрозрачных вещей. Прозрачного, работающего везде, не существует:
-    # VP9 умеет альфу, но её не декодирует Safari; HEVC с альфой умеет только Safari.
-    # Ради картинки 224×224 это не окупается, поэтому рамки остаются APNG.
+    # `image` — вещь картинкой: у рамки сама APNG-анимация, у шапки и фона — постер, КАДР этого
+    # же видео (команда — docs/media-pipeline.md). `video` необязателен: есть — рисуем <video>.
+    # Видео только у непрозрачных вещей: прозрачного, работающего везде, нет — рамки остаются APNG.
     image = models.ImageField(
         "картинка", upload_to=frame_upload_to, storage=media_storage,
         help_text="у анимированной вещи — первый кадр её видео",
@@ -79,9 +62,8 @@ class CosmeticItem(models.Model):
         help_text="mp4 по спеке, испечённый снаружи — сайт не конвертирует",
     )
 
-    # Откуда вещь взялась: «legacy:14», «file:9f3c….png», «generated:Ночь». По нему
-    # повторный импорт узнаёт уже перенесённое. По имени узнавать нельзя: половине рамок
-    # имя придумываем мы сами — на втором заходе придумали бы другое и разложили дважды.
+    # Откуда вещь: «legacy:14», «file:9f3c….png», «generated:Ночь» — по нему повторный импорт
+    # узнаёт перенесённое (имя половине рамок придумываем сами).
     source = models.CharField("источник", max_length=120, blank=True)
     created = models.DateTimeField("добавлена", default=timezone.now)
 
@@ -95,7 +77,7 @@ class CosmeticItem(models.Model):
         verbose_name_plural = "предметы"
         ordering = ["kind", "rarity", "name"]
         constraints = [
-            # Пустой источник у добавленных руками — таких может быть сколько угодно.
+            # Пустой источник (добавлено руками) — сколько угодно.
             models.UniqueConstraint(
                 fields=["source"], condition=~models.Q(source=""), name="one_item_per_source",
             ),
@@ -106,8 +88,7 @@ class CosmeticItem(models.Model):
 
     @property
     def cost(self):
-        """Сколько стоит. Вид или ступень не из таблицы — самая высокая цена в ней:
-        ошибиться в сторону «дорого» не страшно, в сторону «даром» — раздать полбакета."""
+        """Сколько стоит. Вид или ступень не из таблицы — самая высокая цена: ошибиться в «дорого» не страшно."""
         if self.price is not None:
             return self.price
         try:
@@ -119,13 +100,11 @@ class CosmeticItem(models.Model):
         return slot_heading(self.kind)
 
     def save(self, *args, **kwargs):
-        # Новой вещи владельцев ещё нет, и запрос ниже ей незачем: `self.pk` после
-        # super().save() уже стоит всегда и отличить создание от правки не помог бы.
+        # Новой вещи владельцев нет: после super().save() отличить создание по pk уже нельзя.
         fresh = self._state.adding
         super().save(*args, **kwargs)
-        # Вид продублирован в UserItem, и правка вида в админке обязана поехать следом,
-        # иначе вещь останется в чужом блоке инвентаря и займёт не тот слот. Снимаем
-        # заодно: в новом слоте у человека уже может быть надето своё.
+        # Вид продублирован в UserItem: правка вида едет следом и снимает вещь — в новом слоте
+        # может быть надето своё.
         if not fresh:
             self.owners.exclude(kind=self.kind).update(kind=self.kind, equipped=False)
 
@@ -138,8 +117,7 @@ SLOT_TITLES = {
 
 
 def slot_heading(kind):
-    """Подпись блока в инвентаре и в витрине. Не get_kind_display(): там название вещи
-    в единственном числе («рамка аватара»), а над блоком нужна множественная."""
+    """Подпись блока в инвентаре и витрине — во множественном числе, в отличие от get_kind_display()."""
     return SLOT_TITLES.get(kind, "Прочее")
 
 
@@ -150,9 +128,8 @@ class UserItem(models.Model):
         settings.AUTH_USER_MODEL, verbose_name="владелец", on_delete=models.CASCADE, related_name="items",
     )
     item = models.ForeignKey(CosmeticItem, verbose_name="предмет", on_delete=models.CASCADE, related_name="owners")
-    # Копия item.kind: путь по внешнему ключу в UniqueConstraint не пускают, а без
-    # ограничения «одна вещь на слот» держалось бы только на честном слове кода.
-    # Проставляется в save() и здесь, и на стороне предмета (CosmeticItem.save).
+    # Копия item.kind: путь по внешнему ключу в UniqueConstraint не пускают. Ставится в save()
+    # здесь и в CosmeticItem.save.
     kind = models.CharField("вид", max_length=20, choices=CosmeticItem.Kind.choices, editable=False)
     equipped = models.BooleanField("надето", default=False)
     acquired = models.DateTimeField("получено", default=timezone.now)
@@ -180,13 +157,8 @@ class UserItem(models.Model):
 
 
 class Case(models.Model):
-    """Кейс: коробка с ценой и набором вещей. Открыл — выпала одна вещь из набора.
-
-    Шансы общие на все кейсы и живут в cosmetics/cases.py — по ступеням, а не по вещам:
-    взвешивать руками каждую из полусотни вещей незачем. В набор идут любые вещи, и те,
-    которых нет в продаже (sold выключен), — так у кейса бывают свои, эксклюзивные.
-    Набор не следит за магазином сам: новую рамку в кейс «Рамки» добавляют руками.
-    """
+    """Кейс: цена и набор вещей. Шансы — общие, по ступеням (cosmetics/cases.py). В набор идут
+    и вещи вне продажи. Набор за магазином не следит: новую рамку в кейс добавляют руками."""
 
     name = models.CharField("название", max_length=100, unique=True)
     price = models.PositiveIntegerField("цена")
@@ -209,17 +181,14 @@ class Case(models.Model):
 
 
 class CaseOpening(models.Model):
-    """Журнал открытий: кто, какой кейс, что выпало, за сколько.
-
-    По нему шансы сверяются с фактом, и по нему же видно, был ли у человека первый,
-    подарочный кейс. Кейс с открытиями не удаляется — его выключают.
-    """
+    """Журнал открытий: по нему сверяют шансы и видят первый, подарочный кейс. Кейс с
+    открытиями не удаляют — выключают."""
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.CASCADE, related_name="case_openings",
     )
     case = models.ForeignKey(Case, verbose_name="кейс", on_delete=models.PROTECT, related_name="openings")
-    # Пусто — выпала ступень, которая у человека уже собрана целиком: вещи нет, вернули половину.
+    # Пусто — ступень была собрана: вещи нет, вернули половину.
     item = models.ForeignKey(
         CosmeticItem, verbose_name="выпало", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
     )

@@ -12,6 +12,5 @@ class AttachmentsConfig(AppConfig):
         from .uploads import MAX_PICTURE_PIXELS
 
         connect_blob_cleanup()
-        # Страховка для любого кода, что откроет картинку: свыше вдвое большего Pillow
-        # откажет сам (по умолчанию — от 179 Мп, а это гигабайт памяти на разбор).
+        # Общий потолок Pillow (по умолчанию — 179 Мп, гигабайт памяти на разбор).
         Image.MAX_IMAGE_PIXELS = MAX_PICTURE_PIXELS

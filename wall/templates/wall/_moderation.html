@@ -1,0 +1,103 @@
+{# Модерация: люди (бан, откат его правок), область (заливка, откат, заморозка), новая доска. #}
+<div class="space-y-4">
+  <div role="tablist" aria-label="Модерация" class="flex gap-0.5 rounded-xl p-0.5 bg-slate-100 dark:bg-slate-800">
+    <button type="button" role="tab" :aria-selected="modTab === 'people'" @click="modTab = 'people'" class="flex-1 rounded-lg px-2 py-1.5"
+            :class="modTab === 'people' && 'bg-white dark:bg-slate-900 shadow-sm font-medium'">Люди</button>
+    <button type="button" role="tab" :aria-selected="modTab === 'area'" @click="modTab = 'area'" class="flex-1 rounded-lg px-2 py-1.5"
+            :class="modTab === 'area' && 'bg-white dark:bg-slate-900 shadow-sm font-medium'">Область</button>
+    <template x-if="can.admin">
+      <button type="button" role="tab" :aria-selected="modTab === 'board'" @click="modTab = 'board'" class="flex-1 rounded-lg px-2 py-1.5"
+              :class="modTab === 'board' && 'bg-white dark:bg-slate-900 shadow-sm font-medium'">Доска</button>
+    </template>
+  </div>
+
+  <template x-if="modTab === 'people'">
+    <div class="space-y-4">
+      <p x-show="!target" class="text-slate-500 dark:text-slate-400">Инструментом «Кто» (W) щёлкни по клетке человека и нажми «Модерировать» — или выбери из списка ниже.</p>
+      <template x-if="target">
+        <div class="space-y-3">
+          <div class="flex items-center gap-2 rounded-xl px-3 py-2 bg-rose-50 dark:bg-rose-500/10">
+            <b class="truncate" x-text="target.name"></b>
+            <button type="button" @click="target = null" class="ml-auto btn btn-ghost !px-2" aria-label="Снять выбор"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <template x-for="[hours, label] in ban_hours" :key="hours">
+              <button type="button" @click="banHours = hours" x-text="label"
+                      class="rounded-full border border-slate-200 dark:border-slate-700 px-3 py-1 text-xs"
+                      :class="banHours === hours && '!border-accent bg-accent/10 text-accent'"></button>
+            </template>
+          </div>
+          <input type="text" x-model="banReason" maxlength="200" placeholder="причина — её увидит сам человек" aria-label="Причина"
+                 class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2.5 py-1.5">
+          <label class="checkbox"><input type="checkbox" x-model="banRollback">и откатить его правки за последний час</label>
+          <button type="button" @click="banTarget()" :disabled="busy" class="btn btn-danger w-full">Закрыть Стену</button>
+          <div class="flex items-center gap-2">
+            <input type="number" min="1" max="720" x-model.number="rollbackHours" aria-label="Часов назад"
+                   class="w-16 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+            <span class="text-slate-500">ч назад</span>
+            <button type="button" @click="rollbackTarget()" :disabled="busy" class="btn btn-ghost ml-auto">Откатить его правки</button>
+          </div>
+        </div>
+      </template>
+      <div class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+        <h2 class="wall-h">Закрыта сейчас</h2>
+        <p x-show="!bansList.length" class="text-slate-400">Никому.</p>
+        <template x-for="person in bansList" :key="person.id">
+          <div class="flex items-center gap-2">
+            <span class="min-w-0 flex-1">
+              <b class="block truncate font-medium" x-text="person.name"></b>
+              <span class="block truncate text-xs text-slate-500 dark:text-slate-400" x-text="term(person) + (person.reason ? ' · ' + person.reason : '')"></span>
+            </span>
+            <button type="button" @click="unban(person)" class="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs">снять</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="modTab === 'area'">
+    <div class="space-y-3">
+      <p class="text-slate-500 dark:text-slate-400">Инструмент «Выделение» (M): протяни рамку по доске.</p>
+      <div class="flex items-center gap-2">
+        <span :class="rectTooBig && 'text-rose-500'" x-text="rectSize"></span>
+        <button type="button" @click="dropRect()" x-show="rectReady" class="btn btn-ghost !px-2 ml-auto">Сбросить</button>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" @click="area('fill', { color: brush })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-primary">Залить кистью</button>
+        <button type="button" @click="area('fill', { color: 0 })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost">Очистить</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="number" min="1" max="720" x-model.number="areaHours" aria-label="Часов назад"
+               class="w-16 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+        <span class="text-slate-500">ч назад</span>
+        <button type="button" @click="area('rollback', { hours: areaHours })" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost ml-auto">Откатить</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="text" x-model="areaNote" maxlength="100" placeholder="что за рисунок" aria-label="Подпись участка"
+               class="min-w-0 flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+        <button type="button" @click="area('protect', { note: areaNote }); areaNote = ''" :disabled="!rectReady || rectTooBig || busy" class="btn btn-ghost">Заморозить</button>
+      </div>
+      <div x-show="areas.length" class="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-1.5">
+        <h2 class="wall-h">Закрытые участки</h2>
+        <template x-for="frozen in areas" :key="frozen.pk">
+          <div class="flex items-center gap-2">
+            <span class="shrink-0 tabular-nums" x-text="`${frozen.x1}, ${frozen.y1} — ${frozen.x2}, ${frozen.y2}`"></span>
+            <span class="min-w-0 truncate text-slate-400" x-text="frozen.note"></span>
+            <button type="button" @click="dropArea(frozen.pk)" class="ml-auto shrink-0 text-xs text-rose-600 dark:text-rose-400">снять</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="modTab === 'board'">
+    <div class="space-y-3">
+      <p class="text-slate-500 dark:text-slate-400">Нынешняя доска уйдёт в архив вместе с журналом; на странице появится пустая.</p>
+      <div class="flex items-center gap-2">
+        <input type="text" x-model="newTitle" maxlength="100" placeholder="название" aria-label="Название новой доски"
+               class="min-w-0 flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
+        <button type="button" @click="newBoard(newTitle)" :disabled="!newTitle.trim() || busy" class="btn btn-danger">Открыть</button>
+      </div>
+    </div>
+  </template>
+</div>

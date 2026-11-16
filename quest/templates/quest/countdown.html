@@ -6,14 +6,10 @@
 <h1 class="page-title text-2xl font-bold">Отсчёт</h1>
 
 {% comment %}
-  Экран терминала: строки взлома, цифры из блоков, полоса и консоль (clock и terminal
-  в core/js/glitch.js). Под вывод консоли отведено постоянное место: сколько ни набирай,
-  таймер не сдвинется. Цифры нарисованы символами — экранный диктор читает скрытую
-  строку «Осталось …», а не рисунок.
-
-  После нуля (1 декабря, zero) — красный день: «время вышло», передача взломщиков
-  (запись лектория, quest.Broadcast) и ввод ключа в консоли. Кто на странице в полночь,
-  тому она перезагрузится сама.
+  Экран терминала: строки, цифры из блоков, полоса, консоль (clock и terminal в glitch.js).
+  Вывод консоли — постоянной высоты: таймер не сдвинется. Диктор читает скрытое «Осталось …».
+  После нуля (zero) — красный день: передача (quest.Broadcast) и ввод ключа; в полночь
+  страница перезагрузится сама.
 {% endcomment %}
 <section class="cd-screen{% if zero %} cd-zero{% endif %} mt-4" aria-label="{% if zero %}Передача взломщиков{% else %}Обратный отсчёт{% endif %}"
          x-data="clock({{ deadline }}, {{ now }}, {{ since }})" :class="spasm" @laugh="shake()">
@@ -28,8 +24,7 @@
     <p><span class="cd-ok">[ ok ]</span> файрвол отвлечён котиками</p>
     {% endif %}
     {% if slots %}
-    {# Ключ — без слов «ищите»: одна строка «повреждён» и закрытые ячейки. Сданные (quest.keys) — открыты #}
-    {# Сданная в консоли копия открывает свою ячейку сразу, без перезагрузки (keyline в glitch.js) #}
+    {# Ключ без слов «ищите»: «повреждён» и закрытые ячейки; сданная копия открывает свою сразу (keyline). #}
     <p x-data="keyline" @key-restored.window="restore($event.detail)"><span class="cd-bad">[ !! ]</span> ключ повреждён:{% for slot in slots %} {% if slot.value %}<span class="cd-ok" data-slot="{{ slot.number }}">{{ slot.value }}</span>{% else %}<span class="cd-redacted" data-slot="{{ slot.number }}">░░░░</span>{% endif %}{% endfor %}</p>
     {% endif %}
     {% if zero %}

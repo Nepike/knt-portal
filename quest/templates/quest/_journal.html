@@ -1,8 +1,4 @@
-{% comment %}
-  Журнал взлома внизу боковой панели (глитч-скин): строки по одной ползут вверх
-  (journal в core/js/glitch.js). Строки собирает quest_extras.journal; в разметке они под
-  занавеской (veil) — среди них подсказка квеста.
-{% endcomment %}
+{# Журнал взлома внизу панели (journal в glitch.js); строки — quest_extras.journal, под занавеской. #}
 {% load quest_extras %}
 <div class="skin-log" aria-hidden="true" x-data="journal">
   <p class="skin-log-head">$ tail -f takeover.log</p>

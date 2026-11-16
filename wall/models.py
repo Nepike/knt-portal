@@ -1,23 +1,22 @@
+from datetime import datetime, timezone as dt_timezone
+
 from django.conf import settings
 from django.core.validators import MaxValueValidator
 from django.db import models
 from django.utils import timezone
 
 from .palette import EMPTY
-from .rules import MAX_CHARGES
+
+# «Навсегда» для бана: дата, до которой никто не доживёт, — проверка остаётся одной.
+FOREVER = datetime(9999, 1, 1, tzinfo=dt_timezone.utc)
 
 
 class Board(models.Model):
-    """Полотно. Текущее ровно одно, прошлые остаются архивом семестра.
-
-    Размер небольшой намеренно: активных у нас десятки, а не миллионы, и большое
-    полотно выглядело бы заброшенным. Растёт вправо и вниз, чтобы уже поставленные
-    пиксели не поехали по координатам.
-    """
+    """Полотно. Текущее одно, прошлые — архив семестра. Размер небольшой намеренно; растёт
+    вправо и вниз, чтобы поставленные пиксели не поехали."""
 
     title = models.CharField("название", max_length=100)
-    # Потолок в байт не случаен: журнал для таймлапса пишется по три байта на событие
-    # (x, y, цвет), и доска шире 256 клеток в этот формат уже не влезет.
+    # Не больше 255: журнал таймлапса пишет по три байта на событие (x, y, цвет).
     width = models.PositiveSmallIntegerField("ширина", default=128, validators=[MaxValueValidator(255)])
     height = models.PositiveSmallIntegerField("высота", default=72, validators=[MaxValueValidator(255)])
     is_active = models.BooleanField("текущая", default=True)
@@ -28,9 +27,12 @@ class Board(models.Model):
         verbose_name = "доска"
         verbose_name_plural = "доски"
         ordering = ["-created"]
-        permissions = [("moderate_wall", "Может править Стену")]
+        permissions = [
+            ("moderate_wall", "Может править Стену"),
+            ("stamp_wall", "Может наносить картинки на Стену"),
+        ]
         constraints = [
-            # Иначе непонятно, какую из двух показывать и куда писать пиксели.
+            # Активная доска — одна: иначе непонятно, какую показывать.
             models.UniqueConstraint(
                 fields=["is_active"], condition=models.Q(is_active=True), name="single_active_board",
             ),
@@ -48,11 +50,7 @@ class Board(models.Model):
 
 
 class Pixel(models.Model):
-    """Нынешнее состояние клетки.
-
-    Стёртая клетка не удаляется, а остаётся строкой с цветом EMPTY: так видно, кто её
-    стёр, и путь записи получается один и тот же на закраску и на стирание.
-    """
+    """Нынешнее состояние клетки. Стёртая остаётся строкой с EMPTY: видно, кто стёр."""
 
     board = models.ForeignKey(Board, verbose_name="доска", on_delete=models.CASCADE, related_name="pixels")
     x = models.PositiveSmallIntegerField()
@@ -74,12 +72,8 @@ class Pixel(models.Model):
 
 
 class Placement(models.Model):
-    """Журнал доски, только на вставку.
-
-    Из него живут три вещи сразу: история клетки («кто это поставил»), перемотка всей
-    доски и откат области модератором. Стирания пишутся сюда же — иначе на пустой
-    клетке не узнать, кто её опустошил.
-    """
+    """Журнал доски, только на вставку: история клетки, перемотка и откат области. Стирания —
+    сюда же, иначе на пустой клетке не узнать, кто её опустошил."""
 
     board = models.ForeignKey(Board, verbose_name="доска", on_delete=models.CASCADE, related_name="placements")
     x = models.PositiveSmallIntegerField()
@@ -94,8 +88,7 @@ class Placement(models.Model):
     class Meta:
         verbose_name = "событие доски"
         verbose_name_plural = "события доски"
-        # id, а не created: у одновременных событий таймстемпы совпадают, а порядок
-        # важен — он же номер версии, которым клиент догоняет пропущенное.
+        # id, а не created: таймстемпы совпадают, а порядок — номер версии для догона.
         ordering = ["-id"]
         indexes = [
             models.Index(fields=["board", "x", "y", "-id"]),
@@ -107,12 +100,8 @@ class Placement(models.Model):
 
 
 class ProtectedArea(models.Model):
-    """Замороженный участок: готовый рисунок, который не дают перекрашивать.
-
-    Прямоугольник, а не перечень клеток: модератор защищает работу целиком, а держать
-    и проверять тысячи отдельных клеток на каждый чужой мазок вышло бы куда дороже.
-    Модератора рамка не держит — иначе он не смог бы убрать то, что сам и закрыл.
-    """
+    """Замороженный участок — прямоугольником, а не перечнем клеток (проверка на каждый мазок).
+    Модератора рамка не держит."""
 
     board = models.ForeignKey(Board, verbose_name="доска", on_delete=models.CASCADE, related_name="areas")
     x1 = models.PositiveSmallIntegerField()
@@ -136,22 +125,21 @@ class ProtectedArea(models.Model):
 
 
 class WallProfile(models.Model):
-    """Запас пикселей человека и его счётчик закрашенного.
-
-    Заряды не начисляются по расписанию: храним, сколько их было в момент charged_at,
-    а сколько есть сейчас — считаем при обращении. Иначе понадобилась бы задача,
-    которая каждые три минуты обходит всех пользователей разом.
-    """
+    """Счётчик закрашенного в счёт награды и бан на доске."""
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, verbose_name="владелец", on_delete=models.CASCADE, related_name="wall",
     )
-    charges = models.PositiveSmallIntegerField("заряды", default=MAX_CHARGES)
-    charged_at = models.DateTimeField("отсчёт зарядов", default=timezone.now)
-    # Считаем ЗДЕСЬ, а не по журналу доски: в него пишут и заливки модератора, и консоль,
-    # а награда полагается только за мазок, оплаченный зарядом. Растёт в _take_charge.
-    painted = models.PositiveIntegerField("закрашено клеток", default=0)
+    # Не журнал: в награду идут только мазки кистью и не больше rules.COUNTED_PER_DAY в сутки.
+    painted = models.PositiveIntegerField("закрашено в счёт награды", default=0)
+    counted_on = models.DateField("день счёта", null=True, blank=True)
+    counted_today = models.PositiveSmallIntegerField("в счёт за день", default=0)
     banned_until = models.DateTimeField("доска закрыта до", null=True, blank=True)
+    ban_reason = models.CharField("за что", max_length=200, blank=True)
+    banned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="кто закрыл", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="+",
+    )
 
     class Meta:
         verbose_name = "участник Стены"
@@ -159,3 +147,11 @@ class WallProfile(models.Model):
 
     def __str__(self):
         return str(self.user)
+
+    @property
+    def banned(self):
+        return bool(self.banned_until and self.banned_until > timezone.now())
+
+    @property
+    def forever(self):
+        return bool(self.banned_until and self.banned_until.year >= FOREVER.year)

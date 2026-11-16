@@ -6,8 +6,7 @@
 {# Мессенджер ровно на экран: скроллится лента, не страница. На мобиле — без полей и подвала #}
 {% block wrapper_class %}h-dvh{% endblock %}
 {% block main_class %}min-h-0 sm:px-6 sm:py-6{% endblock %}
-{# Шире обычного: у остальных страниц колонка текста, а тут два столбца, и на большом #}
-{# мониторе мессенджер стоял бы посреди пустоты. Саму ленту держит в узде _message.html #}
+{# Шире обычного: два столбца. Ширину ленты держит _message.html #}
 {% block main_width %}max-w-7xl{% endblock %}
 {% block footer %}{% endblock %}
 
@@ -28,22 +27,14 @@
   </aside>
 
   {% if chat %}
-  {# Адрес списка отдаём компоненту: ему есть куда уводить, когда чат исчез из-под ног #}
-  {# Вставка из буфера и перетаскивание — на всю секцию: картинку бросают куда попало #}
+  {# Адрес списка — чтобы уйти, когда чат исчез. Вставка и перетаскивание — на всю секцию. #}
   <section data-chat-id="{{ chat.pk }}" class="flex flex-col min-h-0 sm:rounded-2xl sm:border sm:border-slate-200 dark:sm:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
            x-data="chat('{% url 'chat_list' %}', '{% url 'chat_people' chat.pk %}', {{ upload_limits }})"
            @paste="dropped($event)" @dragover.prevent @drop.prevent="dropped($event)">
 
     <header class="flex items-center gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800">
       <a href="{% url 'chat_list' %}" class="lg:hidden text-slate-400 hover:text-accent" aria-label="К списку"><i class="fa-solid fa-arrow-left"></i></a>
-      {% comment %}
-        Лицо собеседника (или значок вида чата) в шапке: раньше её занимала одна строка
-        текста, и открытый чат ничем не отличался от любой другой страницы сайта.
-
-        «В сети» считается по отметке последней активности, а она освежается раз в пять
-        минут (users/sessions.py) — то есть это «заходил только что», а не присутствие
-        секунда в секунду. Поэтому и написано без обещаний.
-      {% endcomment %}
+      {# «В сети» — по отметке активности (свежеет раз в пять минут, users/sessions.py): «заходил только что». #}
       {% if chat.kind == "dm" and other %}
       <a href="{% url 'profile' other.pk %}" class="flex items-center gap-3 min-w-0 hover:opacity-80 transition-opacity">
         {% include "core/_avatar.html" with person=other box="w-10 h-10 rounded-[22%]" text="text-sm" only %}
@@ -72,11 +63,6 @@
         </span>
       </button>
       {% endif %}
-      {% comment %}
-        Меню чата. Раньше в шапке висела одна корзина, и то только в ЛС, а всё остальное
-        пряталось в модалке участников — куда в диалоге и не попасть. Теперь действия
-        над самим чатом собраны в одном месте.
-      {% endcomment %}
       <button type="button" @click="openSearch()" class="btn btn-ghost !px-2.5 ml-auto shrink-0 text-slate-400 hover:!text-accent" aria-label="Поиск по чату">
         <i class="fa-solid fa-magnifying-glass"></i>
       </button>
@@ -97,11 +83,7 @@
       </div>
     </header>
 
-    {% comment %}
-      Поиск по чату. Строка выезжает под шапкой, находки занимают место ленты: они и
-      есть та же лента, только выбранная по слову, и показывать их сбоку значило бы
-      сжать переписку ради списка, который живёт полминуты.
-    {% endcomment %}
+    {# Поиск по чату: строка под шапкой, находки — на месте ленты. #}
     <div x-show="searching" x-cloak class="border-b border-slate-200 dark:border-slate-800">
       <div class="flex items-center gap-2 px-3 py-2">
         <i class="fa-solid fa-magnifying-glass text-slate-400 text-sm"></i>
@@ -124,18 +106,10 @@
            @touchend="swipeEnd()" @touchcancel="swipeEnd()">
         {% include "chats/_history.html" %}
       </div>
-      {% comment %}
-        Стрелка ответа: одна на ленту, выезжает из-под сообщения, пока его тянут вбок.
-
-        Прятать значок обычным `hidden` нельзя: утилиты Tailwind лежат в @layer, а стили
-        FontAwesome — нет, и незаслоённое правило `display` побеждает любой слой. Отсюда
-        восклицательный знак — он же стоит у значков в переключателе темы.
-      {% endcomment %}
+      {# Стрелка ответа при свайпе — одна на ленту. Значок FA прячет только !hidden. #}
       <i x-ref="swipe" class="fa-solid fa-reply !hidden absolute left-3 z-10 text-accent pointer-events-none"></i>
 
-      {# Кнопка «вниз»: прокрутил вверх — и не знаешь, дописали ли что-то, пока читал #}
-      {# Без x-transition: показ и скрытие тут идут пачками (пришло сообщение, дёрнулась #}
-      {# прокрутка), и прерванный переход оставлял кнопку висеть на прочитанной ленте. #}
+      {# Кнопка «вниз». Без x-transition: показ и скрытие идут пачками, прерванный переход оставлял кнопку. #}
       {% if in_history %}
       {# Лента стоит посреди истории: «вниз» тут значит вернуться в конец переписки #}
       <a href="{% url 'chat_detail' chat.pk %}"
@@ -157,12 +131,8 @@
     </div>
 
     {% comment %}
-      chats:current — открытый чат и вкладка на экране (иначе пометили бы прочитанным
-      невиденное); chats:sync — догон после обрыва связи.
-
-      Открылись на найденном (?at=) — за новыми не ходим вовсе: курсор ленты стоит
-      посреди истории, и первый же догон принёс бы всю переписку с того места. Вернуться
-      к последним можно кнопкой — она ведёт на обычный адрес чата.
+      chats:current — открытый чат на видимой вкладке; chats:sync — догон после обрыва. Открылись
+      на найденном (?at=) — за новыми не ходим: догон принёс бы всю переписку с того места.
     {% endcomment %}
     {% if not in_history %}
     <div hx-get="{% url 'messages_new' chat.pk %}" hx-swap="beforeend" hx-target="#messages"
@@ -178,18 +148,9 @@
         <button type="button" @click="replyTo = null" class="text-slate-400 hover:text-rose-500" aria-label="Отменить ответ"><i class="fa-solid fa-xmark"></i></button>
       </div>
       {% comment %}
-        after — курсор ленты: ответ донесёт и чужое, пришедшее пока набирали.
-
-        Поле — textarea, а не input: абзац в сообщении набрать было нельзя вовсе, при том
-        что пузырь переносы показывать умеет, а форма правки — уже textarea. Растёт по
-        содержимому до восьми строк (max-h), дальше прокручивается сам: иначе длинное
-        сообщение съедало бы ленту, ради которой человек сюда и пришёл.
-
-        items-end у формы — чтобы кнопка оставалась у нижнего края растущего поля.
-      {% endcomment %}
-      {% comment %}
-        Выбранные вложения. Строка живёт НАД полем ввода и до отправки: пока она видна,
-        человек может убрать лишнее, а фото уже сжато и готово уехать.
+        Форма: after — курсор ленты, ответ донесёт и чужое. Поле — textarea до восьми строк
+        (max-h), дальше прокрутка; items-end держит кнопку у нижнего края. Выбранные вложения —
+        строкой над полем, фото уже сжато.
       {% endcomment %}
       <div x-show="picked.length" x-cloak class="flex gap-2 px-3 pt-2 overflow-x-auto overscroll-contain">
         <template x-for="item in picked" :key="item.id">
@@ -211,11 +172,7 @@
         </template>
       </div>
 
-      {% comment %}
-        hx-encoding — иначе htmx отправит форму как urlencoded, и файлы до сервера
-        не доедут вовсе. Сами файлы лежат в скрытых полях-носителях: то, что человек
-        выбрал, сначала проходит через сжатие, и в запрос уезжает уже результат.
-      {% endcomment %}
+      {# hx-encoding — иначе htmx шлёт urlencoded без файлов. Файлы — в скрытых полях-носителях, уже сжатые. #}
       <form class="chat-send flex items-end gap-2 p-3" hx-encoding="multipart/form-data"
             hx-post="{% url 'message_send' chat.pk %}" hx-target="#messages" hx-swap="beforeend"
             hx-vals='js:{after: window.lastMessageId()}'>
@@ -241,10 +198,7 @@
         </div>
 
         <div class="flex-1 min-w-0 relative" @click.outside="hints = []">
-          {% comment %}
-            Подсказка по упоминаниям. mousedown.prevent — иначе поле теряет фокус раньше,
-            чем доходит нажатие, и вставлять имя уже некуда.
-          {% endcomment %}
+          {# Подсказка упоминаний. mousedown.prevent — иначе поле теряет фокус раньше нажатия. #}
           <div x-show="hints.length" x-cloak
                class="absolute bottom-full left-0 mb-2 z-10 w-64 max-h-56 overflow-y-auto scroll-slim rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-1 text-sm">
             <template x-for="(person, i) in hints" :key="person.id">
@@ -259,7 +213,7 @@
                     @keydown.arrow-down="hintMove(1, $event)" @keydown.arrow-up="hintMove(-1, $event)"
                     @keydown.escape="hints = []" @keydown.tab="hints.length && (pickMention(hints[active]), $event.preventDefault())"
                     class="scroll-slim block w-full max-h-[10.5rem] resize-none rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3 pr-2 py-2 text-sm leading-snug outline-none focus:border-accent transition"></textarea>
-          {# Остаток показываем только у самого края: раньше о потолке узнавали, когда текст молча переставал набираться #}
+          {# Остаток — только у самого края лимита #}
           <span x-show="typed > {{ max_text }} - 200" x-cloak
                 class="absolute bottom-1.5 right-3 text-[10px] leading-none text-slate-400 pointer-events-none"
                 x-text="{{ max_text }} - typed"></span>
@@ -268,10 +222,7 @@
       </form>
     </div>
 
-    {% comment %}
-      Картинка во весь экран. Одна на весь чат и снаружи ленты — по той же причине,
-      что и меню сообщения: внутри пузыря её сносило бы перерисовкой.
-    {% endcomment %}
+    {# Картинка во весь экран — одна на чат и вне ленты: в пузыре её сносила бы перерисовка. #}
     <div x-show="lightbox" x-cloak @click="lightbox = ''" @keydown.escape.window="lightbox = ''"
          class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
       <img :src="lightbox" alt="" class="max-w-full max-h-full rounded-lg">
@@ -280,8 +231,8 @@
       </button>
     </div>
 
-    {% comment %}Меню ОДНО на весь чат и ВНЕ ленты: внутри пузыря его сносило бы
-    перерисовкой и резало overflow'ом. Узкий экран — шторка снизу, широкий — попап.{% endcomment %}
+    {% comment %}Меню — одно на чат и вне ленты: в пузыре его сносила бы перерисовка и резал overflow.
+    Узкий экран — шторка снизу, широкий — попап.{% endcomment %}
     <template x-if="menu">
       <div class="fixed inset-0 z-50" @click="menu = null" @contextmenu.prevent="menu = null"
            @keydown.escape.window="menu = null" @resize.window="menu = null">
@@ -312,11 +263,8 @@
     </template>
 
     {% comment %}
-      Кто прочитал. ВНУТРИ секции: `readers` живёт в её x-data, а снаружи такой переменной
-      нет — окно молча оставалось бы скрытым, хотя запрос уходил и отвечал.
-
-      Тело всегда в DOM, хоть и скрыто: htmx подменяет его по id, а в шаблоне Alpine
-      (x-if) его создавали бы заново на каждое открытие, и htmx о нём не знал бы.
+      Кто прочитал — внутри секции: `readers` живёт в её x-data. Тело всегда в DOM: htmx
+      подменяет его по id, а x-if создавал бы его заново.
     {% endcomment %}
     <div x-show="readers" x-cloak @keydown.escape.window="readers = false"
          class="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -419,8 +367,6 @@
         {% endfor %}
       </div>
 
-      {% comment %}Выход и удаление живут в меню чата (⋮): здесь они стояли под списком
-      людей, к которому отношения не имеют.{% endcomment %}
       {% if chat.kind == "course" %}
       <p class="border-t border-slate-200 dark:border-slate-800 mt-3 pt-3 text-xs text-slate-400">
         Общий чат курса: состав собирается автоматически из всех учебных групп потока — покинуть его или изменить нельзя. Кураторы добавляются формой выше.

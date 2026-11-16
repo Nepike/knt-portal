@@ -38,11 +38,7 @@
 
   {% if pictures %}
   {{ zoom|json_script:"print-zoom" }}
-  {% comment %}
-    Просмотрщик снаружи формы выбора: компонент выбора страниц вложен в него и зовёт его
-    show() — у Alpine вложенный x-data видит методы внешнего. Окно — общее с галереей
-    материалов (attachments/_lightbox.html).
-  {% endcomment %}
+  {# Просмотрщик снаружи формы: вложенный x-data выбора видит его show(). Окно — attachments/_lightbox.html. #}
   <div x-data="lightbox(JSON.parse(document.getElementById('print-zoom').textContent))">
   {% if pick %}
   {{ pick|json_script:"print-pick" }}
@@ -50,10 +46,7 @@
     {% csrf_token %}
     <input type="hidden" name="selection" :value="selection">
 
-    {% comment %}
-      Плитка нажимается целиком — это выбор страницы, поэтому крупный просмотр — отдельной
-      кнопкой-лупой в углу. Кнопку в кнопку не вложить, отсюда две кнопки поверх картинки.
-    {% endcomment %}
+    {# Плитка — выбор страницы, лупа — отдельной кнопкой: кнопку в кнопку не вложить. #}
     <div class="print-grid">
       {% for picture in pictures %}
       <div class="print-page" :class="chosen[{{ forloop.counter0 }}] ? 'print-page-on' : 'print-page-off'">
@@ -70,10 +63,7 @@
       {% endfor %}
     </div>
 
-    {% comment %}
-      Принтер выбирается здесь, а не при загрузке: где забирать листы, решают, когда жмут
-      «Печатать». Недоступный (выключен в админке или нет связи) виден, но не выбирается.
-    {% endcomment %}
+    {# Принтер — при «Печатать», не при загрузке. Недоступный виден, но не выбирается. #}
     <fieldset class="flex flex-col gap-2">
       <legend class="mb-2 text-sm text-slate-500 dark:text-slate-400">Принтер</legend>
       {% for printer in printers %}

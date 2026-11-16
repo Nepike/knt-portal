@@ -28,15 +28,11 @@ from .models import Lecture, Playlist
 
 # Рецепт, по которому печётся всё, что сдают в лекторий.
 LECTURE_RECIPE = "lecture"
-# Курсов в порции. Делится и на 2, и на 3 — на любой ширине сетка добирается до конца
-# ряда, а не обрывается посередине.
+# Курсов в порции: делится на 2 и на 3 — сетка добирается до конца ряда.
 PAGE_SIZE = 24
-# Записей за раз. Предел не про сервер, а про хранилище: сырьё лежит в бакете, пока
-# пекарня до него не дойдёт, и пачка из двадцати двухчасовых лекций — это десятки
-# гигабайт, за которые платят всё время ожидания.
+# Записей за раз: сырьё лежит в платном бакете, пока до него не дойдёт пекарня.
 BATCH = 10
-# Записей в час с одного человека. Пачку в десяток не стесняет, но зациклившийся
-# скрипт очередь не завалит.
+# Записей в час с человека: пачку не стесняет, зациклившийся скрипт остановит.
 ADD_LIMIT = 60
 
 
@@ -48,12 +44,8 @@ def visible_playlists(user):
 
 
 def visible_lectures(user):
-    """Записи, чей курс этому человеку виден.
-
-    Имя публичное: этим же запросом приложение комментариев проверяет, что обсуждение
-    вообще положено открывать, — иначе по прямому адресу можно было бы читать и лайкать
-    непроверенный чужой курс.
-    """
+    """Записи, чей курс человеку виден. Имя публичное: им же comments проверяет, что
+    обсуждение положено открывать."""
     return Lecture.objects.filter(playlist__in=visible_playlists(user))
 
 
@@ -74,8 +66,7 @@ def _may_moderate(user):
 
 
 def _may_add(user):
-    """Заводить курсы и сдавать записи — по отдельному праву: лекции выкладывают
-    не все подряд, а печь их дорого."""
+    """Курсы и записи — по отдельному праву: печь лекции дорого."""
     return user.has_perm("lectorium.add_playlist")
 
 
@@ -90,13 +81,8 @@ def _list_url(params):
 
 
 def _sync_lectures(request, playlist):
-    """Переименование, порядок и удаление записей — на той же форме, что и сам курс.
-
-    Своей страницы у записи нет и не нужно: правится в ней одно название. Ровно так же
-    живут файлы материала (`attachments.uploads.sync_files`) — там же взяты и имена полей.
-    Удаление снимает набор из хранилища сигналом, а недолитое и сырьё — сигналом на
-    задании (`intake.models`).
-    """
+    """Переименование, порядок и удаление записей — на форме курса, как файлы материала
+    (`attachments.uploads.sync_files`). Наборы и сырьё снимают сигналы (`intake.models`)."""
     for lecture in playlist.lectures.all():
         if request.POST.get(f"delete-{lecture.pk}"):
             lecture.delete()
@@ -106,9 +92,7 @@ def _sync_lectures(request, playlist):
             lecture.title = title[:150]
             lecture.save(update_fields=["title"])
 
-    # Порядок на экране: перетаскивание переставляет сами строки, а вместе с ними едут
-    # и скрытые input name="order" — браузер отправляет поля в порядке разметки.
-    # Удалённая запись в присланном списке ещё встречается, её просто не будет в by_pk.
+    # Порядок — по скрытым input name="order"; удалённой записи в by_pk уже нет.
     by_pk = {lecture.pk: lecture for lecture in playlist.lectures.all()}
     for index, pk in enumerate(request.POST.getlist("order")):
         lecture = by_pk.get(int(pk)) if pk.isdigit() else None
@@ -125,23 +109,18 @@ def playlist_edit(request, pk=None):
 
     form = PlaylistForm(request.POST or None, instance=playlist)
     if request.method == "POST" and form.is_valid():
-        # Правка не-модератором возвращает курс в очередь: иначе одобренное можно было бы
-        # тихо подменить. Ровно то же правило, что у материалов и книг.
+        # Правка не-модератором возвращает курс на проверку.
         moderator = _may_moderate(request.user)
         form.instance.revise(request.user, moderator)
         form.save()
         if pk:
             _sync_lectures(request, playlist)
-        # Модератор, публикуя своё, идёт МИМО playlist_review, где награда и дописывается.
-        # Без этого вызова токены за работу ждали бы следующего входа в систему —
-        # и человек решал бы, что их не дали вовсе.
+        # Модератор, публикуя своё, идёт мимо playlist_review — награду дописываем здесь.
         if form.instance.is_published:
             rewards.sync(form.instance.uploader)
             if request.user != form.instance.uploader:
                 rewards.sync(request.user)  # ему — за разобранную чужую работу
-        # Модерации — как о материале и книге: очередь на сайте есть, но в неё надо зайти,
-        # а курс лекций ждать проверки может неделями. Своё модератор публикует сам,
-        # и сообщать ему о собственной работе незачем.
+        # Модерации — в чат: курс ждёт проверки неделями. О своём модератору не пишем.
         if form.instance.is_pending and not moderator:
             notify(MODERATION, "telegram/playlist_pending.html", {
                 "playlist": form.instance, "editor": request.user, "created": pk is None,
@@ -160,14 +139,12 @@ def playlist_edit(request, pk=None):
 
 @require_POST
 def playlist_delete(request, pk):
-    """Снять курс целиком. Записи уедут каскадом, а с ними — и наборы из хранилища:
-    у курса из двадцати лекций это десятки гигабайт, которые иначе некому найти."""
+    """Снять курс целиком: записи уедут каскадом, наборы — из хранилища."""
     playlist = get_object_or_404(visible_playlists(request.user), pk=pk)
     if not _may_edit(request.user, playlist):
         return HttpResponseForbidden("Удалить курс может только тот, кто его завёл.")
 
-    # Считаем ДО удаления: после него у объекта в памяти уже нет ни номера, ни записей,
-    # а модерации важно, сколько работы исчезло.
+    # Считаем ДО удаления: потом у объекта нет ни номера, ни записей.
     lectures = playlist.lectures.count()
     taken = rewards.remove(playlist, by=request.user)
     notify(MODERATION, "telegram/playlist_deleted.html",
@@ -177,14 +154,8 @@ def playlist_delete(request, pk):
 
 
 def _source_problem(user, key):
-    """Причина не принимать это сырьё, или None.
-
-    Спрашиваем ХРАНИЛИЩЕ, а не браузер, и уже после заливки. Размер в подписанной ссылке
-    не участвует: браузер объявляет его до отправки, а положить по ссылке может сколько
-    угодно — это единственное место, где настоящий вес вообще становится известен.
-    Заодно ловится недоехавший файл: иначе задание встало бы в очередь, и человек узнал
-    бы о пропаже через час, из «не обработалась».
-    """
+    """Причина не принимать сырьё, или None — по ХРАНИЛИЩУ, после заливки: настоящий вес
+    виден только тут, и ловится недоехавший файл."""
     try:
         size = file_storage().size(key)
     except FileNotFoundError:
@@ -202,15 +173,8 @@ def _job_of(source):
 
 @require_POST
 def lecture_add(request, pk):
-    """Сдать ОДНУ запись: файл уже в хранилище, здесь заводится лекция и задание.
-
-    Пачку браузер шлёт сюда же, по запросу на файл, сразу после его заливки: так после
-    «поставил и ушёл» возвращаешься к семи готовым лекциям из десяти, а не к нулю
-    из-за того, что восьмой файл не долетел.
-
-    Отсюда и два вида ответа. Пачке отказ нужен строкой, чтобы показать его у своей
-    строки списка; обычной отправке — прежним сообщением на странице курса.
-    """
+    """Сдать ОДНУ запись (файл уже в хранилище): лекция и задание. Пачка шлёт сюда запрос на
+    файл; ей отказ — строкой, обычной форме — сообщением на странице."""
     playlist = get_object_or_404(visible_playlists(request.user), pk=pk)
     if not _may_edit(request.user, playlist):
         return HttpResponseForbidden("Добавлять записи может только автор курса или модерация.")
@@ -231,9 +195,8 @@ def lecture_add(request, pk):
     if not form.is_valid() or not source:
         return refuse("Нужны название и файл записи.")
 
-    # Тот же файл сдают второй раз, когда ответ на первую сдачу потерялся по дороге, и
-    # форма повторила запрос. Второй лекции на то же сырьё быть не должно: оно снимается,
-    # как только испечётся первая. Смотрим до вопроса хранилищу — к повтору сырья может уже не быть.
+    # Повтор сдачи (ответ потерялся): вторую лекцию на то же сырьё не заводим. До вопроса
+    # хранилищу — к повтору сырья может уже не быть.
     job = _job_of(source)
     if job is None:
         if problem := _source_problem(request.user, source):
@@ -265,34 +228,29 @@ def playlist_list(request):
     form = filters.FilterForm(request.GET or None)
     q = filters.asked(request.GET)
 
-    # Найденное по названию — основа и для списка, и для вариантов в селектах.
+    # Найденное по названию — основа и списка, и вариантов в селектах.
     found = filters.search(visible_playlists(request.user), q)
     playlists = (
         found
         .select_related("subject", "uploader")
         .prefetch_related("terms", "teachers", "lectures")
-        # distinct обязателен: подбор по преподавателю или семестру — это join
-        # по многие-ко-многим, и без него курс с двумя лекторами насчитал бы себе
-        # вдвое больше записей, чем в нём есть.
+        # distinct: join по многие-ко-многим удвоил бы счёт записей.
         .annotate(lectures_count=Count("lectures", distinct=True))
     )
     chosen = filters.chosen(form)
     playlists = filters.apply(playlists, chosen)
     filters.narrow(form, found, chosen)
 
-    # Год здесь — год, когда курс читали, поэтому свежие сверху; id последним, иначе
-    # на границе порций курсы с одинаковым ключом перескакивают. Тем же порядком
-    # список разбивается на годы в шаблоне: regroup собирает только идущие подряд.
+    # Свежие сверху; id последним — иначе на границе порций курсы перескакивают.
     ordered = playlists.distinct().order_by("-year", "-created", "-id")
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
 
     context = {
         "page": page, "playlists": page.object_list, "form": form, "q": q,
-        # Подбор едет в ссылку каждой карточки — со страницы курса есть куда вернуться.
+        # Подбор — в ссылки карточек: со страницы курса есть куда вернуться.
         "filters": filters.query(request.GET, search=True),
         "may_add": _may_add(request.user),
-        # Заголовок года не должен повториться на стыке порций: сравниваем с годом
-        # курса, стоящего прямо перед первым на этой странице.
+        # Год прошлой порции — чтобы заголовок не повторился на стыке.
         "carry_year": ordered[page.start_index() - 2].year if page.number > 1 else None,
     }
     if not request.headers.get("HX-Request"):
@@ -301,8 +259,7 @@ def playlist_list(request):
     if request.GET.get("page"):
         return render(request, "lectorium/_playlist_list.html", context)
 
-    # Сменили фильтр — вместе со списком возвращаем и сам блок фильтров: наборы вариантов
-    # в остальных селектах после этого другие.
+    # Сменили фильтр — возвращаем и блок фильтров: варианты другие.
     response = render(request, "lectorium/_playlist_list.html", {**context, "refresh_filters": True})
     response["HX-Push-Url"] = filters.url(request, search=True)
     return response
@@ -310,8 +267,7 @@ def playlist_list(request):
 
 def playlist_detail(request, pk):
     playlist = get_object_or_404(
-        # lectures__job — ради значка «не обработалась» в списке: без него состояние
-        # спрашивалось бы отдельным запросом на каждую необработанную запись.
+        # lectures__job — ради значка «не обработалась» без запроса на запись.
         visible_playlists(request.user).select_related("subject", "uploader").prefetch_related(
             "terms", "teachers", "lectures", "lectures__job",
         ),
@@ -319,15 +275,10 @@ def playlist_detail(request, pk):
     )
     lectures = list(playlist.lectures.all())
     ready = [one for one in lectures if one.prefix]
-    # Какую смотрим: по номеру из адреса, иначе первую готовую. Номер, а не порядковый
-    # индекс — ссылку на лекцию можно переслать, и она не поедет от вставки новой
-    # в середину. Только из готовых: у необработанной папки набора ещё нет, и плеер
-    # получил бы адрес в никуда вместо честного «обрабатывается».
+    # Какую смотрим: по номеру из адреса (ссылку пересылают), иначе первую готовую.
     chosen = next((one for one in ready if str(one.pk) == request.GET.get("lecture")), None)
     watching = chosen or (ready[0] if ready else None)
-    # Открытую запись перечитываем со счётчиками оценок. Отдельным запросом, а не
-    # аннотацией на весь список: в списке оценки не показываются, и считать их
-    # на каждую из двадцати записей незачем.
+    # Открытую запись — со счётчиками оценок, отдельным запросом: в списке оценок нет.
     discussion = {}
     if watching is not None:
         watching = _with_votes(request.user, Lecture.objects.filter(pk=watching.pk)).get()
@@ -339,10 +290,8 @@ def playlist_detail(request, pk):
         "lectures": lectures,
         "lecture": watching,
         **discussion,
-        # Ссылка «Лекторий» ведёт не в начало списка, а туда, откуда пришли: подбор
-        # приезжает сюда в адресе карточки. Он же цепляется к ссылкам на записи —
-        # иначе первый же клик по записи стёр бы его из адреса.
-        # Кнопка закладки в шапке: она одна на весь сайт, а что помечать — знает страница.
+        # back_url — туда, откуда пришли (подбор едет в адресе карточки и в ссылках на записи).
+        # bookmark — кнопка в шапке: что помечать, знает страница.
         "bookmark": bookmark_button(request.user, playlist),
         "back_url": _list_url(request.GET),
         "filters": filters.query(request.GET, search=True),
@@ -356,8 +305,7 @@ def playlist_detail(request, pk):
 
 @require_POST
 def lecture_vote(request, pk, vote):
-    """Оценка записи. Устроено ровно как голос за комментарий: повторный клик снимает,
-    противоположный переносит — двух голосов от одного человека быть не может."""
+    """Оценка записи — как голос за комментарий: повторный клик снимает, противоположный переносит."""
     lecture = get_object_or_404(visible_lectures(request.user), pk=pk)
     mine, other = (
         (lecture.liked_users, lecture.disliked_users) if vote == "like"
@@ -399,11 +347,7 @@ def playlist_review(request, pk):
 
 
 def check(request):
-    """Посмотреть набор HLS, лежащий в хранилище, по ключу его манифеста.
-
-    Служебная: набор бывает залит, но ещё не привязан к лекции, — а другого способа
-    убедиться, что он вообще играет, нет.
-    """
+    """Посмотреть набор HLS в хранилище по ключу манифеста — пока он не привязан к лекции."""
     if not request.user.is_staff:
         return HttpResponseForbidden("Эта страница только для сотрудников.")
 
@@ -412,8 +356,7 @@ def check(request):
     if key and not key.endswith(".m3u8"):
         problem = "Ключ должен указывать на манифест .m3u8"
     elif ".." in key.split("/"):
-        # На диске такой ключ роняет хранилище SuspiciousFileOperation, то есть
-        # пятисоткой вместо ответа. Ключ вводят руками, опечатка тут — обычное дело.
+        # На диске такой ключ — SuspiciousFileOperation и 500; ключ вводят руками.
         problem = "Ключ — это путь внутри хранилища, без «..»"
     elif key and not file_storage().exists(key):
         problem = f"В хранилище нет такого куска: {key}"

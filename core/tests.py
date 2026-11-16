@@ -67,8 +67,7 @@ from .tasks import INQUIRY_DAYS, JOURNAL_DAYS, MAIL_RETRIES, backup_database, pi
 
 
 class CeleryTests(SimpleTestCase):
-    """Очередь: задачи находятся автоматически и доезжают до исполнения.
-    В тестах — на месте (task_always_eager из core/test_runner.py), без Redis и воркера."""
+    """Очередь: задачи находятся сами и исполняются. В тестах — на месте (core/test_runner.py)."""
 
     def test_task_is_found_by_autodiscovery(self):
         # Ломается, если из knt/__init__.py уйдёт импорт celery_app: тогда задач просто нет.
@@ -78,8 +77,7 @@ class CeleryTests(SimpleTestCase):
         self.assertEqual(ping.delay("эхо").get(), "эхо")
 
 
-# Django на время тестов сам подменяет EMAIL_BACKEND на locmem, поэтому очередь
-# для писем включаем явно: иначе эта ветка кода в тестах вообще не работала бы.
+# Django в тестах ставит locmem — очередь писем включаем явно.
 @override_settings(
     EMAIL_BACKEND="core.mail.QueuedEmailBackend",
     EMAIL_DELIVERY_BACKEND="django.core.mail.backends.locmem.EmailBackend",
@@ -104,8 +102,7 @@ class QueuedMailTests(TestCase):
         self.assertEqual(sent.extra_headers["X-Kind"], "test")
 
     def test_attachment_is_refused_loudly(self):
-        # Молча потерять вложение хуже, чем упасть: тела задач лежат в Redis,
-        # и складывать туда файлы — отдельное решение, а не побочный эффект.
+        # Молча терять вложение хуже, чем упасть: тела задач лежат в Redis.
         letter = EmailMessage("Тема", "Текст", to=["s@t.local"])
         letter.attach("файл.txt", "данные".encode(), "text/plain")
         with self.assertRaises(ValueError):
@@ -123,8 +120,7 @@ class QueuedMailTests(TestCase):
 
 
 class MailFailureTests(TestCase):
-    """Письмо, которое так и не ушло, не пропадает молча: 4 октября 2026 ящик сайта
-    исчез из Workspace, и узнали об этом от людей, оставшихся без сброса пароля."""
+    """Письмо, которое так и не ушло, не пропадает молча."""
 
     def setUp(self):
         cache.clear()
@@ -260,8 +256,7 @@ class DeployTests(SimpleTestCase):
                 self.assertEqual(self.services[name]["pull_policy"], "never")
 
     def test_the_image_carries_a_postgres_client_of_the_servers_version(self):
-        """Им ночью снимается бэкап (core/backup.py). Клиент младше сервера дамп снять
-        откажется, и узнать об этом было бы не от кого."""
+        """Им снимается бэкап (core/backup.py): клиент младше сервера дамп не снимет."""
         server = self.services["db"]["image"].partition(":")[2].partition(".")[0]
         dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
 
@@ -276,8 +271,7 @@ class DeployTests(SimpleTestCase):
         self.assertEqual(command[command.index("--maxmemory-policy") + 1], "volatile-lru")
 
     def test_web_workers_are_renewed_and_do_not_hoard_memory(self):
-        """Воркер web за три дня дорастал до ~580 МБ на машине с 1,9 ГБ (замер 7 ноя 2026),
-        и 3 ноя оба встали разом. Свежий воркер на смену отслужившему и две арены glibc."""
+        """Воркер web сменяется свежим и держит две арены glibc: иначе разрастается в памяти."""
         dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
         command = json.loads(re.search(r"^CMD (\[.*\])$", dockerfile, re.M).group(1))
 
@@ -297,10 +291,8 @@ class DeployTests(SimpleTestCase):
             self.assertRegex(action, r"@[0-9a-f]{40}$")
 
     def test_the_proxy_password_stays_out_of_the_build_log(self):
-        """Строку RUN сборка печатает с подставленными аргументами, даже взятую из кэша. Так адрес
-        прокси с паролем три месяца лежал в логе каждого деплоя, а лог Actions открытого
-        репозитория читает любой вошедший на GitHub. Предопределённые аргументы Docker доходят
-        до команды окружением и в лог не попадают — но только если их не объявить через ARG."""
+        """Строку RUN сборка печатает с аргументами, даже из кэша, а лог Actions открытого
+        репозитория публичен. Предопределённые аргументы Docker без ARG идут окружением и в лог не попадают."""
         dockerfile = (settings.BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
         args = self.services["migrate"]["build"]["args"]
         predefined = {"HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY"}
@@ -556,8 +548,7 @@ class BackupTests(TestCase):
 
 
 class DevCommandTests(TestCase):
-    """Сиды помечены «только для разработки», но на боевой базе запускались бы как любые:
-    `seed_chats` завела бы там переписку между настоящими людьми."""
+    """Сиды на боевой базе не запускаются: `seed_chats` завела бы переписку настоящих людей."""
 
     SEEDS = ("seed_books", "seed_materials", "seed_chats")
 
@@ -772,8 +763,7 @@ class HtmxVaryTests(TestCase):
         self.client.force_login(make_user("reader@x.ru"))
 
     def test_both_answers_tell_the_browser_they_are_different(self):
-        # Без этого браузер по «назад» рисовал кусок целым документом: без шапки,
-        # меню и фильтров — их-то и «сбрасывало».
+        # Иначе браузер по «назад» рисовал бы кусок целым документом.
         page = self.client.get(reverse("material_list"))
         chunk = self.client.get(reverse("material_list"), headers={"HX-Request": "true"})
         self.assertNotEqual(page.content, chunk.content)
@@ -782,20 +772,14 @@ class HtmxVaryTests(TestCase):
 
 
 class OpenSectionsTests(TestCase):
-    """Сайт открыт целиком: ни одного раздела за замком.
-
-    Класс остался от беты, когда геймификация была закрыта до готовности кейсов и значков.
-    Замок снят к релизу, и проверка развернулась: теперь она следит, чтобы ни один раздел
-    не оказался закрыт снова по недосмотру — молча погасший пункт меню заметить трудно.
-    """
+    """Сайт открыт целиком: ни один раздел не закрыт по недосмотру."""
 
     def setUp(self):
         self.reader = make_user("reader@x.ru")
         self.client.force_login(self.reader)
 
     def test_every_section_is_reachable(self):
-        # Загрузка и правка тоже, а не только чтение. Стены тут нет: без заведённой доски
-        # она честно отвечает 404, и это про доску, а не про доступ.
+        # И загрузка, и правка. Стены нет: без доски она отвечает 404.
         for name in ("material_list", "book_list", "teacher_list", "support", "chat_list",
                      "material_new", "book_new", "playlist_list", "shop"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
@@ -834,8 +818,7 @@ class AboutPageTests(TestCase):
         return self.client.get(reverse("about"))
 
     def test_a_guest_lands_on_it_from_the_root(self):
-        """Раньше корень уводил гостя на форму входа. На knt-mipt.ru приходят и те,
-        у кого аккаунта нет, — им нужна витрина, а не замок."""
+        """Гостю нужна витрина, а не замок."""
         self.assertRedirects(self.client.get("/"), reverse("about"))
 
     def test_a_student_still_lands_in_materials(self):
@@ -847,8 +830,7 @@ class AboutPageTests(TestCase):
         self.assertEqual(self.page().status_code, 200)
 
     def test_it_says_who_keeps_the_site_and_the_applicants_page_is_gone(self):
-        """Страницу для абитуриентов сняли 15 окт 2026, когда факультет отказался оплачивать
-        сайт. Шаблон лежит на случай возврата, но наружу из него не видно ничего."""
+        """Страница абитуриентов снята: шаблон лежит, но наружу из него не видно ничего."""
         page = self.page().content.decode()
 
         self.assertIn("Сайт разрабатывают, поддерживают и спонсируют студенты", page)
@@ -889,7 +871,7 @@ class AboutPageTests(TestCase):
         self.assertIn("<aside", student)
 
     def test_the_footer_and_the_account_menu_lead_here(self):
-        """«О сайте» в подвале — эта самая страница; раньше там стояла решётка."""
+        """«О сайте» в подвале — эта самая страница."""
         for page in (self.page(), self.client.get(reverse("support"))):
             footer = page.content.decode().split("<footer")[1]
 
@@ -1224,7 +1206,7 @@ class ContactsPageTests(TestCase):
         self.assertEqual(sent.call_count, 10)
 
     def test_a_picture_over_the_limit_is_turned_away_before_pillow_opens_it(self):
-        """Разбор картинки не бесплатен, а форма открыта всем (отчёт 30 окт 2026)."""
+        """Разбор картинки не бесплатен, а форма открыта всем."""
         with patch("PIL.Image.open") as opened:
             response = self.client.post(reverse("contacts"), {"text": "?", "image": oversized_upload()})
 
@@ -1302,8 +1284,7 @@ class SupportFormTests(TestCase):
         self.assertIn("https://knt-mipt.ru/users/1/", text)
         self.assertIn("Петров Иван", text)
         self.assertIn("https://t.me/ivan", text)
-        # Почты в чате быть не должно, а страницы, с которой пришли, — тем более:
-        # она попадала туда из referer и сбивала с толку.
+        # Почты в чате нет, страницы-источника (referer) — тоже.
         self.assertNotIn(self.user.email, text)
         self.assertNotIn("Страница:", text)
 
@@ -1353,7 +1334,7 @@ class SupportWithoutLoginTests(TestCase):
         self.assertEqual(context["contact"], "ivan@mipt.ru")
 
     def test_a_picture_over_the_limit_is_turned_away_before_pillow_opens_it(self):
-        """Разбор картинки не бесплатен, а форма открыта всем (отчёт 30 окт 2026)."""
+        """Разбор картинки не бесплатен, а форма открыта всем."""
         with patch("PIL.Image.open") as opened:
             response = self.client.post(reverse("support"), {"topic": "other", "text": "?", "image": oversized_upload()})
 
@@ -1377,8 +1358,7 @@ class SupportWithoutLoginTests(TestCase):
         self.assertEqual(sent.call_count, 10)
 
     def test_a_made_up_forwarded_address_does_not_reset_the_limit(self):
-        """Счёт шёл по первому адресу из X-Forwarded-For, а его пишет сам клиент:
-        новый заголовок на каждый запрос — и ограничителя нет."""
+        """X-Forwarded-For пишет сам клиент: новый заголовок на запрос счёт не сбрасывает."""
         payload = {"topic": "other", "text": "спам", "contact": "spam@x.ru"}
         with patch("core.inquiries.notify") as sent:
             for number in range(14):
@@ -1491,7 +1471,7 @@ class SpamScoreTests(SimpleTestCase):
         self.assertEqual(self.signs("Вопрос", seconds=2), {"отправлено за 2 с": 6})
         self.assertEqual(self.score("Вопрос", seconds=spam.FAST), (0, []))
 
-    # Присланные в ноябре 2026 — пересказом, с выдуманными контактами
+    # Настоящий спам — пересказом, с выдуманными контактами.
     SPAM = [
         ("Экономическая эффективность — главный аргумент в пользу аутсорсинга https://лдбух.рф/page1.html "
          "Содержание штатного бухгалтера https://лдбух.рф/poster", "RobertoGeorm", "liza.rudneva.2023@mail.ru"),
@@ -1796,18 +1776,8 @@ class NavSectionTests(SimpleTestCase):
 
 
 class StaticBuildTests(SimpleTestCase):
-    """Статика собирается ровно так, как её собирает боевой контейнер.
-
-    В разработке `{% static %}` отдаёт файл как есть, а на бою staticfiles лежит на
-    whitenoise.CompressedManifestStaticFilesStorage: тот дописывает к именам хеш и ради
-    этого ЧИТАЕТ каждый css и js, переписывая ссылки внутри. Ссылка в никуда — и сборка
-    падает целиком, то есть контейнер не поднимается вовсе.
-
-    На это уже наступили: у скачанной hls.min.js в хвосте стояло
-    `//# sourceMappingURL=hls.min.js.map`, а карты рядом не было, — деплой лёг, хотя
-    и тесты, и разработка проходили. Дешевле собрать статику в тестах (пара секунд),
-    чем узнавать об этом с боевого домена.
-    """
+    """Статика собирается как в боевом контейнере: CompressedManifestStaticFilesStorage читает
+    каждый css и js, и ссылка в никуда (`//# sourceMappingURL=…`) роняет сборку и контейнер."""
 
     def test_collectstatic_survives_the_production_storage(self):
         storages = copy.deepcopy(settings.STORAGES)
@@ -1818,16 +1788,9 @@ class StaticBuildTests(SimpleTestCase):
 
 
 class FooterTests(TestCase):
-    """Подвал и его ссылки.
+    """Подвал и его ссылки. Под бесконечными списками подвала нет — ссылки в меню аккаунта."""
 
-    У списков конца нет: подвал под ними недостижим, пока не догрузишь весь каталог,
-    а до тех пор он успевает мелькнуть на каждой подгрузке. Поэтому там его нет вовсе,
-    а ссылки переехали в меню аккаунта — оттуда они доступны с любой страницы и не стоят
-    боковой панели ни пикселя высоты.
-    """
-
-    # Страницы с бесконечной лентой. Закладок тут нет намеренно: они показываются
-    # целиком, без подгрузки, и подвал под ними достижим.
+    # Бесконечные ленты. Закладок нет: они целиком, подвал под ними достижим.
     ENDLESS = ["material_list", "book_list", "playlist_list", "teacher_list", "student_list", "wallet"]
 
     def setUp(self):
@@ -1839,8 +1802,7 @@ class FooterTests(TestCase):
                 self.assertNotContains(self.client.get(reverse(name)), "<footer")
 
     def test_every_link_of_the_footer_is_reachable_from_an_endless_list(self):
-        """Ради этого всё и затевалось: с ленты материалов до поддержки было не добраться,
-        не догрузив весь каталог."""
+        """С ленты материалов до поддержки — не догружая каталог."""
         page = self.client.get(reverse("material_list"))
 
         for name in ["about", "contacts", "support"]:
@@ -1859,11 +1821,8 @@ class FooterTests(TestCase):
 
 
 class SkinTests(TestCase):
-    """Событийный скин: класс `theme-<имя>` на <html> и блок правил в theme/input.css.
-
-    Весь набор гоняется с закреплённым обычным видом (core/test_runner.py) — иначе
-    в октябре он проверял бы одно, а в ноябре другое. Скин каждый тест включает сам.
-    """
+    """Событийный скин: класс `theme-<имя>` на <html> и блок правил в theme/input.css. Набор
+    гоняется с обычным видом (core/test_runner.py); скин тест включает сам."""
 
     CSS = settings.BASE_DIR / "theme" / "input.css"
     GHOST = 'x-data="ghost"'
@@ -2116,13 +2075,8 @@ class GlitchSkinTests(TestCase):
 
 
 class UnreadBadgeTests(SimpleTestCase):
-    """Пустой счётчик непрочитанного не виден.
-
-    Прячет его класс hidden, а раскладку даёт inline-flex — оба про display, и в собранном
-    css побеждает тот, что ниже. Ниже оказался inline-flex, и у всех, кому никто не писал,
-    рядом с «Сообщениями» стоял «0». Чинит это отдельное правило в theme/input.css; проверить
-    его действие без браузера нельзя, поэтому сторожим хотя бы само правило.
-    """
+    """Пустой счётчик непрочитанного не виден. hidden и inline-flex — оба про display, и в
+    собранном css побеждает inline-flex; чинит своё правило в theme/input.css — его и сторожим."""
 
     def test_the_stylesheet_hides_the_empty_badge_by_a_rule_of_its_own(self):
         css = (settings.BASE_DIR / "theme" / "input.css").read_text(encoding="utf-8")
@@ -2178,8 +2132,7 @@ class LockdownTests(TestCase):
         self.assertInside(self.client.get(reverse("about")))
 
     def test_a_guest_gets_the_closed_page_at_every_address(self):
-        """И на открытых всему интернету страницах, и там, где раньше ждала форма входа,
-        и по адресу, которого нет вовсе."""
+        """И на открытых страницах, и на закрытых, и по адресу, которого нет."""
         close_site()
 
         for path in ("/", reverse("about"), reverse("contacts"), reverse("support"),
@@ -2608,7 +2561,6 @@ class FailureJournalTests(TestCase):
         self.assertEqual(Failure.objects.count(), 0)
 
     def test_a_task_that_gave_up_lands_in_the_journal(self):
-        """Бэкап падал молча — сбой оставался только в логе воркера."""
         # throw=False — как в воркере: с проброшенным исключением Celery сигнал о провале не шлёт.
         with patch("core.backup.make", side_effect=RuntimeError("pg_dump: нет связи с базой")):
             backup_database.apply(throw=False)
@@ -2762,8 +2714,7 @@ class JournalSweepTests(TestCase):
         self.assertEqual(list(Inquiry.objects.all()), [kept])
 
     def test_expired_sessions_go_with_their_device_rows(self):
-        """Django сам просроченные сессии не удаляет, и приписки «моих устройств» копились
-        за ними: к 7 ноя 2026 на проде просрочены были 500 из 745."""
+        """Django сам просроченные сессии не удаляет, а за ними копятся приписки «моих устройств»."""
         person = make_user("sessions@x.ru")
         now = timezone.now()
         old = Session.objects.create(session_key="old", session_data="", expire_date=now - timedelta(hours=1))

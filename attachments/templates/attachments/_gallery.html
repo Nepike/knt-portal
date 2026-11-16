@@ -1,8 +1,4 @@
-{% comment %}
-  Галерея картинок. Свой x-data, а не общий с файлами: у картинок ни прогресса,
-  ни токенов — они маленькие и едут обычным multipart. От вьюхи ждёт saved_images
-  и image_errors.
-{% endcomment %}
+{# Галерея картинок: свой x-data — у картинок ни прогресса, ни токенов. Ждёт saved_images и image_errors. #}
 <div x-data="gallery({{ saved_images }}, {{ max_image_size }})">
   {# Удаление отложенное: помеченная картинка тускнеет и уходит при сохранении #}
   <div x-sort="reorderSaved($item, $position)" class="grid grid-cols-3 sm:grid-cols-4 gap-2">

@@ -1,7 +1,4 @@
-{% comment %}
-  Счётчик в шапке вошедшего на время глитча — ссылка на страницу отсчёта. На телефоне
-  места мало: там одни дни.
-{% endcomment %}
+{# Счётчик в шапке на время глитча — ссылка на страницу отсчёта. На телефоне — одни дни. #}
 <a href="{% url 'countdown' %}" class="skin-timer" x-data="clock({{ skin_deadline }})" x-cloak :aria-label="say">
   <i class="fa-solid fa-clock" aria-hidden="true"></i>
   <span aria-hidden="true"><span x-text="dd"></span>дн<span class="max-sm:hidden"> <span x-text="hh"></span><i class="skin-timer-tick">:</i><span x-text="mm"></span><i class="skin-timer-tick">:</i><span x-text="ss"></span></span></span>

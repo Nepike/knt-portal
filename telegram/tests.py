@@ -16,7 +16,7 @@ from .notify import ADMIN, MODERATION, notify
 from .tasks import CAPTION_LIMIT, CUT, MESSAGE_LIMIT, fit, send_document, send_message, send_photo
 from .views import MAX_ARCHIVE
 
-# Шаблон держим прямо здесь: настоящие появятся вместе с модерацией.
+# Свой шаблон: тестам не нужны настоящие.
 TEMPLATES = [{
     "BACKEND": "django.template.backends.django.DjangoTemplates",
     "DIRS": [],
@@ -289,8 +289,7 @@ class AnalyticsInboxTests(TestCase):
 
 
 class FitTests(SimpleTestCase):
-    """Сообщение длиннее предела телеграм не принимает вовсе — такое уведомление терялось
-    бы целиком. А оборванный или незакрытый тег в режиме HTML он не принимает тоже."""
+    """Длиннее предела или с оборванным тегом телеграм сообщение не примет вовсе."""
 
     HEAD = '📁 <b>Новый материал</b>\n<a href="https://knt-mipt.ru/materials/7/">Механика</a>\n'
 

@@ -64,7 +64,7 @@ class UserSearchTests(TestCase):
         return response.content.decode()
 
     def test_full_name_finds_the_person(self):
-        # Раньше искали строкой целиком по каждому полю отдельно — и не находили никого.
+        # Слова ищутся по отдельности, в любом порядке.
         for query in ("Максим Щучкин", "Щучкин Максим", "макс щуч"):
             with self.subTest(query=query):
                 self.assertIn("Щучкин", self.found(query))
@@ -193,11 +193,8 @@ class UnreadTests(TestCase):
 
 
 class HistoryPaginationTests(TestCase):
-    """Открываем последнюю страницу, остальное подтягиваем маячком сверху.
-
-    Всё прочитано намеренно: с непрочитанными чат открывается с них (см. UnreadOpenTests),
-    а здесь проверяется сама пагинация.
-    """
+    """Открываем последнюю страницу, остальное — маячком сверху. Всё прочитано: иначе чат
+    открылся бы с непрочитанного (UnreadOpenTests)."""
 
     @classmethod
     def setUpTestData(cls):
@@ -293,9 +290,8 @@ class SendTests(TestCase):
         self.assertContains(response, "моя реплика")
 
     def test_a_cursor_from_the_future_still_answers(self):
-        """Курсора младше только что созданного сообщения честно не бывает: в ленте у
-        отправителя ничего новее нет. Раньше такой запрос отвечал пятисоткой — ответ
-        выходил пустым, а пустой ленте нечего искать соседа сверху."""
+        """Курсора новее только что созданного сообщения честно не бывает, но ответ всё
+        равно нужен, а не пятисотка."""
         response = self.client.post(self.url, {"text": "моя реплика", "after": "999999"})
         self.assertContains(response, "моя реплика")
 
@@ -349,8 +345,7 @@ class PollingTests(TestCase):
         self.assertEqual(self.client.get(reverse("chat_list_fragment"), {"active": "нет"}).status_code, 200)
 
     def test_poll_stays_cheap(self):
-        """Опрос идёт каждые 3 секунды у каждой вкладки — лишним запросам тут не место.
-        Шестой из них — заслон (core/lockdown.py): закрыт ли сайт, он спрашивает на каждый запрос."""
+        """Опрос — каждые 3 секунды у каждой вкладки. Шестой запрос — заслон (core/lockdown.py)."""
         with CaptureQueriesContext(connection) as ctx:
             self.client.get(self.url, {"after": self.message.pk}, headers={"HX-Request": "true"})
         self.assertLessEqual(len(ctx), 6, [q["sql"][:120] for q in ctx.captured_queries])
@@ -461,12 +456,8 @@ class ReactionTests(TestCase):
         self.assertEqual(self.message.reactions.count(), 0)
 
     def test_two_taps_at_once_do_not_break(self):
-        """Гонка двух вкладок: обе не нашли реакции и обе побежали её ставить.
-
-        Проверка «есть? — нет, создаём» проходила у обеих, и вторая вставка билась
-        об уникальный индекс пятисоткой. Соперника изображаем так: первый поиск
-        реакции промахивается, строка при этом уже есть.
-        """
+        """Гонка двух вкладок: обе не нашли реакцию и обе ставят — вторая вставка не должна
+        падать на уникальном индексе. Соперника изображает промах первого поиска."""
         Reaction.objects.create(message=self.message, user=self.alice, emoji="🔥")
         real_get, missed = QuerySet.get, []
 
@@ -785,8 +776,7 @@ class PublishTests(TestCase):
         )
 
     def test_a_system_line_notifies_with_its_message(self):
-        """Она такое же новое сообщение. Без него получатели молча вернулись бы к запросу
-        за счётчиком — ровно к тому, от чего событие и обросло данными."""
+        """Системная строка — тоже новое сообщение: без него получатели пошли бы за счётчиком."""
         chat = self.group()
         with mock.patch("chats.views.notify_chat") as notify:
             self.client.post(reverse("chat_rename", args=[chat.pk]), {"title": "Новое имя"})
@@ -847,9 +837,7 @@ class PublishTests(TestCase):
 
 
 class EventPayloadTests(TestCase):
-    """Что именно уходит в сокет. От этого зависит, пойдёт ли вкладка на сервер: раньше
-    она ходила за счётчиком непрочитанных на КАЖДОЕ сообщение в каждом своём чате, и в
-    чате курса одно сообщение стоило столько запросов, сколько там людей онлайн."""
+    """Что уходит в сокет: от этого зависит, пойдёт ли вкладка на сервер за счётчиком."""
 
     @classmethod
     def setUpTestData(cls):
@@ -879,9 +867,7 @@ class EventPayloadTests(TestCase):
         self.assertEqual(self.published(self.chat.pk), {"type": "chat.event", "chat": self.chat.pk})
 
     def test_a_change_says_what_exactly_changed(self):
-        """По виду изменения вкладка решает, что перечитывать. Без него реакция в чате
-        курса стоила бы трёх запросов с каждой открытой вкладки — за счётчиком, за
-        списком чатов и за лентой, — хотя меняется в ней один пузырь."""
+        """По виду изменения вкладка решает, что перечитывать: реакция меняет один пузырь."""
         with mock.patch("chats.events._publish") as publish:
             notify_chat(self.chat.pk, kind="react")
         self.assertEqual(publish.call_args.args[1]["kind"], "react")
@@ -939,8 +925,7 @@ class ConsumerTests(TransactionTestCase):
         await socket.disconnect()
 
     async def test_the_kind_of_change_reaches_the_browser(self):
-        """По нему вкладка решает, что перечитывать. Срежь его консьюмер — реакция
-        снова стоила бы трёх запросов с каждой открытой вкладки."""
+        """По нему вкладка решает, что перечитывать."""
         socket, _ = await self.open_socket(self.alice)
         await get_channel_layer().group_send(chat_group(self.chat.pk), {
             "type": "chat.event", "chat": self.chat.pk, "kind": "react",
@@ -1002,13 +987,8 @@ class ConsumerTests(TransactionTestCase):
         await socket.disconnect()
 
     async def test_typing_in_a_foreign_chat_goes_nowhere(self):
-        """Чат сверяем со своими группами: чужой в них не попадёт, и лишний запрос
-        к базе для этого не нужен.
-
-        Смотрим со стороны ПОЛУЧАТЕЛЯ: у отправителя чужого чата в подписках нет, и
-        своё же событие он не увидел бы даже без проверки — «тихо» у него ничего не
-        доказывает. А вот участник чужой переписки увидел бы там постороннего.
-        """
+        """Чат сверяем со своими группами. Смотрим со стороны ПОЛУЧАТЕЛЯ: у отправителя
+        чужого чата в подписках нет, и «тихо» у него ничего не доказывает."""
         foreign = await database_sync_to_async(self.foreign_chat)()
         stranger_socket, _ = await self.open_socket(self.stranger)  # он в том чате состоит
         socket, _ = await self.open_socket(self.alice)
@@ -1147,7 +1127,7 @@ class CatchUpTests(TestCase):
 
 
 class DayDividerTests(TestCase):
-    """Дата в ленте. До неё у сообщения были одни часы, и позавчерашнее выглядело сегодняшним."""
+    """Дата в ленте: позавчерашнее не должно выглядеть сегодняшним."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1255,12 +1235,8 @@ class PackTests(TestCase):
         return Message.objects.create(chat=self.chat, author=author, text=text)
 
     def at(self, author, text, hour):
-        """Сообщение в заданный час СЕГОДНЯШНЕГО дня.
-
-        Не «столько-то назад»: два часа назад в половине первого ночи — это уже вчера,
-        и тест про молчание проверял бы разрыв дня вместо разрыва пачки. Один раз он так
-        и прошёл мимо сломанной проверки.
-        """
+        """Сообщение в заданный час СЕГОДНЯШНЕГО дня: «два часа назад» после полуночи —
+        уже вчера, и тест проверял бы разрыв дня вместо разрыва пачки."""
         message = Message.objects.create(chat=self.chat, author=author, text=text)
         when = timezone.localtime().replace(hour=hour, minute=0, second=0, microsecond=0)
         Message.objects.filter(pk=message.pk).update(created=when)
@@ -1335,7 +1311,7 @@ class PackTests(TestCase):
         self.assertIn(">Вы</a>", self.card(self.say(self.alice, "моё")))
 
     def test_a_quote_is_signed_like_the_bubble_itself(self):
-        """Раньше в цитате стояло одно имя, а в подписи — Фамилия Имя. Разнобой на виду."""
+        """Цитата подписана как пузырь: «Вы» или Фамилия Имя."""
         mine = self.say(self.alice, "моё")
         theirs = self.say(self.bob, "чужое")
         answer = Message.objects.create(chat=self.chat, author=self.bob, text="ответ", reply_to=mine)
@@ -1551,7 +1527,7 @@ class ReadersTests(TestCase):
 
 
 class LinkTests(TestCase):
-    """Ссылками в чате перекидываются постоянно — до этого их выделяли и копировали руками."""
+    """Ссылки в сообщении кликабельны."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1578,8 +1554,7 @@ class LinkTests(TestCase):
 
 
 class ComposerTests(TestCase):
-    """Поле ввода. Было однострочным: абзац набрать нельзя вовсе — при том что пузырь
-    переносы показывать умеет, а форма правки сообщения и так была textarea."""
+    """Поле ввода — textarea: абзацы в сообщении."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1600,7 +1575,7 @@ class ComposerTests(TestCase):
         self.assertContains(self.client.get(reverse("chat_detail", args=[self.chat.pk])), '<textarea name="text"')
 
     def test_the_field_limit_comes_from_the_server(self):
-        """4000 стояло строкой в двух шаблонах, и разъехаться с сервером ему ничто не мешало."""
+        """Потолок поля берётся с сервера, а не строкой в шаблонах."""
         for url in (reverse("chat_detail", args=[self.chat.pk]), reverse("message_edit", args=[self.mine.pk])):
             with self.subTest(url=url):
                 self.assertContains(self.client.get(url), f'maxlength="{MAX_TEXT}"')
@@ -1770,8 +1745,7 @@ class ChatListLooksTests(TestCase):
         self.assertIn("вчера", page)
 
     def test_the_freshest_talk_is_on_top(self):
-        """По времени, а не по id: импорт старого сайта и демка заводят переписку задним
-        числом, и по id она выстраивалась в порядке заливки, а не разговора."""
+        """По времени, а не по id: импорт и демка заводят переписку задним числом."""
         old = Chat.objects.create(kind="group", title="Давняя группа")
         Membership.objects.create(chat=old, user=self.alice)
         fresh = Message.objects.create(chat=self.chat, author=self.bob, text="сегодня")
@@ -1796,8 +1770,7 @@ class ChatListLooksTests(TestCase):
         self.assertContains(self.client.get(reverse("chat_detail", args=[chat.pk])), "5 участников ")
 
     def test_a_wordless_photo_is_not_an_empty_line(self):
-        """Сообщение бывает из одних вложений, а строка в списке показывала его текст —
-        то есть пустоту, и чат выглядел как чат без сообщений."""
+        """Сообщение из одних вложений — в списке не пустая строка."""
         cache.clear()
         self.client.post(reverse("message_send", args=[self.chat.pk]), {"photo": picture()})
         self.assertContains(self.client.get(reverse("chat_list")), "Вы: Фото")
@@ -1811,8 +1784,7 @@ class ChatListLooksTests(TestCase):
         self.assertContains(self.client.get(reverse("chat_list")), "конспект.pdf")
 
     def test_the_list_reads_members_of_direct_chats_only(self):
-        """Собеседник нужен только в ЛС, а участников читали у всех чатов подряд —
-        в чате курса это сотни людей за раз, и все они тут же выбрасывались."""
+        """Собеседник нужен только в ЛС: участников чата курса — сотни."""
         talk = Message.objects.create(chat=self.chat, author=self.bob, text="привет")
         Chat.objects.filter(pk=self.chat.pk).update(last_message=talk)
         course = Chat.objects.create(kind="course", title="Курс", admission_year=2024, stage="bachelor")
@@ -1851,11 +1823,7 @@ class ChatListLooksTests(TestCase):
 
 
 class SearchTests(TestCase):
-    """Поиск по переписке и открытие ленты на найденном.
-
-    Просто прокрутить к находке нельзя: в ленте лежит последняя страница, а речь может
-    идти о сообщении полугодовой давности.
-    """
+    """Поиск по переписке и открытие ленты на найденном: в ленте лишь последняя страница."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1933,11 +1901,8 @@ class SearchTests(TestCase):
         self.assertIn(self.last.pk, [m.pk for m in page.context["chat_messages"]])
 
     def test_a_message_from_another_chat_opens_the_usual_way(self):
-        """Номер чужого сообщения — не место в ЭТОЙ переписке. Проверяем не только то,
-        что чужого текста нет (его и так неоткуда взять — лента всегда своего чата),
-        а что открылись обычным концом: иначе человека роняет в середину наугад,
-        да ещё и без пометки о прочтении.
-        """
+        """Номер чужого сообщения — не место в ЭТОЙ переписке: открываемся обычным концом,
+        а не в середине наугад и без пометки о прочтении."""
         foreign = Chat.get_or_create_dm(self.alice, self.stranger)
         alien = Message.objects.create(chat=foreign, author=self.stranger, text="чужое")
         ours = Message.objects.create(chat=self.chat, author=self.bob, text="наше свежее")
@@ -1950,9 +1915,7 @@ class SearchTests(TestCase):
 
 
 class MentionTests(TestCase):
-    """Упоминания. Кого позвали, считается ПО ТЕКСТУ при сохранении: так упоминание
-    переживает правку, работает при наборе руками мимо подсказки и не подделывается —
-    позвать можно только того, кто в этом чате состоит."""
+    """Упоминания: кого позвали, считается ПО ТЕКСТУ при сохранении (chats/mentions.py)."""
 
     @classmethod
     def setUpTestData(cls):
@@ -2039,12 +2002,8 @@ class MentionTests(TestCase):
 
 
 class PinAndMuteTests(TestCase):
-    """Закрепление и звук — свойства УЧАСТИЯ, а не чата: у каждого свои.
-
-    Беззвучный чат уходит из общего счётчика и из заголовка вкладки, но своё число в
-    списке сохраняет — серым. Смысл «без уведомлений» в том, чтобы чат не звал, а не
-    в том, чтобы спрятать от человека его собственную переписку.
-    """
+    """Закрепление и звук — свойства УЧАСТИЯ, а не чата. Беззвучный уходит из общего
+    счётчика и заголовка вкладки, но своё число в списке сохраняет — серым."""
 
     @classmethod
     def setUpTestData(cls):

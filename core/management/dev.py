@@ -3,12 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 
 class DevCommand(BaseCommand):
-    """Команда, которой место только в разработке.
-
-    Сиды заводят выдуманные книги и материалы, а `seed_chats` — переписку между
-    настоящими людьми. Пометка «только для разработки» в описании от запуска
-    на боевой базе не защищала ничем.
-    """
+    """Команда только для разработки: вне DEBUG отказывается запускаться."""
 
     def execute(self, *args, **options):
         if not settings.DEBUG:

@@ -1,7 +1,5 @@
-"""Печать через сайт: принтеры, задания, лимиты, показания счётчиков.
-
-Документ сайт не открывает: страницы, заливку и превью приносит агент на М4
-(`tools/print_agent.py`), он же отдаёт задание в CUPS. Здесь — учёт. Договор — `docs/printing.md`.
+"""Печать через сайт: принтеры, задания, лимиты, показания. Документ открывает агент на М4
+(`tools/print_agent.py`), здесь — учёт. Договор — `docs/printing.md`.
 """
 
 from datetime import timedelta
@@ -14,8 +12,7 @@ from django.utils import timezone
 
 from .pricing import DARK, Costs
 
-# Агент шлёт показания раз в минуту. Пять минут тишины — связи с принтером нет,
-# что бы ни говорило последнее показание.
+# Показания — раз в минуту. Пять минут тишины — связи с принтером нет.
 OFFLINE_AFTER = timedelta(minutes=5)
 LOW_TONER = 10  # процентов
 
@@ -38,7 +35,7 @@ class Printer(models.Model):
     active = models.BooleanField("принимает задания", default=True)
     duplex = models.BooleanField("двусторонняя печать", default=True)
 
-    # Себестоимость. Числа по умолчанию — условные из плана, настоящие вписываются здесь.
+    # Себестоимость; по умолчанию — условные числа из плана.
     paper_sheet = models.PositiveIntegerField("лист бумаги, коп.", default=100)
     toner_price = models.PositiveIntegerField("картридж, коп.", default=150000)
     toner_yield = models.PositiveIntegerField("ресурс картриджа, стр.", default=7200, help_text="При заливке 5%, как пишет производитель")
@@ -52,8 +49,7 @@ class Printer(models.Model):
     toner_percent = models.PositiveSmallIntegerField("тонер, %", null=True, blank=True)
     page_counter = models.PositiveIntegerField("счётчик оттисков", null=True, blank=True)
     seen_at = models.DateTimeField("показания от", null=True, blank=True)
-    # О какой неполадке уже написали в телеграм (printing.alerts): пишем на смене, а не
-    # с каждым показанием — иначе «нет бумаги» приходило бы раз в минуту до утра.
+    # О какой неполадке уже написали (printing.alerts): пишем при смене, а не с каждым показанием.
     alert = models.CharField("о чём сообщено", max_length=12, blank=True)
 
     class Meta:
@@ -72,8 +68,7 @@ class Printer(models.Model):
 
     @property
     def online(self):
-        """Старое показание — это «нет связи», а не последнее известное «готов»: агент молчит,
-        и печатать сейчас некому, сколько бы бумаги ни было в лотке."""
+        """Старое показание — «нет связи»: агент молчит, и печатать некому."""
         return bool(self.seen_at) and timezone.now() - self.seen_at <= OFFLINE_AFTER and self.state != self.State.OFFLINE
 
     @property
@@ -116,17 +111,14 @@ class PrintJob(models.Model):
     PREPARING = frozenset({Status.UPLOADED, Status.ANALYZING})
     ACTIVE = frozenset({Status.QUEUED, Status.PRINTING})
     FINAL = frozenset({Status.REJECTED, Status.EXPIRED, Status.DONE, Status.FAILED, Status.CANCELED, Status.UNKNOWN})
-    # Что идёт в недельный лимит. `unknown` — нет: агент замолчал после CUPS, и лист мог
-    # не выйти; сомнение — в пользу студента.
+    # В недельный лимит. `unknown` — нет: лист мог не выйти, сомнение в пользу студента.
     COUNTED = frozenset({Status.QUEUED, Status.PRINTING, Status.DONE})
     # После чего можно напечатать тот же файл ещё раз, пока он не удалён.
     REPEATABLE = frozenset({Status.DONE, Status.FAILED, Status.CANCELED, Status.UNKNOWN})
-    # Что можно удалить: всё, кроме лежащего в лимите недели. Удалённое оттуда выпало бы,
-    # а отменить ждущее в очереди — отдельная кнопка «Отменить».
+    # Удалить можно всё, кроме лежащего в лимите недели (отмена ждущего — кнопка «Отменить»).
     REMOVABLE = frozenset(set(Status) - COUNTED)
 
-    # Он же папка файлов в хранилище: printing/<uuid>/. Повтор берёт файлы предшественника
-    # и папку свою не заводит — поэтому папку знают ключи, а не uuid.
+    # Он же папка файлов printing/<uuid>/. Повтор берёт файлы предшественника — папку знают ключи.
     uuid = models.UUIDField(default=uuid4, unique=True, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.CASCADE, related_name="print_jobs")
     printer = models.ForeignKey(Printer, verbose_name="принтер", on_delete=models.PROTECT, related_name="jobs")
@@ -139,8 +131,7 @@ class PrintJob(models.Model):
     pages = models.PositiveIntegerField("страниц", default=0)
     coverage = models.JSONField("заливка по страницам", default=list, blank=True)
     sideways = models.JSONField("поперёк листа", default=list, blank=True, help_text="Номера альбомных страниц")
-    # Крупные превью для просмотрщика (large/0001.jpg). Агент старше их не рисует —
-    # тогда просмотрщик показывает те же миниатюры.
+    # Крупные превью (large/0001.jpg); старый агент их не рисует — тогда миниатюры.
     large = models.BooleanField("крупные превью", default=False)
 
     # Выбор человека — снимок на момент «Печатать».
@@ -212,8 +203,8 @@ class PrintJob(models.Model):
 
 
 class PrintAccount(models.Model):
-    """Отдельная строка, как Wallet: под её блокировкой ставится задание в очередь
-    (printing.services.submit), и в ней же личное — свой лимит и запрет печатать."""
+    """Строка человека, как Wallet: под её блокировкой ставится задание (printing.services.submit);
+    в ней же свой лимит и запрет печатать."""
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, verbose_name="кто", on_delete=models.CASCADE, related_name="print_account")
     weekly_limit = models.PositiveIntegerField(
@@ -245,7 +236,7 @@ class PrinterReading(models.Model):
     class Meta:
         verbose_name = "показание принтера"
         verbose_name_plural = "показания принтеров"
-        # id — на случай одной метки времени у двух показаний: иначе их порядок случаен.
+        # id — на случай одной метки времени у двух показаний.
         ordering = ["-at", "-id"]
 
     def __str__(self):

@@ -12,7 +12,6 @@
     {{ form.started }}
     {% include "core/inputs.html" with field=form.topic %}
     {% include "core/inputs.html" with field=form.text %}
-    {# Скриншот объясняет поломку лучше любого описания — как и было на старом сайте #}
     {% include "attachments/_image_pick.html" with field=form.image %}
     {% if form.image.errors %}<p class="-mt-3 text-xs text-rose-500">{{ form.image.errors.0 }}</p>{% endif %}
     {% if form.contact %}{% include "core/inputs.html" with field=form.contact %}{% endif %}

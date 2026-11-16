@@ -10,8 +10,7 @@ class PlaylistForm(forms.ModelForm):
         model = Playlist
         fields = ("title", "subject", "terms", "teachers", "synopsis", "year")
         widgets = {
-            # С поиском: предметов под восемьдесят, и листать их до нужного — мучение.
-            # Семестрам ниже он ни к чему, их дюжина и они по порядку.
+            # Предметов под восемьдесят — с поиском; семестров дюжина — без.
             "subject": AccentSelect(search=True),
             "terms": AccentSelectMultiple,
             "teachers": AccentSelectMultiple(search=True),
@@ -20,8 +19,7 @@ class PlaylistForm(forms.ModelForm):
 
 
 class LectureForm(forms.ModelForm):
-    """Название записи. Сам файл приезжает отдельно — он уже в хранилище, и в форме
-    от него только подписанный токен."""
+    """Название записи; файл уже в хранилище, в форме — только подписанный токен."""
 
     class Meta:
         model = Lecture

@@ -1,8 +1,5 @@
 {% load text_extras attachment_extras %}
-{% comment %}
-  Один комментарий. Ответы лежат внутри карточки, поэтому удаление корня уносит
-  и их — и на экране, и в базе (каскад по parent).
-{% endcomment %}
+{# Один комментарий; ответы — внутри карточки, удаление корня уносит их (каскад по parent). #}
 {# reply_form приезжает только у той ветки, чей ответ не прошёл проверку — её и открываем #}
 <article id="comment-{{ c.pk }}" x-data="{ replying: {{ c.reply_form|yesno:'true,false' }} }"
          class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
@@ -26,10 +23,7 @@
     <span class="shrink-0 text-xs text-slate-400">{{ c.created|date:"j E, H:i" }}</span>
   </div>
 
-  {% comment %}
-    Кому отвечают. Есть, только если отвечали не корню ветки: у прямого ответа
-    адресат и так очевиден — он прямо над ним.
-  {% endcomment %}
+  {# Кому отвечают — только если не корню ветки. #}
   {% if c.addressee %}
   <a href="#comment-{{ c.addressee.pk }}" class="inline-flex items-center gap-1 mt-2 text-sm text-accent hover:underline">
     <i class="fa-solid fa-reply text-xs"></i>

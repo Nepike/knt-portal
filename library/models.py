@@ -21,7 +21,7 @@ class Book(Moderated):
     hide_uploader = models.BooleanField("анонимно", default=False)
     created = models.DateTimeField("дата добавления", default=timezone.now)
 
-    # Файлы книги (PDF/сканы) — в приложении attachments (File с FK сюда), доступ: book.files
+    # Файлы книги — приложение attachments: book.files.
 
     class Meta:
         verbose_name = "книга"

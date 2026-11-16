@@ -1,7 +1,5 @@
 {% comment %}
-  Форма отдельным партиалом: при ошибках вьюха возвращает только её, htmx меняет
-  на месте. Успех — редирект, который HtmxMiddleware превращает в HX-Redirect.
-  Файловая часть общая с библиотекой — см. attachments/_uploader.html.
+  При ошибках htmx меняет форму на месте, успех — HX-Redirect. Файлы — attachments/_uploader.html.
 {% endcomment %}
 <form id="material-form" method="post" enctype="multipart/form-data" class="relative flex flex-col gap-5"
       hx-post="{{ request.path }}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="outerHTML"
@@ -9,7 +7,7 @@
       @htmx:before-request="begin()" @htmx:before-on-load="end()" @htmx:after-request="end()"
       @htmx:xhr:progress="track($event)">
   {% csrf_token %}
-  {# Пока файлы летят в хранилище, форму трогать нельзя — см. комментарий в форме книги #}
+  {# Пока файлы летят, форма накрыта (см. library/_book_form.html). #}
   <div x-show="percent !== null" x-cloak @drop.prevent @dragover.prevent
        class="absolute inset-0 z-10 rounded-2xl bg-slate-50/50 dark:bg-slate-950/50 cursor-progress"></div>
 

@@ -62,8 +62,8 @@ def overview(edge):
 
 
 def cases():
-    """Кейсы с итогами открытий. Считаем отдельным запросом по открытиям: соединение и с
-    вещами, и с открытиями сразу перемножило бы строки и раздуло суммы."""
+    """Кейсы с итогами открытий — отдельным запросом: соединение с вещами и открытиями сразу
+    перемножило бы строки."""
     opened = {
         row["case"]: row for row in CaseOpening.objects.values("case").annotate(
             n=Count("id"), free=Count("id", filter=Q(paid=0)), paid=Sum("paid"), refund=Sum("refund"),

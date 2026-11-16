@@ -2,8 +2,7 @@ from django.urls import path
 
 from . import agent, views
 
-# Страницы людей — «print_*», ручки агента — «printagent_*»: при закрытии сайта открыты
-# только вторые (core/lockdown.py), страницы людей закрываются вместе со всем.
+# Страницы людей — «print_*», ручки агента — «printagent_*»: при закрытии сайта открыты только вторые.
 urlpatterns = [
     path("print/", views.home, name="print_home"),
     path("print/upload-url/", views.sign, name="print_sign"),

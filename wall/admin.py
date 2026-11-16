@@ -11,13 +11,11 @@ class BoardAdmin(admin.ModelAdmin):
 
 @admin.register(WallProfile)
 class WallProfileAdmin(admin.ModelAdmin):
-    list_display = ("user", "charges", "painted", "banned_until")
+    list_display = ("user", "painted", "banned_until", "ban_reason")
     search_fields = ("user__email", "user__surname")
-    # Заряды и счётчик — результат игры, правятся только сервисом. Бан здесь руками:
-    # на самой Стене он вешается на автора клетки, а снять его иногда надо, не разыскивая
-    # по доске, чей пиксель.
-    readonly_fields = ("user", "charges", "charged_at", "painted")
-    fields = ("user", "charges", "charged_at", "painted", "banned_until")
+    # Счётчик правит только сервис. Бан — руками тоже можно: снять его, не разыскивая пиксель на доске.
+    readonly_fields = ("user", "painted", "counted_on", "counted_today", "banned_by")
+    fields = ("user", "painted", "counted_on", "counted_today", "banned_until", "ban_reason", "banned_by")
 
 
 @admin.register(ProtectedArea)

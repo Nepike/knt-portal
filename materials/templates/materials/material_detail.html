@@ -3,10 +3,7 @@
 
 {% block title %}{{ material.title }}{% endblock %}
 
-{% comment %}
-  KaTeX только здесь: он весит с шрифтами полмегабайта, и остальным страницам не нужен.
-  Порядок важен — math.js зовёт renderMathInElement из auto-render.
-{% endcomment %}
+{# KaTeX — только здесь: тяжёлый. Порядок важен: math.js зовёт renderMathInElement из auto-render. #}
 {% block js %}
 <script defer src="{% static 'core/vendor/katex/katex.min.js' %}"></script>
 <script defer src="{% static 'core/vendor/katex/auto-render.min.js' %}"></script>

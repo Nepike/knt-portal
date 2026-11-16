@@ -83,7 +83,7 @@ class EquipTests(TestCase):
         self.assertEqual(UserItem.objects.filter(user=self.user).count(), 1)
 
     def test_equipping_takes_the_previous_one_off(self):
-        # Слот один: на старом сайте этого правила не было, и надетым оказывался последний.
+        # Слот один: надетым остаётся только последнее.
         equip(self.user, grant(self.user, self.flame).item)
         equip(self.user, grant(self.user, self.neon).item)
 
@@ -124,8 +124,7 @@ class EquipTests(TestCase):
         self.assertIsNone(worn(self.user, CosmeticItem.Kind.PROFILE_HEADER))
 
     def test_the_inventory_goes_from_plain_to_rare(self):
-        # Сортировать по самой редкости нельзя: в базе это строка, и алфавит ставит
-        # legendary между epic и mythical.
+        # Не по самой редкости: в базе это строка, алфавит ставит legendary между epic и mythical.
         grant(self.user, self.flame)  # редкая, из setUp
         for name, rarity in (("Миф", R.MYTHICAL), ("Обычная", R.COMMON), ("Легенда", R.LEGENDARY)):
             grant(self.user, make_frame(name, rarity))
@@ -147,8 +146,7 @@ class EquipTests(TestCase):
         self.assertEqual(UserItem.objects.filter(user=self.user).count(), 1)
 
     def test_changing_the_slot_of_an_item_moves_it_in_everyones_inventory(self):
-        """Вид продублирован в UserItem — правка в админке обязана поехать следом,
-        иначе вещь останется в чужом блоке и займёт не тот слот."""
+        """Вид продублирован в UserItem — правка в админке едет следом."""
         equip(self.user, grant(self.user, self.flame).item)
 
         self.flame.kind = CosmeticItem.Kind.PROFILE_HEADER
@@ -159,7 +157,7 @@ class EquipTests(TestCase):
         self.assertFalse(owned.equipped)  # в новом слоте могло быть надето своё
 
     def test_everything_worn_comes_in_one_query(self):
-        # Слотов будет больше значков и фонов — запрос на каждый не годится.
+        # Запрос на каждый слот не годится.
         equip(self.user, grant(self.user, self.flame).item)
         equip(self.user, grant(self.user, make_frame("Туманность", kind=CosmeticItem.Kind.PROFILE_HEADER)).item)
 
@@ -189,7 +187,7 @@ class ProfileTests(TestCase):
         self.assertContains(response, f'alt="{self.flame.name}"')
 
     def test_the_inventory_is_only_yours(self):
-        # Чужой сундук — витрина «вот чего у тебя нет», собирать её незачем.
+        # Чужой инвентарь не собираем.
         grant(self.other, self.flame)
 
         self.assertEqual(list(self.client.get(self.url(self.other)).context["items"]), [])
@@ -215,8 +213,7 @@ class ProfileTests(TestCase):
         self.assertIsNone(worn(self.user))
 
     def test_a_stranger_frame_does_not_land_on_my_avatar_in_the_menu(self):
-        """core/_avatar.html включается ТОЛЬКО с `only`: без него аватар в меню аккаунта
-        подхватывал `worn` из контекста чужой страницы профиля и надевал чужую рамку."""
+        """core/_avatar.html — ТОЛЬКО с `only`: иначе аватар в меню надевал чужую рамку из контекста."""
         equip(self.other, grant(self.other, self.flame).item)
 
         response = self.client.get(self.url(self.other))
@@ -242,8 +239,7 @@ class ProfileTests(TestCase):
 
 
 class SpecTests(TestCase):
-    """Приёмка по спеке: сайт не конвертирует, он отказывает с внятной причиной.
-    Договор целиком — docs/media-pipeline.md."""
+    """Приёмка по спеке: сайт не конвертирует, отказывает с внятной причиной (docs/media-pipeline.md)."""
 
     def refusal(self, kind, size):
         form = CosmeticItemForm(
@@ -271,8 +267,7 @@ class SpecTests(TestCase):
         self.assertIn("слишком мелко", self.refusal(CosmeticItem.Kind.PROFILE_BACKGROUND, (320, 180)))
 
     def test_editing_a_saved_item_leaves_its_file_alone(self):
-        """Правка названия не должна упираться в то, что рамка со старого сайта
-        на пару пикселей не квадратная."""
+        """Правка названия не упирается в старый неквадратный файл."""
         item = make_frame("Кривая")
         CosmeticItem.objects.filter(pk=item.pk).update(kind=CosmeticItem.Kind.PROFILE_BACKGROUND)
 
@@ -286,8 +281,8 @@ class SpecTests(TestCase):
 
 
 class VideoSpecTests(TestCase):
-    """Приёмка видео у вещи. Сама сверка с рецептом — общая, и проверена в intake.tests;
-    здесь то, что знает только косметика: какому виду видео бывает и по какому рецепту."""
+    """Приёмка видео у вещи. Сверка с рецептом — общая (intake.tests); здесь — какому виду
+    видео бывает и по какому рецепту."""
 
     def refusal(self, kind=CosmeticItem.Kind.PROFILE_BACKGROUND, **kwargs):
         return specs.check_video(kind, make_mp4(**kwargs)) or ""
@@ -355,8 +350,7 @@ class ArtTests(TestCase):
         self.assertIn("playsinline", page)  # без него iOS откроет фон на весь экран
 
     def test_on_a_shelf_neither_the_video_nor_its_poster_loads_until_seen(self):
-        """Safari на телефоне держит считанные декодеры разом, а постеры двадцати фонов —
-        это ещё три мегабайта. Видео на полке играет одно, его выбирает сама полка."""
+        """Safari держит считанные декодеры, а постеры двадцати фонов — ещё мегабайты. Играет одно видео, его выбирает полка."""
         item = self.make_live_background()
 
         shelves = self.client.get(reverse("shop")).content.decode().split('id="shelves"')[1]
@@ -387,7 +381,7 @@ class PriceTests(TestCase):
         self.assertEqual(make_frame("Шапка", R.MYTHICAL, CosmeticItem.Kind.PROFILE_HEADER).cost, 2500)
 
     def test_every_kind_has_a_price_for_every_rarity(self):
-        # Без строки вещь нового вида стоила бы как самая дорогая — не поломка, но и не цена.
+        # Без строки вещь нового вида стоила бы как самая дорогая.
         for kind in CosmeticItem.Kind:
             for rarity in R:
                 with self.subTest(kind=kind, rarity=rarity):
@@ -402,7 +396,7 @@ class PriceTests(TestCase):
                 self.assertLess(prices[kind.AVATAR_FRAME][rarity], prices[kind.PROFILE_BACKGROUND][rarity])
 
     def test_the_welcome_money_buys_more_than_one_thing(self):
-        # Решение пользователя 18 окт 2026: «со стартовых только одна рамка — неправильно».
+        # Со стартовых — хотя бы две редкие рамки.
         self.assertGreaterEqual(WELCOME, 2 * CosmeticItem.PRICES[CosmeticItem.Kind.AVATAR_FRAME][R.RARE])
 
     def test_an_own_price_wins(self):
@@ -417,7 +411,7 @@ class PriceTests(TestCase):
         self.assertEqual(item.cost, 0)
 
     def test_an_unknown_rarity_or_kind_costs_the_most(self):
-        # Ошибиться в сторону «дорого» не страшно, в сторону «даром» — раздать полбакета.
+        # Ошибиться в «дорого» не страшно, в «даром» — раздать полбакета.
         item = make_frame("Кривая", R.COMMON)
         CosmeticItem.objects.filter(pk=item.pk).update(rarity="неведомая")
         self.assertEqual(CosmeticItem.objects.get(pk=item.pk).cost, 6000)
@@ -452,7 +446,7 @@ class BuyTests(TestCase):
         self.assertEqual(entry.note, "Пламя")
 
     def test_bought_things_are_not_put_on_by_themselves(self):
-        # Решение пользователя: покупают и про запас, подмена надетого читалась бы поломкой.
+        # Покупают и про запас: подмена надетого читалась бы поломкой.
         credit(self.user, 1000, MANUAL)
 
         buy(self.user, self.flame)
@@ -536,14 +530,13 @@ class ShopPageTests(TestCase):
         self.assertEqual(wallet_of(self.user).balance, 500)
 
     def test_buying_is_not_done_by_a_get(self):
-        # Иначе хватило бы заманить человека на картинку по этому адресу.
+        # Иначе хватило бы заманить человека на картинку с этим адресом.
         self.assertEqual(self.client.get(reverse("item_buy", args=[self.cheap.pk])).status_code, 405)
         self.assertEqual(wallet_of(self.user).balance, 500)
 
     def test_a_shelf_shows_animations_but_only_once_they_are_seen(self):
-        """Витрина показывает анимации, а не обложки — ассортимент смотрят глазами, а на
-        телефоне наведения нет вовсе. Но браузерный loading=lazy качал с запасом в два
-        экрана, то есть все 26 МБ рамок разом: источник ставит скрипт, когда плитку видно."""
+        """Витрина показывает анимации, но loading=lazy качал бы все рамки разом: источник ставит
+        скрипт, когда плитку видно."""
         page = self.client.get(reverse("shop")).content.decode()
         url = re.escape(media_url(self.cheap.image))
 
@@ -627,8 +620,7 @@ class ShowcaseTests(TestCase):
         self.assertContains(response, '<input type="hidden" name="afford" value="1">')
 
     def test_a_thing_outside_the_picked_shelf_leafs_through_the_whole_one(self):
-        """Пока окно открыто, вещь могла уйти с отобранной полки — её купили или потратили
-        деньги в другой вкладке. Окно тогда листает полку целиком, а не падает."""
+        """Вещь могла уйти с отобранной полки, пока окно открыто: окно листает всю полку, а не падает."""
         response = self.card(self.myth, afford="1")
 
         self.assertEqual((response.context["position"], response.context["total"]), (1, 3))
@@ -687,8 +679,7 @@ class OfferTests(TestCase):
         self.assertEqual(self.card(self.frame).status_code, 404)
 
     def test_each_kind_gets_its_own_preview(self):
-        """Рамку и шапку надо видеть вблизи, фон — картой всей страницы. Один общий
-        предпросмотр обслуживал бы кого-то плохо."""
+        """Рамку и шапку — вблизи, фон — картой всей страницы."""
         background = make_frame("Бездна", R.COMMON, CosmeticItem.Kind.PROFILE_BACKGROUND)
 
         self.assertTemplateUsed(self.card(self.frame), "cosmetics/preview/card.html")
@@ -727,8 +718,7 @@ class ImportTests(TestCase):
         self.assertTrue(item.image.name)
 
     def test_the_animation_is_carried_over_untouched(self):
-        # Пережатие пробовали дважды и оба раза отказались: WebP лоссИ, на пиксельных
-        # рамках это видно, а экономит всего 38%.
+        # WebP лоссовый — на пиксельных рамках это видно.
         self.run_it("--apply")
 
         with PilImage.open(CosmeticItem.objects.get().image) as picture:
@@ -743,12 +733,8 @@ class ImportTests(TestCase):
 
 
 class AdminFormTests(TestCase):
-    """Админка — единственная дверь для анимированных вещей: витрину и профиль они
-    получают уже принятыми. Дверь эта была закрыта — поля `video` в наборе не было.
-
-    Правки идут через саму страницу админки: она сохраняет форму с commit=False, и тесты,
-    звавшие form.save() напрямую, были зелёными при неработающей уборке файлов.
-    """
+    """Админка — единственная дверь для анимированных вещей. Правки — через саму страницу:
+    она сохраняет форму с commit=False, и прямой form.save() не поймал бы сломанную уборку файлов."""
 
     def setUp(self):
         self.client.force_login(User.objects.create_superuser(
@@ -769,8 +755,7 @@ class AdminFormTests(TestCase):
         self.assertIn("video", CosmeticItemAdmin(CosmeticItem, site).get_fields(None))
 
     def test_a_replaced_file_does_not_stay_in_the_bucket(self):
-        """Блоб снимается вместе с записью (post_delete в attachments/storage.py),
-        но при ЗАМЕНЕ ссылка на прежний пропадала, а сам он оставался сиротой."""
+        """При ЗАМЕНЕ файла прежний не должен остаться в бакете сиротой."""
         item = make_frame("Замена")
         was = item.image.name
 
@@ -847,8 +832,7 @@ class UnequipTests(TestCase):
 
 
 class TileTests(TestCase):
-    """Надетое видно ярлыком по низу плитки — цветом своей ступени. Ни кольца (спорило
-    с рамкой ступени), ни заливки (глушила саму вещь)."""
+    """Надетое видно ярлыком по низу плитки цветом своей ступени — без кольца и заливки."""
 
     def setUp(self):
         self.user = make_user()
@@ -864,7 +848,7 @@ class TileTests(TestCase):
 
         self.assertEqual(page.count("rarity-tag"), 1)
         self.assertEqual(page.count("rarity-check"), 1)
-        self.assertNotIn("rarity-on", page)  # прежняя заливка убрана целиком
+        self.assertNotIn("rarity-on", page)  # заливки нет
 
     def test_an_empty_inventory_points_at_the_shop(self):
         """Единственное место, откуда человеку и правда некуда деться, кроме магазина."""
@@ -913,7 +897,7 @@ class CaseOddsTests(SimpleTestCase):
         self.luck = random.Random(18)
 
     def test_the_odds_are_the_agreed_ones(self):
-        # Решение пользователя 18 окт 2026.
+        # Утверждённые шансы.
         self.assertEqual(ODDS, {R.COMMON: 55, R.RARE: 25, R.EPIC: 12, R.LEGENDARY: 6, R.MYTHICAL: 2})
         self.assertEqual(odds(self.items), [
             (R.COMMON, 0.55), (R.RARE, 0.25), (R.EPIC, 0.12), (R.LEGENDARY, 0.06), (R.MYTHICAL, 0.02),
@@ -932,9 +916,8 @@ class CaseOddsTests(SimpleTestCase):
                 self.assertAlmostEqual(rolls[rarity] / 20000, share / 100, delta=0.01)
 
     def test_what_you_own_does_not_move_the_odds(self):
-        """Скупил в магазине все обычные — шанс на редкое от этого не растёт: выпавшая
-        обычная просто пуста (за неё вернут половину цены). Иначе кейс приносил бы в
-        среднем втрое больше своей цены."""
+        """Скупил все обычные — шанс на редкое не растёт: выпавшая обычная пуста (половина
+        цены назад)."""
         owned = {item.pk for item in self.items if item.rarity == R.COMMON}
 
         rolls = [draw(self.items, owned, luck=self.luck) for _ in range(20000)]
@@ -976,8 +959,7 @@ class ReelTests(SimpleTestCase):
             yield prize, reel(self.items, opening, luck=self.luck)
 
     def test_the_reel_odds_only_tease(self):
-        """Решение пользователя 18 окт 2026: легендарных и мифических в ленте чуть больше,
-        «просто чтобы их побольше видеть». Выпадают они по-прежнему по ODDS."""
+        """Редкие в ленте мелькают чаще, а выпадают по ODDS."""
         self.assertEqual(REEL_ODDS, {R.COMMON: 50, R.RARE: 25, R.EPIC: 12, R.LEGENDARY: 9, R.MYTHICAL: 4})
 
     def test_the_prize_stands_at_the_stop_and_no_twins_stand_side_by_side(self):
@@ -1072,8 +1054,7 @@ class CaseOpenTests(TestCase):
         self.assertEqual(wallet_of(self.user).balance, 200)
 
     def test_a_collected_rarity_costs_half_and_gives_nothing(self):
-        """Решение пользователя 18 окт 2026: ступень по честным шансам, а если она у тебя
-        собрана — половина цены назад. Одной строкой «−150»: строка с плюсом ушла бы во вклад."""
+        """Собранная ступень — половина цены назад, одной строкой «−150»: плюс ушёл бы во вклад."""
         self.gift_is_used()
         grant(self.user, self.common)
         grant(self.user, self.other)
@@ -1170,7 +1151,7 @@ class CasePageTests(TestCase):
         self.assertEqual(reel[STOP], response.context["opening"].item)
         self.assertLessEqual(len({item.pk for item in reel}), 10)  # лента грузится разом
         self.assertContains(response, "data-prize", count=1)
-        # «Уже в инвентаре» читалось как «такая уже была».
+        # «Уже в инвентаре» читалось бы как «такая уже была».
         self.assertContains(response, "Вещь добавлена в инвентарь")
 
     def test_on_the_shop_page_opening_asks_first(self):
@@ -1257,7 +1238,7 @@ class CasePageTests(TestCase):
 
 @override_settings(SITE_THEME="party")
 class PartyCaseTests(TestCase):
-    """2 декабря 2026, праздник после взлома (quest): ещё один кейс в подарок, сверх первого."""
+    """Праздник после взлома (quest): ещё один кейс в подарок, сверх первого."""
 
     def setUp(self):
         self.user = make_user()

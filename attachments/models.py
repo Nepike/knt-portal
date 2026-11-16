@@ -103,9 +103,7 @@ class Image(models.Model):
 
     name = models.CharField("название", max_length=150, blank=True)
     image = models.ImageField("изображение", upload_to=image_upload_to, storage=media_storage)
-    # Уменьшенная копия для ленты: снимок с телефона даже после сжатия весит сотни
-    # килобайт, и десяток таких в переписке — это мегабайты мобильного трафика ради
-    # картинок размером с ноготь. Печёт её браузер вместе с оригиналом.
+    # Миниатюра для ленты — её печёт браузер вместе с оригиналом.
     preview = models.ImageField("миниатюра", upload_to=preview_upload_to, storage=media_storage, null=True, blank=True)
     size = models.PositiveBigIntegerField("размер (байт)", null=True, blank=True)
     order = models.PositiveIntegerField("порядок", default=0)

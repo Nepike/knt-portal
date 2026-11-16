@@ -1,10 +1,9 @@
-"""Ручки агента печати (`tools/print_agent.py` на М4). Человек сюда не ходит.
+"""Ручки агента печати (`tools/print_agent.py` на М4). Договор — docs/printing.md.
 
-Агент приходит сам. Разбор: `claim` → скачать исходник → PDF, заливка, превью →
-`analyzed` (цифры, в ответ — куда залить) → залить → `commit`. Печать: `claim` → скачать
-print.pdf → отдать в CUPS → `sent` → дождаться CUPS → `printed`. Выходы на полпути: `fail`
-(не вышло, с причиной для человека) и `release` (агента остановили — задание ещё можно
-сделать). Ключей от бакета у агента нет, только подписанные ссылки. Договор — docs/printing.md.
+Разбор: `claim` → скачать исходник → PDF, заливка, превью → `analyzed` (куда залить) →
+залить → `commit`. Печать: `claim` → print.pdf → CUPS → `sent` → дождаться CUPS → `printed`.
+На полпути: `fail` (с причиной для человека) и `release` (агента остановили). Ключей от бакета
+у агента нет, только подписанные ссылки.
 """
 
 from functools import wraps
@@ -27,12 +26,11 @@ from .models import Printer, PrinterReading, PrintJob
 
 Status = PrintJob.Status
 JOB_SALT = "printing.agent"
-# Токен задания живёт неделю: печать без бумаги честно ждёт, хоть до утра, и агент
-# должен суметь доложить «напечатано», когда бумагу положат. Старые попытки отсекает
-# номер попытки в токене, а не срок.
+# Токен задания живёт неделю: печать без бумаги честно ждёт. Старые попытки отсекает номер
+# попытки в токене, а не срок.
 JOB_MAX_AGE = 7 * 24 * 3600
 ANALYZE, PRINT = "analyze", "print"
-# Чем было задание у агента — в этом состоянии его ждут ручки.
+# В каком состоянии задание ждут ручки этого вида работы.
 WORKING = {ANALYZE: Status.ANALYZING, PRINT: Status.PRINTING}
 
 
@@ -49,11 +47,8 @@ def _token(job, kind):
 
 
 def _job(payload):
-    """(задание, вид работы) по токену или (None, None).
-
-    В токене номер попытки: агент, промолчавший дольше срока, не умер, а просто медленный,
-    и задание к тому времени выдано снова. По одному uuid обе попытки были бы полноправны.
-    """
+    """(задание, вид работы) по токену или (None, None). В токене номер попытки: медленному
+    агенту, у которого задание выдали снова, старый токен не подойдёт."""
     try:
         uuid, attempt, kind = signing.loads(str(payload.get("token", "")), salt=JOB_SALT, max_age=JOB_MAX_AGE)
         job = PrintJob.objects.select_related("printer").filter(
@@ -80,8 +75,7 @@ def _heard(job, *fields):
 @door
 @require_GET
 def config(request):
-    """Принтеры и пределы. Агент читает их у сайта, а не хранит у себя: его копия
-    репозитория бывает старше сегодняшних настроек."""
+    """Принтеры и пределы: агент читает их у сайта — его копия репозитория бывает старше."""
     return JsonResponse({
         "printers": [
             {"id": printer.pk, "name": printer.name, "queue": printer.queue, "address": printer.address,
@@ -117,8 +111,7 @@ def claim(request):
         }
     else:
         answer |= {
-            # По этому имени агент после перезапуска найдёт задание в CUPS (docs/printing.md,
-            # «Защита от двойной печати»).
+            # По этому имени агент после перезапуска найдёт задание в CUPS (docs/printing.md).
             "title": f"knt-{job.uuid.hex}", "pdf": sign_download(job.pdf_key), "pages": job.pages,
             "selection": job.selection, "copies": job.copies, "duplex": job.duplex, "sides": job.sides,
         }
@@ -139,11 +132,8 @@ def _shares(raw, pages):
 @door
 @require_POST
 def analyzed(request):
-    """Цифры разбора → проверка → куда залить print.pdf и превью.
-
-    Ключи выбирает сайт, а не агент, — внутри папки задания. И тип объявляет сайт: он
-    записывается в объект и потом уходит браузеру (attachments.storage.CONTENT_TYPES).
-    """
+    """Цифры разбора → проверка → куда залить print.pdf и превью. Ключи и тип выбирает сайт:
+    тип ложится в объект и уходит браузеру."""
     payload = agents.body(request)
     job, kind = _job(payload)
     if kind != ANALYZE:
@@ -162,8 +152,7 @@ def analyzed(request):
     job.pages, job.coverage, job.sideways = pages, shares, sorted(set(sideways))
     _heard(job, "pages", "coverage", "sideways")
     names = ["print.pdf", *(f"pages/{number:04d}.jpg" for number in range(1, pages + 1))]
-    # Крупные превью — отдельным полем, а не в urls: агент старше их не рисует, а по urls
-    # заливает всё подряд и на незнакомом имени споткнулся бы.
+    # Крупные превью — отдельным полем: старый агент их не рисует и споткнулся бы о незнакомое имя.
     large = [f"large/{number:04d}.jpg" for number in range(1, pages + 1)]
     return JsonResponse({
         "urls": {name: sign_put(job.folder + name) for name in names},
@@ -175,8 +164,7 @@ def analyzed(request):
 @door
 @require_POST
 def commit(request):
-    """«Залил». Сайт сверяет ключи под папкой задания: оборванная заливка иначе открылась
-    бы человеку сеткой с дырами, а печать — без print.pdf."""
+    """«Залил». Сверяем ключи под папкой: иначе оборванная заливка — сетка с дырами и печать без PDF."""
     job, kind = _job(agents.body(request))
     if kind != ANALYZE:
         return _gone()
@@ -190,7 +178,7 @@ def commit(request):
 
     job.status = Status.READY
     job.pdf_key = job.folder + "print.pdf"
-    # Крупных может не быть (агент старше) — печати это не мешает, просмотрщик возьмёт мелкие.
+    # Крупных может не быть (агент старше) — просмотрщик возьмёт мелкие.
     job.large = all(f"{job.folder}large/{number:04d}.jpg" in found for number in range(1, job.pages + 1))
     job.analyzed_at = timezone.now()
     job.reason = ""
@@ -201,7 +189,7 @@ def commit(request):
 @door
 @require_POST
 def sent(request):
-    """«Отдал в CUPS, номер такой-то». С этой минуты задание в очередь не вернётся никогда."""
+    """«Отдал в CUPS, номер такой-то». С этой минуты задание в очередь не вернётся."""
     payload = agents.body(request)
     job, kind = _job(payload)
     if kind != PRINT:
@@ -217,12 +205,8 @@ def sent(request):
 @door
 @require_POST
 def printed(request):
-    """CUPS сказал «выполнено». Это «принтер принял всё», а не «лист вышел» — сверку
-    со счётчиком страниц делает агент до того, как сюда прийти.
-
-    `{"sure": false}` — счётчик не сдвинулся: листов, похоже, нет. Это не «не вышло»
-    (могли и выйти) и не «напечатано» — `unknown`, в лимит не идёт, решает человек у лотка.
-    """
+    """CUPS сказал «выполнено» — это «принтер принял», сверку со счётчиком агент сделал сам.
+    `{"sure": false}` — счётчик не сдвинулся: `unknown`, в лимит не идёт, решает человек у лотка."""
     payload = agents.body(request)
     job, kind = _job(payload)
     if kind != PRINT:
@@ -240,8 +224,7 @@ def printed(request):
 @door
 @require_POST
 def fail(request):
-    """Не вышло. Причина уходит человеку: разбор — «не принято», печать — «не вышло»,
-    и страницы возвращаются в лимит сами (лимит считает только живое и напечатанное)."""
+    """Не вышло. Причина — человеку; страницы возвращаются в лимит сами (он считает живое)."""
     payload = agents.body(request)
     job, kind = _job(payload)
     if job is None:
@@ -275,12 +258,8 @@ def alive(request):
 @door
 @require_POST
 def release(request):
-    """«Не доделаю»: агента останавливают. Задание сразу снова в очереди, а не ждёт, пока
-    сайт сочтёт агента пропавшим.
-
-    Печать — только до `sent`. Отданное в CUPS могло уже выйти на бумагу, и вернуть его
-    в очередь значит напечатать второй раз. Такое агент доводит сам после перезапуска.
-    """
+    """«Не доделаю»: задание сразу снова в очереди. Печать — только до `sent`: отданное в CUPS
+    могло выйти, его агент доводит сам после перезапуска."""
     job, kind = _job(agents.body(request))
     if job is None:
         return _gone()
@@ -301,12 +280,8 @@ def _number(raw, top=None):
 @door
 @require_POST
 def status(request):
-    """Показания принтеров по SNMP: [{id, state, panel, toner, counter}].
-
-    Карточка принтера обновляется всегда — по времени показаний студент видит, жив ли
-    агент. А в журнал показаний строка идёт, только если что-то поменялось: раз в минуту
-    одно и то же за ночь — тысяча строк ни о чём.
-    """
+    """Показания принтеров по SNMP: [{id, state, panel, toner, counter}]. Карточка обновляется
+    всегда (по времени видно, жив ли агент), а в журнал показаний — только перемены."""
     now = timezone.now()
     known = {printer.pk: printer for printer in Printer.objects.all()}
     for item in agents.body(request).get("printers") or []:

@@ -45,8 +45,7 @@ class ReviewImageTests(TestCase):
         return Review.objects.get()
 
     def test_an_anonymous_photo_keeps_neither_its_exif_nor_its_name(self):
-        """Анонимный отзыв о преподавателе со снимком с телефона: геометка и имя файла
-        вида IMG_20261012_143012.jpg сужали круг до одного человека."""
+        """Анонимный отзыв: геометка и имя файла IMG_….jpg выдали бы автора."""
         from attachments.tests import assert_scrubbed, phone_photo
 
         review = self.review_with_image(image=phone_photo(), hide_author="on")
@@ -133,8 +132,7 @@ class ReviewImageTests(TestCase):
 
 
 class ReviewVoteTests(TestCase):
-    """Голосуют за то, что можно прочесть. У отзыва из одних оценок кнопок голоса нет,
-    и ручка отвечает тем же: лайки оплачиваются."""
+    """У отзыва из одних оценок голосовать нельзя — ни кнопкой, ни ручкой: лайки оплачиваются."""
 
     @classmethod
     def setUpTestData(cls):

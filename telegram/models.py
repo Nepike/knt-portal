@@ -2,10 +2,7 @@ from django.db import models
 
 
 class TelegramChat(models.Model):
-    """Куда бот пишет. Настраивается из админки, а не хардкодом: chat_id узнаётся
-    только у живого чата (команда /get_chat_id, см. management/commands/bot.py),
-    и чатов со временем будет несколько — модерация, поддержка, заказы.
-    """
+    """Куда бот пишет. Из админки: chat_id узнаётся у живого чата (/get_chat_id, commands/bot.py)."""
 
     name = models.CharField("название", max_length=30, unique=True)
     description = models.CharField("описание", max_length=150, blank=True)

@@ -29,8 +29,5 @@ urlpatterns = [
     path('', include('quest.urls')),
 ]
 
-# Файлы с локального диска — только в разработке (static() вне DEBUG пуст). Без входа, как
-# на боевом: там картинки отдаёт домен файлов (attachments.views.media_image), и гость их
-# видит. Без пометки ограничитель входа уводил гостя на форму — рамки и аватары у гостя
-# на dev были битыми.
+# Файлы с диска — только в dev (вне DEBUG static() пуст). Без входа, как домен файлов на проде.
 urlpatterns += static(settings.MEDIA_URL, view=login_not_required(serve), document_root=settings.MEDIA_ROOT)

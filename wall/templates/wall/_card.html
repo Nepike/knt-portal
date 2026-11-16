@@ -1,0 +1,32 @@
+{# Карточка клетки: кто менял её, новое сверху. Данные — wall/pixel/ (card в wall.js). #}
+<div class="space-y-3">
+  <div class="flex items-center gap-3">
+    <span class="w-9 h-9 shrink-0 rounded-lg ring-1 ring-black/10" :style="{ background: colors[card.color].hex }"></span>
+    <span class="min-w-0">
+      <template x-if="card.owner">
+        <a :href="card.owner.url" class="block font-semibold truncate hover:text-accent" x-text="card.owner.name"></a>
+      </template>
+      <span x-show="!card.owner" class="block font-semibold">никто</span>
+      <span class="text-xs text-slate-500 dark:text-slate-400" x-text="colors[card.color].name"></span>
+    </span>
+  </div>
+  <ul x-show="card.events.length" class="space-y-2">
+    <template x-for="(event, index) in card.events" :key="index">
+      <li class="flex items-center gap-2">
+        <span class="w-4 h-4 shrink-0 rounded ring-1 ring-black/10" :style="{ background: colors[event.color].hex }"></span>
+        <span class="min-w-0 flex-1 truncate">
+          <b class="font-medium" x-text="event.who ? event.who.name : 'кто-то, кого уже нет'"></b>
+          <span class="text-slate-500 dark:text-slate-400" x-text="event.color ? 'закрасил' : 'стёр'"></span>
+        </span>
+        <time class="shrink-0 text-xs text-slate-400" x-text="ago(Date.parse(event.at))"></time>
+      </li>
+    </template>
+  </ul>
+  <p x-show="!card.events.length" class="text-slate-400">Клетку ещё никто не трогал.</p>
+  <div class="flex flex-wrap gap-2">
+    <button type="button" x-show="card.color" @click="pick(card.color)" class="btn btn-ghost !px-2.5"><i class="fa-solid fa-eye-dropper"></i>Взять цвет</button>
+    <template x-if="can.moderate && card.owner && card.owner.id !== me">
+      <button type="button" @click="moderate(card.owner)" class="btn btn-ghost !px-2.5 !text-rose-600 dark:!text-rose-400"><i class="fa-solid fa-gavel"></i>Модерировать</button>
+    </template>
+  </div>
+</div>

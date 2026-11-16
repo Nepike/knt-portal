@@ -16,7 +16,6 @@ urlpatterns = [
     path("healthz/", views.healthz, name="healthz"),
 ]
 
-# Витрина полей и кнопок — она же стенд, на котором их и проверяют. Наружу не выставляем:
-# на боевом сайте это страница без смысла, но с настоящими формами.
+# Витрина полей и кнопок — только в dev.
 if settings.DEBUG:
     urlpatterns.append(path("demo/", views.demo, name="demo"))

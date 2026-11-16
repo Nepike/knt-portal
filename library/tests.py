@@ -63,8 +63,8 @@ class BookListTests(TestCase):
         self.assertContains(response, "на проверке")
 
     def test_the_form_carries_the_search_both_filters_and_the_sorting(self):
-        """Вид у подбора тот же, что в лектории: строка поиска, под ней фильтры пилюлями.
-        Каждое поле в разметке одно — два набора с одним именем ушли бы в запрос дважды."""
+        """Как в лектории: поиск и пилюли. Каждое поле — одно: два с одним именем ушли бы
+        в запрос дважды."""
         page = self.get(q="зорич", subject=self.matan.pk).content.decode()
 
         self.assertEqual(page.count('name="q" value="зорич"'), 1)
@@ -116,8 +116,7 @@ class BookListTests(TestCase):
 
 
 class FiltersSurviveTests(BookListTests):
-    """Открыл книгу, вернулся — подбор на месте. До этого «Библиотека» вела в начало
-    списка, и поиск с фильтрами приходилось набирать заново на каждой книге."""
+    """Открыл книгу, вернулся — подбор на месте."""
 
     def test_a_card_carries_the_picked_filters_into_its_link(self):
         """По этой строке страница книги и узнаёт, куда возвращать по «Библиотека»."""
@@ -147,8 +146,7 @@ class FiltersSurviveTests(BookListTests):
         self.assertEqual(page.context["back_url"], f"{reverse('book_list')}?term={self.first.pk}")
 
     def test_the_page_number_is_left_behind(self):
-        """Вернувшись, человек ждёт свой список, а не третью его страницу — порции
-        догружаются маячком, и номер в адресе к ним не относится."""
+        """Номер порции в «назад» не едет: порции догружаются маячком."""
         page = self.client.get(reverse("book_detail", args=[self.zorich.pk]), {"term": self.first.pk, "page": 3})
 
         self.assertNotIn("page", page.context["back_url"])
@@ -360,7 +358,7 @@ class BookEditTests(TestCase):
 
     def create(self, user, **extra):
         self.client.force_login(user)
-        extra.setdefault("files", [upload()])  # книга без файлов теперь не сохраняется
+        extra.setdefault("files", [upload()])  # книга без файлов не сохраняется
         return self.client.post(reverse("book_new"), self.fields(**extra))
 
     def test_student_adds_a_book_and_it_waits_for_moderation(self):
@@ -495,8 +493,7 @@ class BookEditTests(TestCase):
 
 
 class SelfPublishRewardTests(TestCase):
-    """То же, что у материалов: модератор, публикуя книгу своей же правкой, идёт мимо
-    book_review, где награда и дописывалась."""
+    """Как у материалов: модератор, публикуя своё правкой, идёт мимо book_review."""
 
     @classmethod
     def setUpTestData(cls):

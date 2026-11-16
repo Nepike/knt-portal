@@ -56,7 +56,7 @@ class Fixture(TestCase):
 
 
 class CommentNoticeTests(Fixture):
-    """Вопросы под материалами: ради них колокольчик и делался."""
+    """Вопросы под материалами."""
 
     def test_a_comment_under_a_material_reaches_its_author(self):
         comment = self.comment(self.reader)

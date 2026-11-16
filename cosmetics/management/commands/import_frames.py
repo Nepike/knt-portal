@@ -2,11 +2,8 @@
 
     manage.py import_frames --more "C:\\...\\more frames" --apply
 
-Имён и редкости у файлов нет — названия у них хеши, — поэтому вещам ставится «Рамка N»
-и «обычная»: переименовать удобнее в админке, где видно саму картинку.
-
-Файл кладётся КАК ЕСТЬ, в исходном формате: пережатие в анимированный WebP экономит
-38%, но оно лоссИ, и на пиксельных рамках это видно.
+Имён у файлов нет (хеши) — ставим «Рамка N» и «обычная», переименовывать в админке.
+Файл кладётся как есть: анимированный WebP лоссовый, на пиксельных рамках это видно.
 """
 
 from pathlib import Path
@@ -47,9 +44,8 @@ class Command(BaseCommand):
         for source in sorted(folder.iterdir()):
             if source.suffix.lower() not in (".png", ".apng", ".webp", ".gif"):
                 continue
-            # Имя придумываем только тому, кого ещё не переносили: иначе на втором
-            # заходе те же файлы получили бы новые номера и легли повторно. Уже
-            # известной вещи возвращаем её собственное — оно могло быть исправлено руками.
+            # Имя придумываем только новому: на втором заходе номера поменялись бы. Известной
+            # вещи — её имя, его могли поправить руками.
             origin = f"file:{source.name}"
             known = CosmeticItem.objects.filter(source=origin).values_list("name", flat=True).first()
             if known:
@@ -82,16 +78,14 @@ class Command(BaseCommand):
         return 1
 
     def store(self, item, source, animated):
-        """Записать файл. У обновляемой вещи прежний блоб снимаем сами: подменённое
-        поле про него уже не помнит, и в хранилище остался бы сирота."""
+        """Записать файл. Прежний блоб снимаем сами: подменённое поле о нём не помнит."""
         if item.pk:
             item.image.delete(save=False)
         item.image.save(f"{source.stem}{source.suffix.lower()}", ContentFile(animated), save=False)
         item.save()
 
     def convert(self, source):
-        """Анимация уезжает КАК ЕСТЬ, в исходном формате. Пережатие пробовали дважды:
-        анимированный WebP экономит 38%, но он лоссИ и на пиксельных рамках это видно."""
+        """Анимация — как есть, в исходном формате: WebP лоссовый."""
         with Image.open(source) as image:
             frames = sum(1 for _ in ImageSequence.Iterator(image))
         return source.read_bytes(), frames

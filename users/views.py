@@ -36,12 +36,8 @@ from .sessions import alive
 
 
 def _by_term(materials):
-    """Материалы по семестрам. Материал с двумя семестрами попадает в оба — так и задумано:
-    это разбивка «когда пригодится», а не деление одной работы на части.
-
-    order_by() перед values() обязателен: у Material в Meta стоит сортировка по дате,
-    а сортировка попадает в GROUP BY — без сброса каждый материал стал бы своей группой.
-    """
+    """Материалы по семестрам; с двумя семестрами — в обоих. order_by() перед values()
+    обязателен: сортировка из Meta попала бы в GROUP BY."""
     rows = list(
         materials.order_by().values("terms__number").annotate(count=Count("id")).order_by("terms__number")
     )
@@ -57,12 +53,8 @@ def _by_term(materials):
 
 
 def _contributions(person, full):
-    """Вклад человека в сайт. Считаем только опубликованное: материал на проверке ещё
-    может и не выйти, а в профиле он выглядел бы как заслуга.
-
-    full — свой профиль. В чужом анонимные работы не показываем даже числом: у того,
-    у кого такая работа одна, счётчик и есть та самая подпись, которую он снял.
-    """
+    """Вклад человека: только опубликованное. full — свой профиль; в чужом анонимные работы
+    не показываем даже числом: у одной такой работы счётчик и есть снятая подпись."""
     approved = Moderated.Status.APPROVED
     materials = Material.objects.filter(uploader=person, status=approved)
     books = Book.objects.filter(uploader=person, status=approved)
@@ -84,23 +76,14 @@ def _contributions(person, full):
 
 
 PAGE_SIZE = 24  # человек в порции
-# Как сортировать список. По алфавиту — по умолчанию: раздел заведён, чтобы НАЙТИ
-# человека, а не посмотреть, кто первый.
+# Сортировки списка; по умолчанию — по алфавиту: раздел заведён, чтобы найти человека.
 SORTS = {"name": ("surname", "name"), "contribution": ("-earned", "surname", "name")}
 SORT_LABELS = {"name": "По алфавиту", "contribution": "По вкладу"}
 
 
 def _people():
-    """Все живые люди со счётчиком заработанного.
-
-    Считаем ЗАРАБОТАННОЕ (плюсы журнала), а не баланс. Баланс — это заработанное минус
-    потраченное, и порядок по нему поднимал бы наверх тех, кто ничего не покупает: купил
-    рамку — уехал вниз. Заработанное же складывается из того, что и так на виду:
-    материалов, книг, отзывов, клеток на Стене.
-
-    Возврат награды за удалённое — минус, но не трата: он заработанное отменяет, и
-    вещи, за которую платили, на виду уже нет. Поэтому он в сумму входит.
-    """
+    """Все живые люди со счётчиком ЗАРАБОТАННОГО (плюсы журнала), а не баланса: топ по
+    балансу поднимал бы тех, кто не покупает. Возврат за удалённое входит в сумму."""
     earned = Sum(
         "wallet__entries__amount",
         filter=Q(wallet__entries__amount__gt=0) | Q(wallet__entries__reason__in=BalanceLog.TAKEN_BACK),
@@ -113,16 +96,8 @@ def _people():
 
 
 def _courses():
-    """{значение фильтра: (подпись, [номера групп])} — по нынешнему составу групп.
-
-    Список курсов не зашит: набор групп меняется каждый год, и «6 курс», за которым
-    никого нет, — предложение, ведущее в пустоту.
-
-    Считаем в Python и по ГРУППАМ: курс нигде не хранится, он выводится из года
-    зачисления (`Team.grade_key`), и вторая его реализация на SQL разошлась бы с первой
-    в первый же сентябрь. Групп два десятка — это один запрос, а не арифметика
-    по трёмстам людям.
-    """
+    """{значение фильтра: (подпись, [номера групп])} по нынешнему составу групп. В Python и по
+    группам: курс выводится из года зачисления (`Team.grade_key`), второй разбор на SQL разошёлся бы."""
     buckets = {}
     for team in Team.objects.all():
         key = team.grade_key()
@@ -148,19 +123,14 @@ def student_list(request):
         people = people.filter(team__in=courses[course][1])
     if q:
         people = by_name(people, q)
-    # Порядок поиска сохраняем ПЕРВЫМ ключом: он ставит вперёд тех, у кого слово стоит
-    # в начале имени, — по «Иван» это Иван и Иванов, а не десять Ивановых (`core.search`).
-    # Выбранная сортировка идёт после него, иначе поиск перестал бы попадать в цель.
+    # Порядок поиска — ПЕРВЫМ ключом (`core.search`), выбранная сортировка — после.
     people = people.order_by(*(("name_rank",) if q else ()), *SORTS[sort])
 
     page = Paginator(people, PAGE_SIZE).get_page(request.GET.get("page"))
-    # Пусто под выбранным курсом — это не «на сайте нет людей», и говорить об этом
-    # надо по-разному.
     context = {"page": page, "people": page.object_list, "q": q, "sort": sort, "course": course}
 
     if not request.headers.get("HX-Request"):
-        # Форма несвязанная, со значением УЖЕ разобранным: селект показывает ровно то,
-        # что применено, а не то, что прислали.
+        # Несвязанная форма с уже разобранным значением: селект показывает применённое.
         form = StudentFilterForm(
             courses=[(key, label) for key, (label, _) in courses.items()],
             initial={"course": course},
@@ -170,15 +140,14 @@ def student_list(request):
         })
 
     response = render(request, "users/_student_list.html", context)
-    # Порция — это про место в списке, а не про подбор: адрес она не трогает.
+    # Порция адрес не трогает.
     if not request.GET.get("page"):
         response["HX-Push-Url"] = _picked_url(request)
     return response
 
 
 def _picked_url(request):
-    """Адрес списка с выбранным подбором: F5 не сбрасывает фильтры, а ссылку можно
-    переслать. Пустые параметры выбрасываем, `page` — тоже: он про порцию, а не про подбор."""
+    """Адрес списка с подбором — без пустых параметров и `page`."""
     query = urlencode({key: value for key, value in request.GET.items() if value and key != "page"})
     return f"{request.path}?{query}" if query else request.path
 
@@ -194,15 +163,13 @@ def profile(request, pk):
     own = person.pk == request.user.pk
     wallet = getattr(person, "wallet", None)
     on = outfit(person)
-    # Берём на одну больше, чем покажем: так видно, есть ли что смотреть дальше,
-    # и это тот же запрос, а не второй ради count().
+    # На одну больше, чем покажем: видно, есть ли «дальше», без count().
     entries = list(wallet.entries.all()[: RECENT + 1]) if wallet and own else []
     return render(request, "users/profile.html", {
         "person": person,
         "own": own,
         "stats": _contributions(person, full=own),
-        # История трат и список устройств — только свои: по ним видно и что человек
-        # покупал, и откуда он заходит.
+        # История трат и устройства — только свои.
         "entries": entries[:RECENT],
         "more": len(entries) > RECENT,
         "devices": _devices(request) if own else [],
@@ -215,29 +182,24 @@ def profile(request, pk):
 
 
 def _devices(request):
-    """Сессии для страницы. Ключ сессии наружу не отдаём даже своему хозяину: это пароль
-    на предъявителя, и попавший на скриншот действует до конца срока. Наружу — id строки."""
+    """Сессии для страницы. Наружу — id строки: ключ сессии — пароль на предъявителя."""
     mine = request.session.session_key
     return [(row, row.session_id == mine) for row in alive(request.user)]
 
 
 @require_POST
 def session_end(request):
-    """Закрыть сессию: своя строка по id в теле запроса, без него — все, кроме текущей.
-
-    Id в теле, а не в адресе: адреса оседают в логах и в Referer, а тут закрывается доступ.
-    Текущую не трогаем — это просто выход, и он рядом, в меню аккаунта.
-    """
+    """Закрыть сессию: по id из тела запроса, без него — все, кроме текущей. В теле, не в адресе:
+    адреса оседают в логах и Referer."""
     doomed = alive(request.user).exclude(session_id=request.session.session_key)
     pk = request.POST.get("id", "")
     if pk:
-        # Не число — значит, запрос пришёл не с нашей страницы. Молча закрывать всё
-        # в таком случае нельзя, а падать пятисоткой на кривом поле незачем.
+        # Не число — запрос не с нашей страницы: ничего не закрываем и не падаем.
         if not pk.isdigit():
             return redirect("profile", pk=request.user.pk)
         doomed = doomed.filter(pk=pk)
 
-    # Удаляем сами сессии — записи уедут за ними каскадом.
+    # Удаляем сами сессии — приписки уйдут каскадом.
     closed = Session.objects.filter(pk__in=doomed.values("session_id")).delete()[0]
     messages.success(request, f"Закрыто сессий: {closed}" if closed else "Закрывать нечего")
     return redirect("profile", pk=request.user.pk)
@@ -248,7 +210,7 @@ def profile_edit(request):
     was = request.user.photo
     if request.method == "POST" and form.is_valid():
         form.save()
-        # Прежний блоб больше ничей: запись жива, а добраться до него потом неоткуда.
+        # Прежний блоб ничей: запись жива, post_delete его не снимет.
         if was and str(was) != str(request.user.photo):
             was.storage.delete(str(was))
         messages.success(request, "Профиль обновлён")
@@ -280,7 +242,7 @@ class PasswordResetView(BasePasswordResetView):
     subject_template_name = "users/password_reset_subject.txt"
 
     def form_valid(self, form):
-        # Защита от спама письмами: при превышении лимита молча уходим на done-страницу.
+        # Сверх лимита молча уходим на done-страницу: не спамить письмами.
         ip = client_ip(self.request)
         email = form.cleaned_data["email"].lower()
         if throttled(f"pwreset:ip:{ip}", 5) or throttled(f"pwreset:email:{email}", 3):
@@ -306,11 +268,8 @@ def _passwordless(user):
 
 
 def _welcome(request, user):
-    """Приглашение — то же письмо восстановления пароля, только другим текстом.
-
-    use_https обязателен: без него ссылка собирается как http, и у нового человека, чей
-    браузер ещё не знает HSTS сайта, первый запрос с токеном шёл бы по сети открытым текстом.
-    """
+    """Приглашение — письмо восстановления пароля другим текстом. use_https: браузер новичка
+    не знает HSTS сайта, токен ушёл бы открытым текстом."""
     mail = PasswordResetForm({"email": user.email})
     mail.is_valid()
     mail.save(
@@ -322,13 +281,8 @@ def _welcome(request, user):
 
 
 def _register_all(request, people):
-    """Завести всю ведомость разом.
-
-    Знакомые почты пропускаем: выгрузку формы носят целиком и не по одному разу —
-    новых ответов с прошлой загрузки прибавилось, а старые никуда не делись, и вычищать
-    их руками перед каждой загрузкой никто не станет. Заодно это делает безопасной
-    повторную загрузку после исправления файла.
-    """
+    """Завести всю ведомость разом. Знакомые почты пропускаем: выгрузку носят целиком и
+    повторно."""
     wanted = [person.email.lower() for person in people]
     known = set(
         User.objects.annotate(lowered=Lower("email"))
@@ -337,8 +291,7 @@ def _register_all(request, people):
     )
     fresh = [person for person in people if person.email.lower() not in known]
 
-    # Заводим одной транзакцией, а письма шлём после неё: приглашение, ушедшее в
-    # откатившуюся базу, ведёт по ссылке, за которой никого нет.
+    # Одной транзакцией, письма — после: приглашение в откатившуюся базу вело бы в никуда.
     with transaction.atomic():
         for person in fresh:
             _passwordless(person).save()
@@ -356,11 +309,7 @@ def _register_all(request, people):
 
 @permission_required("users.add_user", raise_exception=True)
 def user_new(request):
-    """Регистрация: по одному человеку руками или курсом сразу — файлом ответов формы.
-
-    Обе формы на одной странице, и различает их имя кнопки: заводят людей в одном
-    и том же месте, а вторая страница только пряталась бы.
-    """
+    """Регистрация: по одному или курсом — файлом ответов формы. Формы различает имя кнопки."""
     posted = request.method == "POST"
     bulk = posted and "roster" in request.POST
 

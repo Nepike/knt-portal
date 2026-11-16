@@ -6,31 +6,25 @@ from django.utils import timezone
 from .mail import deliver, report_failure
 
 MAIL_RETRIES = 3
-# Сколько живут журналы входов и сбоев: квартал — с запасом на «а что было в начале семестра».
+# Журналы входов и сбоев — квартал.
 JOURNAL_DAYS = 90
-# Обращения из поддержки и контактов — год: по ним подкручивают фильтр спама, и сезон
-# поступления должен попасть в выборку целиком.
+# Обращения — год: сезон поступления должен целиком попасть в выборку для весов спама.
 INQUIRY_DAYS = 365
-# Дамп сегодняшней базы — секунда, но база растёт, а общий потолок задач — минута.
+# Общий потолок задач — минута, а дамп растёт вместе с базой.
 BACKUP_SOFT_LIMIT = 15 * 60
 BACKUP_LIMIT = BACKUP_SOFT_LIMIT + 5 * 60
 
 
 @shared_task(ignore_result=False)
 def ping(word="pong"):
-    """Проверка живости связки «сайт → Redis → воркер»: manage.py celery_check.
-
-    ignore_result=False — единственная задача, ответ которой нам действительно нужен.
-    """
+    """Проверка связки сайт → Redis → воркер (manage.py celery_check). Единственная задача с нужным ответом."""
     return word
 
 
-# smtplib.SMTPException — наследник OSError, так что сюда попадают и обрыв сети,
-# и отказ сервера. Пауза между попытками растёт, чтобы не долбить лежащий gmail.
+# SMTPException — наследник OSError: сюда попадают и обрыв, и отказ сервера.
 @shared_task(bind=True, autoretry_for=(OSError,), retry_backoff=True, retry_kwargs={"max_retries": MAIL_RETRIES})
 def send_email(self, payload):
-    """Письмо, собранное в веб-процессе (core.mail.pack). Отправляет воркер — своим
-    соединением с SMTP, и он же повторяет попытку, если письмо не ушло."""
+    """Письмо, собранное в веб-процессе (core.mail.pack); воркер отправляет и повторяет."""
     try:
         deliver(payload)
     except Exception as error:
@@ -42,13 +36,8 @@ def send_email(self, payload):
 
 @shared_task(soft_time_limit=BACKUP_SOFT_LIMIT, time_limit=BACKUP_LIMIT)
 def backup_database():
-    """Ночной бэкап базы (core/backup.py): снять дамп, положить в хранилище, убрать лишние.
-
-    Ответ задачи уходит в лог воркера — по нему видно, что бэкап был и сколько он весит.
-    Не вышло — задача падает, и ошибка pg_dump или хранилища остаётся в том же логе
-    и в журнале сбоев (core/failures.py).
-    """
-    # Импорт здесь: модуль тянет хранилище вложений, а задачи читаются при старте раньше моделей.
+    """Ночной бэкап базы (core/backup.py). Итог — в лог воркера, сбой — в журнал сбоев."""
+    # Импорт здесь: задачи читаются при старте раньше моделей.
     from . import backup
 
     key, size = backup.make()
@@ -58,13 +47,8 @@ def backup_database():
 
 @shared_task
 def sweep_journals():
-    """Снять из журналов входов и сбоев и из уведомлений всё старше JOURNAL_DAYS, обращения
-    старше INQUIRY_DAYS, а с ними просроченные сессии.
-
-    Сессии Django сам не удаляет: строка с истёкшим сроком лежит, пока её не снимет
-    clearsessions, а с ней лежит и приписка «моих устройств» (UserSession уходит только
-    каскадом). К 7 ноя 2026 таких было 500 из 745.
-    """
+    """Снять старое из журналов, уведомлений и обращений, а с ними просроченные сессии:
+    Django их сам не удаляет, а с сессией лежит строка «моих устройств»."""
     from django.contrib.sessions.models import Session
 
     from notifications.models import Announcement, Notification

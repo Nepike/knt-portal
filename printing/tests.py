@@ -1,5 +1,4 @@
-"""Печать: разбор выбора и себестоимость, недельный лимит, страницы, админка и
-чистые функции агента (tools/print_agent.py)."""
+"""Печать: выбор и себестоимость, лимит, страницы, админка, агент (tools/print_agent.py)."""
 
 import http.client
 import http.server
@@ -168,8 +167,7 @@ class LimitTests(TestCase):
         return make_job(self.user, self.printer, status=status, sides=sides, submitted_at=at)
 
     def test_the_week_starts_on_monday_at_midnight_in_moscow(self):
-        """В понедельник в 00:30 по Москве в Гринвиче ещё воскресенье: неделя по UTC
-        считала бы воскресный вечер этой неделей."""
+        """В понедельник 00:30 по Москве в UTC ещё воскресенье."""
         now = datetime(2026, 10, 25, 21, 30, tzinfo=UTC)  # понедельник 00:30 в Москве
         self.counted(datetime(2026, 10, 25, 23, 50, tzinfo=MSK), sides=7)
         self.counted(datetime(2026, 10, 26, 0, 10, tzinfo=MSK), sides=3)
@@ -414,7 +412,7 @@ class PageTests(TestCase):
         return key, adopt_token(key, name)
 
     def test_every_student_can_print(self):
-        """Обкатка кончилась: никаких прав, раздел видит и открывает любой вошедший."""
+        """Раздел видит и открывает любой вошедший, без прав."""
         self.client.force_login(make_user("s@t.local"))
 
         self.assertEqual(self.client.get(reverse("print_home")).status_code, 200)
@@ -1271,8 +1269,7 @@ class CleanupTests(TestCase):
         cls.user = make_user("p@t.local")
 
     def setUp(self):
-        # Хранилище у тестов одно на весь прогон, а база откатывается после каждого:
-        # папки чужих тестов здесь — бесхозные, и уборка честно бы их нашла.
+        # Хранилище одно на прогон, база откатывается: чужие папки здесь — бесхозные.
         drop_prefix(cleanup.ROOT)
 
     def job(self, status, age, **extra):
@@ -1491,7 +1488,7 @@ class AlertTests(TestCase):
         self.assertLessEqual({"printing.tasks.sweep_printing", "printing.tasks.watch_printers"}, planned)
 
 
-# Ответ snmpget -Oqv -Ox от Kyocera M2535dn в М4, снят 22 окт 2026 (порядок — print_agent.OIDS).
+# Ответ snmpget -Oqv -Ox от Kyocera M2535dn в М4 (порядок — print_agent.OIDS).
 KYOCERA = ["3", '"00 "', "97654", "7200", "7200", "-3", '"53 6C 65 65 70 69 6E 67 2E 2E 2E 20 20 "']
 
 
@@ -1532,7 +1529,7 @@ class FakeCups:
         return self.answer
 
     def state(self, job):
-        # Предохранитель: зациклившееся ожидание (под мутацией — обычное дело) падает, а не висит.
+        # Предохранитель: зациклившееся ожидание падает, а не висит.
         self.asked += 1
         assert self.asked < 100, "агент спрашивает CUPS без конца"
         return (self.states.pop(0) if len(self.states) > 1 else self.states[0]), "Замятие в кассете 1"
@@ -1852,8 +1849,7 @@ class AgentServiceTests(SimpleTestCase):
                     raise answer
                 return answer
 
-        # Служба доходит до первого круга работы — значит, на старте не упала. Круг сразу
-        # останавливаем: дальше бесконечный цикл.
+        # Служба дошла до первого круга работы — на старте не упала; дальше цикл, останавливаем.
         with mock.patch.object(print_agent.time, "sleep") as sleep,                 mock.patch.object(print_agent, "analysis_once", side_effect=KeyboardInterrupt),                 self.assertRaises(KeyboardInterrupt):
             print_agent.serve_analysis(Waking())
 
@@ -1872,9 +1868,8 @@ class AgentServiceTests(SimpleTestCase):
 
 
 class AgentSite(http.server.ThreadingHTTPServer):
-    """Сайт для агента на настоящих сокетах 127.0.0.1: здесь важно, сколько соединений открыл
-    агент и что сервер с ними делает. Ответы — по сценарию, по одному на вопрос:
-    (как, код, тело); сценарий кончился — «работы нет»."""
+    """Сайт для агента на сокетах 127.0.0.1: важно, сколько соединений открыл агент. Ответы —
+    по сценарию (как, код, тело); кончился — «работы нет»."""
 
     daemon_threads = True
 
@@ -1936,8 +1931,8 @@ class AgentSiteHandler(http.server.BaseHTTPRequestHandler):
 
 
 class SiteConnectionTests(SimpleTestCase):
-    """Агент говорит с сайтом по одному соединению: М4 может остаться на мобильном интернете,
-    а новое TLS-рукопожатие на каждый вопрос «есть работа?» — это ~15 ГБ в месяц."""
+    """Агент говорит с сайтом по одному соединению: на мобильном интернете рукопожатие на
+    каждый вопрос — гигабайты в месяц."""
 
     def setUp(self):
         patch = mock.patch.object(print_agent, "TALK_TIMEOUT", 5)  # сломанный тест не висит минуту

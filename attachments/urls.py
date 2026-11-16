@@ -3,8 +3,7 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Имя файла в хвосте — из него браузер берёт имя при сохранении, поэтому
-    # Content-Disposition не нужен (через X-Accel-Redirect он ведёт себя непредсказуемо).
+    # Имя в хвосте — для браузера при сохранении; Content-Disposition под X-Accel-Redirect ненадёжен.
     path("f/<str:token>/<str:name>", views.download, name="file_download"),
     path("files/upload-url/", views.upload_url, name="upload_url"),
     # Многочастная загрузка: начать/продолжить, взять ссылки на части, собрать, бросить.

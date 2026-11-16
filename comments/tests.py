@@ -178,7 +178,7 @@ class CommentTests(TestCase):
         self.assertContains(form, comment.image.url)
 
     def test_the_image_can_be_taken_off_without_deleting_the_comment(self):
-        # Раньше ради этого приходилось удалять комментарий и писать заново.
+        # Картинку можно снять, не удаляя комментарий.
         self.add(text="было с картинкой", image=make_image())
         comment = Comment.objects.get()
         name, storage = comment.image.name, comment.image.storage
@@ -291,8 +291,7 @@ class CommentTests(TestCase):
         self.assertFalse(Comment.objects.exists())
 
     def test_image_url_survives_the_signature_expiring(self):
-        # В разметку идёт наш постоянный адрес, а не подписанная на час ссылка R2:
-        # иначе картинки протухали бы прямо в открытой вкладке и не кешировались.
+        # В разметке — наш постоянный адрес, а не подписанная ссылка R2.
         self.add(image=make_image())
         comment = Comment.objects.get()
 
@@ -309,11 +308,8 @@ class CommentTests(TestCase):
 
 
 class CarryOverTests(TransactionTestCase):
-    """Перенос обсуждений из `materials` — тот самый шаг, который на боевой базе
-    выполняется ровно один раз, и проверить его задним числом будет уже нечем.
-
-    Откатываем базу к состоянию до переезда, кладём данные СТАРОЙ моделью и катим вперёд.
-    """
+    """Перенос обсуждений из `materials` — разовый шаг на боевой базе. Откатываем базу до
+    переезда, кладём данные СТАРОЙ моделью и катим вперёд."""
 
     BEFORE = [("materials", "0002_initial")]
 
@@ -385,11 +381,8 @@ class CarryOverTests(TransactionTestCase):
         self.assertGreater(fresh.pk, carried.pk)
 
     def test_the_right_to_edit_other_peoples_comments_moves_along(self):
-        """У нового приложения свой app_label: выданное на materials.change_comment
-        перестало бы что-либо значить, и модератор молча лишился бы возможности
-        чистить чужой мусор."""
-        # На чистой базе прав старой модели уже нет — их заводит post_migrate по тому
-        # набору моделей, который остался. Воспроизводим боевое состояние руками.
+        """У нового приложения свой app_label: право materials.change_comment должно переехать."""
+        # На чистой базе прав старой модели нет (их заводит post_migrate) — воспроизводим руками.
         kind = ContentType.objects.create(app_label="materials", model="comment")
         was = Permission.objects.create(
             content_type=kind, codename="change_comment", name="Can change комментарий")

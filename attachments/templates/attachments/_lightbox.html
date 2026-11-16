@@ -1,8 +1,4 @@
-{% comment %}
-  Окно просмотрщика: картинка крупно, зум колесом и кнопками, перетаскивание, стрелки.
-  Подключать внутри элемента с x-data="lightbox([...])" (components.js) — оттуда items, show и
-  остальное. Одно на галерею материалов и на превью печати.
-{% endcomment %}
+{# Окно просмотрщика — внутри x-data="lightbox([...])" (components.js). Одно на галерею и превью печати. #}
 {# Пока просмотрщик открыт, фон не скроллим: колесо здесь масштабирует #}
 <div x-show="open" x-cloak x-effect="document.body.style.overflow = open ? 'hidden' : ''"
      @keydown.escape.window="close()"

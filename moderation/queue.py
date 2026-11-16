@@ -1,8 +1,4 @@
-"""Что именно ждёт проверки.
-
-Одна точка входа на весь сайт: модератор не должен обходить разделы по очереди.
-Новый вид контента добавляется строкой в GROUPS — материалы и лекторий придут сюда же.
-"""
+"""Всё, что ждёт проверки, — одна очередь на сайт. Новый вид контента — строка в GROUPS."""
 
 from django.db.models import Count
 
@@ -14,8 +10,7 @@ from materials.models import Material
 GROUPS = [
     ("Книги", Book, "library.change_book", "moderation/_book.html", "files", ()),
     ("Материалы", Material, "materials.change_material", "moderation/_material.html", "files", ("subject",)),
-    # Проверяется плейлист целиком, а не отдельная лекция: метаданные на плейлисте,
-    # и смотреть курс по одной записи модератору незачем.
+    # Проверяется курс целиком: метаданные — на плейлисте.
     ("Лекции", Playlist, "lectorium.change_playlist", "moderation/_playlist.html", "lectures", ("subject",)),
 ]
 
@@ -29,8 +24,7 @@ def pending(user):
     """Ожидающее проверки, по группам. Старое сверху: очередь, а не лента."""
     groups = []
     for title, model, _perm, template, counted, shown in allowed(user):
-        # Число файлов (записей) и предмет — тем же запросом, что и сама очередь:
-        # иначе о них спрашивала бы базу каждая карточка по отдельности.
+        # Число файлов и предмет — тем же запросом: иначе запрос на каждую карточку.
         items = (
             model.objects.filter(status=model.Status.PENDING)
             .select_related("uploader", *shown).annotate(parts=Count(counted)).order_by("created")

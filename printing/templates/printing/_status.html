@@ -1,8 +1,7 @@
 {% load printing_extras text_extras %}
 {% comment %}
-  Пока задание меняется само (готовится превью, стоит в очереди, печатается), блок
-  спрашивает о нём каждые две секунды. Сменилось состояние — сервер велит перерисовать
-  страницу целиком (printing.views.status); не сменилось — обновляется только этот блок.
+  Пока задание меняется само, блок опрашивает его каждые две секунды. Сменилось состояние —
+  сервер велит перерисовать страницу (printing.views.status), иначе — только этот блок.
 {% endcomment %}
 <div id="job-status" class="flex flex-col gap-3"
      {% if job.waiting %}hx-get="{% url 'print_status' job.uuid %}?was={{ job.status }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>

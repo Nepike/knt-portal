@@ -1,41 +1,26 @@
-"""Публикация событий доски в channel layer.
-
-В отличие от чата наружу летят сами данные, а не «в чате N что-то произошло».
-Причина в том, что у пикселя нет разметки, которая была бы у каждого своей: есть
-координата и цвет, одинаковые для всех. Заставлять клиента ходить за ними по HTTP
-значило бы делать запрос на каждый чужой мазок.
-"""
+"""События доски в channel layer. Наружу летят сами данные: клетка у всех одна и та же."""
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+
+from users.models import User
 
 
 def board_group(board_id):
     return f"wall.{board_id}"
 
 
-def notify_pixel(placement):
-    _publish(board_group(placement.board_id), {
-        "type": "wall.pixel",
-        "id": placement.pk,
-        "x": placement.x,
-        "y": placement.y,
-        "color": placement.color,
-    })
-
-
 def notify_area(board_id, placements):
-    """Пачка клеток одним сообщением — работа модератора.
-
-    Заливкой и откатом за раз меняются тысячи клеток. Отдельным событием на каждую
-    мы бы завалили сокет каждому, кто в этот момент смотрит на доску.
-    """
+    """Пачка клеток одним сообщением: [x, y, цвет, автор] и имена авторов — для подсказки «кто»."""
     if not placements:
         return
+    authors = {placement.user_id for placement in placements if placement.user_id}
+    people = {user.pk: user.full_name for user in User.objects.filter(pk__in=authors)}
     _publish(board_group(board_id), {
         "type": "wall.area",
         "id": max(placement.pk for placement in placements),
-        "pixels": [[placement.x, placement.y, placement.color] for placement in placements],
+        "pixels": [[placement.x, placement.y, placement.color, placement.user_id or 0] for placement in placements],
+        "people": {str(pk): name for pk, name in people.items()},
     })
 
 
