@@ -2059,7 +2059,10 @@ class GlitchSkinTests(TestCase):
 
         self.assertContains(response, "нет такого файла или каталога", status_code=404)
         self.assertContains(response, "Такой страницы нет", status_code=404)
-        self.assertContains(response, "██  ██  ██████  ██  ██", status_code=404)
+        # «404» рисунком: три знака по 3 клетки и промежутки (11 × 12) на 5 строк; клеток 9 + 12 + 9.
+        self.assertContains(response, '<div class="skin-error-big" aria-hidden="true"><svg viewBox="0 0 132 50"', status_code=404)
+        self.assertEqual(response.content.decode().count("h12v10h-12z"), 30)
+        self.assertContains(response, "M0 0h12", status_code=404)
         self.assertNotContains(response, "skin-error-red", status_code=404)
 
     def test_every_picture_the_skin_markup_names_is_in_place(self):

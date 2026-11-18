@@ -31,4 +31,4 @@ class WallConsumer(AsyncJsonWebsocketConsumer):
         return board.pk if board else None
 
     async def wall_area(self, event):
-        await self.send_json({key: event[key] for key in ("id", "pixels", "people")})
+        await self.send_json({key: event[key] for key in ("id", "restore", "pixels", "people") if key in event})

@@ -2,6 +2,8 @@
 покупают и про запас.
 """
 
+from copy import copy
+
 from django.db import transaction
 
 from economy.models import BalanceLog
@@ -54,16 +56,48 @@ def arrange(items, order=DEFAULT_ORDER, affordable=False):
     return sorted(items, key=ORDERS[order])
 
 
-def showcase(items, order=DEFAULT_ORDER, affordable=False):
-    """Витрина полками: [(вид, подпись, вещи)]. Полка остаётся и пустой после отбора."""
+# Глитч «сайт взломан» (quest): все дни взлома на месте каждой вещи — призовая рамка за эту цену.
+HACKED_PRICE = 99_999_999
+
+
+def hacked():
+    """Призовая рамка, если витрина сейчас «взломана», иначе None. Рамку не назначили — витрина
+    обычная."""
+    from core.context_processors import today
+    from quest.models import Broadcast
+
+    if today()[0] != "glitch":
+        return None
+    broadcast = Broadcast.current()
+    return broadcast.frame if broadcast else None
+
+
+def masked(items, prize, coins, owned):
+    """Подменить вещи призовой рамкой за HACKED_PRICE. pk остаётся от вещи: карточка и листание
+    идут по настоящей полке. owned — рамка уже у человека (вскрыл ключ)."""
+    stands = []
+    for item in items:
+        stand = copy(prize)
+        stand.pk, stand.price = item.pk, HACKED_PRICE
+        stand.owned, stand.short = owned, max(HACKED_PRICE - coins, 0)
+        stands.append(stand)
+    return stands
+
+
+def showcase(items, order=DEFAULT_ORDER, affordable=False, prize=None, coins=0, owned=False):
+    """Витрина полками: [(вид, подпись, вещи)]. Полка остаётся и пустой после отбора. prize —
+    взломанная витрина (`hacked`): полки прежние, на них подмена (`masked`)."""
     kinds = sorted(
         {item.kind for item in items},
         key=lambda kind: (SHELVES.index(kind) if kind in SHELVES else len(SHELVES), kind),
     )
-    return [
-        (kind, slot_heading(kind), arrange([item for item in items if item.kind == kind], order, affordable))
-        for kind in kinds
-    ]
+    shelves = []
+    for kind in kinds:
+        shelf = [item for item in items if item.kind == kind]
+        if prize:
+            shelf = masked(shelf, prize, coins, owned)
+        shelves.append((kind, slot_heading(kind), arrange(shelf, order, affordable)))
+    return shelves
 
 
 @transaction.atomic

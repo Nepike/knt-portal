@@ -1194,16 +1194,32 @@ html { color-scheme: light; }
 .cd-wait { color: #ffd166; animation: glitch-blink 1.4s steps(1) infinite; }
 .cd-bad { color: var(--alarm); }
 .cd-redacted { color: var(--color-slate-600); }
+/* Цифры — svg из glitch.js (blocks): ширина от экрана, свечение — фильтром. */
 .cd-big {
-  margin: 2.125rem 0 0.375rem;
-  font: 700 min(17px, 2.2cqi)/1 var(--font-mono);
+  --lag-calm: drop-shadow(0 0 7px var(--glow));
+  margin-top: 2.125rem;
   color: var(--color-accent);
-  text-shadow: 0 0 12px var(--glow);
-  white-space: pre;
+  filter: var(--lag-calm);
   animation: glitch-lag 6s 1s infinite;
 }
-.cd-units { font: min(17px, 2.2cqi)/1.4 var(--font-mono); white-space: pre; color: var(--color-slate-500); }
-.cd-bar { margin-top: 1.625rem; font: min(14px, 3.4cqi)/1 var(--font-mono); white-space: pre; color: var(--color-slate-400); }
+.cd-big svg { display: block; width: min(100%, 755px); height: auto; overflow: visible; }
+.cd-big text { fill: var(--color-slate-500); font: 10px var(--font-mono); text-anchor: middle; }
+/* Полоса — css, а не «█░»: тех знаков нет в шрифте. Пустое — точками, как «░». */
+.cd-bar {
+  display: flex;
+  align-items: center;
+  margin-top: 1.625rem;
+  font: min(14px, 3.4cqi)/1 var(--font-mono);
+  white-space: pre;
+  color: var(--color-slate-400);
+}
+.cd-bar-track {
+  flex: 0 1 336px;
+  min-width: 0;
+  height: 0.9em;
+  background: repeating-conic-gradient(color-mix(in srgb, currentColor 60%, transparent) 0 25%, transparent 0 50%) 0 0 / 3px 3px;
+}
+.cd-bar-track span { display: block; height: 100%; background: currentColor; }
 /* Развёртка экрана гуще, чем у сайта, а разрыв — раз в 3,5 с, и только внутри экрана. */
 .cd-screen::before {
   content: "";
@@ -1380,14 +1396,15 @@ html { color-scheme: light; }
   66% { transform: translate(2%, -3%); }
 }
 .cd-zero-side { flex: 2; min-width: 0; display: flex; flex-direction: column; gap: 0.875rem; padding-top: 1.25rem; }
-.cd-big.cd-zero-big { margin: 0; font-size: min(7px, 0.85cqi); }
+.cd-big.cd-zero-big { margin: 0; }
+.cd-zero-big svg { width: min(311px, 37.7cqi); }
 .cd-zero-hint { font-size: 12px; line-height: 1.5; color: var(--color-slate-400); }
 .cd-zero .cd-con-out { height: 88px; }
 @media (width < 48rem) {
   .cd-zero-row { flex-direction: column; gap: 0.875rem; }
   .cd-tx { width: 100%; }
   .cd-zero-side { padding-top: 0; }
-  .cd-big.cd-zero-big { font-size: min(8px, 2.1cqi); }
+  .cd-zero-big svg { width: min(355px, 93cqi); }
 }
 
 /* Страницы ошибок в скине (core/error.html): строка команды, «системное сообщение», код из
@@ -1403,13 +1420,13 @@ html { color-scheme: light; }
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  padding: 6px 0;
-  font: 700 min(30px, 4.4vw)/1 var(--font-mono);
-  white-space: pre;
+  --lag-calm: drop-shadow(-3px 0 var(--rgb-r)) drop-shadow(3px 0 var(--rgb-c)) drop-shadow(0 0 8px var(--glow));
+  padding: 6px 4px;
   color: var(--color-accent);
-  text-shadow: 0 0 14px var(--glow), -3px 0 var(--rgb-r), 3px 0 var(--rgb-c);
+  filter: var(--lag-calm);
   animation: glitch-lag 3.2s infinite;
 }
+.theme-glitch .skin-error-big svg { display: block; width: auto; height: min(150px, 22vw); }
 .theme-glitch .skin-error-big::after {
   content: "";
   position: absolute;
@@ -1437,8 +1454,8 @@ html { color-scheme: light; }
 .theme-glitch .skin-error .masc { color: var(--color-accent); }
 .theme-glitch .skin-error .btn-secondary { font-family: var(--font-mono); border: 1px dashed var(--color-accent); }
 .theme-glitch .skin-error-red .skin-error-big {
+  --lag-calm: drop-shadow(-4px 0 var(--rgb-c)) drop-shadow(4px 0 var(--rgb-r)) drop-shadow(0 0 8px rgb(255 59 92 / 0.5));
   color: var(--alarm);
-  text-shadow: 0 0 14px rgb(255 59 92 / 0.5), -4px 0 var(--rgb-c), 4px 0 var(--rgb-r);
   animation-duration: 1.9s;
 }
 .theme-glitch .skin-error-red .masc { color: var(--alarm); }

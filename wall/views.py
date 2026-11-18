@@ -147,7 +147,7 @@ def board_draw(request):
 
 @require_POST
 def board_undo(request):
-    """Отменить свои события: {"ids": […]}. Клетки приедут по сокету — с прежними авторами."""
+    """Отменить свои события: {"ids": […]}. Они уходят из журнала; прежний вид клеток — по сокету."""
     board = _board()
     try:
         ids = [int(pk) for pk in _json(request)["ids"]]

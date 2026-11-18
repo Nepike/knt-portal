@@ -90,7 +90,6 @@ document.addEventListener("alpine:init", () => {
     skew: serverNow - Date.now(),
     left: 0,
     spasm: "",
-    units: ["дн", "ч", "мин", "сек"].map((u) => center(u, 14)).join("      "),
     init() {
       this.tick();
       const counting = this.left > 0;
@@ -108,13 +107,11 @@ document.addEventListener("alpine:init", () => {
     get hh() { return pad(Math.floor(this.left / 3600) % 24); },
     get mm() { return pad(Math.floor(this.left / 60) % 60); },
     get ss() { return pad(this.left % 60); },
-    get big() { return blocks(`${this.dd}:${this.hh}:${this.mm}:${this.ss}`); },
+    get big() { return blocks(`${this.dd}:${this.hh}:${this.mm}:${this.ss}`, ["дн", "ч", "мин", "сек"]); },
     // После нуля — нули, что бы ни показывали часы браузера.
     zeros: blocks("00:00:00:00"),
-    get bar() {
-      const done = since ? Math.min(1, Math.max(0, 1 - (this.left * 1000) / (deadline - since))) : 0;
-      const k = Math.round(done * 40);
-      return `[${"█".repeat(k)}${"░".repeat(40 - k)}] ${Math.round(done * 100)}%`;
+    get done() {
+      return since ? Math.round(100 * Math.min(1, Math.max(0, 1 - (this.left * 1000) / (deadline - since)))) : 0;
     },
     get say() { return `Осталось ${+this.dd} дн ${+this.hh} ч ${+this.mm} мин`; },
     // Смех консоли: экран дёргается. Класса два, чтобы смех подряд срабатывал заново.
@@ -382,14 +379,27 @@ const GLYPHS = {
   8: ["111", "101", "111", "101", "111"], 9: ["111", "101", "111", "001", "111"],
   ":": ["0", "1", "0", "1", "0"],
 };
-function blocks(text) {
-  return [0, 1, 2, 3, 4]
-    .map((row) => [...text].map((ch) => GLYPHS[ch][row].replace(/1/g, "██").replace(/0/g, "  ")).join("  "))
-    .join("\n");
-}
-function center(text, width) {
-  const left = Math.floor((width - text.length) / 2);
-  return " ".repeat(left) + text + " ".repeat(width - text.length - left);
+// Рисунком, а не знаками «█»: в нашем JetBrains Mono их нет, а запасной шрифт телефона шире
+// пробела — строки цифр разъезжались. Клетка — как «██» в строке: 12 × 10. Подписи — под группами.
+const CELL_W = 12;
+const CELL_H = 10;
+function blocks(text, labels = []) {
+  let x = 0;
+  let start = 0;
+  let d = "";
+  const centers = [];
+  for (const ch of text) {
+    if (ch === ":") centers.push((start + x - CELL_W) / 2);
+    GLYPHS[ch].forEach((row, y) => [...row].forEach((bit, i) => {
+      if (bit === "1") d += `M${x + i * CELL_W} ${y * CELL_H}h${CELL_W}v${CELL_H}h-${CELL_W}z`;
+    }));
+    x += (GLYPHS[ch][0].length + 1) * CELL_W;
+    if (ch === ":") start = x;
+  }
+  centers.push((start + x - CELL_W) / 2);
+  const under = labels.map((label, i) => `<text x="${centers[i]}" y="${5 * CELL_H + 14}">${label}</text>`).join("");
+  const height = 5 * CELL_H + (labels.length ? 18 : 0);
+  return `<svg viewBox="0 0 ${x - CELL_W} ${height}" fill="currentColor"><path d="${d}"/>${under}</svg>`;
 }
 
 // Свои ответы консоли: [текст, смех]; null — спросим сайт. unlock и key/ решает только сайт.

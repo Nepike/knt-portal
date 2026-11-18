@@ -920,7 +920,7 @@ document.addEventListener("alpine:init", () => {
       });
     },
 
-    // Отмена — на сервере: он вернёт клеткам прежних авторов. У себя возвращаем сразу.
+    // Отмена — на сервере: свои события он удалит из журнала, остальным пришлёт прежний вид. У себя возвращаем сразу.
     async undo() {
       if (this.busy || this.film) return;
       const stroke = this.undoStack.pop();
@@ -1124,6 +1124,7 @@ document.addEventListener("alpine:init", () => {
       // Снимок ещё едет — придержим: иначе он ляжет поверх и мазок пропадёт.
       if (this.loading) return this.queue.push(message);
       if (!this.cells || !message.pixels) return;
+      if (message.restore) return this.restore(message);
       const fresh = message.id > this.version;
       const owners = message.id > this.ownersVersion;
       if (!fresh && !owners) return;
@@ -1135,6 +1136,20 @@ document.addEventListener("alpine:init", () => {
       for (const [x, y, code, owner] of message.pixels) {
         if (fresh) this.set(x, y, code);
         if (owners) this.own(y * this.width + x, owner, now, people[owner]);
+        touched ||= this.same({ x, y }, this.sel);
+      }
+      this.invalidate();
+      if (touched && this.card) this.loadCard(this.sel);
+    },
+
+    // Чья-то отмена: события удалены из журнала, клетки вернулись. Номер не сверяем — после
+    // удаления он мог стать меньше нашего; время клетки — прежнее, от открытия доски.
+    restore(message) {
+      const people = message.people || {};
+      let touched = false;
+      for (const [x, y, code, owner, seconds] of message.pixels) {
+        this.set(x, y, code);
+        this.own(y * this.width + x, owner, this.epoch + seconds * 1000, people[owner]);
         touched ||= this.same({ x, y }, this.sel);
       }
       this.invalidate();

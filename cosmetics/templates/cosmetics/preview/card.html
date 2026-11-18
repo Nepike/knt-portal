@@ -4,7 +4,8 @@
 {% endcomment %}
 <div class="relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 p-4">
   {% if background %}
-  <span class="absolute inset-0">{% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}</span>
+  {# z-0 — своя стопка: глитч-скин поднимает картинки в main (z-index 2), и фон лёг бы поверх карточки. #}
+  <span class="absolute inset-0 z-0">{% include "cosmetics/_art.html" with item=background css="w-full h-full object-cover" only %}</span>
   {% endif %}
 
   <div class="relative rounded-xl overflow-hidden {% if background %}panel-glass{% else %}panel{% endif %}">

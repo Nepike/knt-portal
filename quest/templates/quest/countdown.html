@@ -47,15 +47,14 @@
       {% endif %}
     </div>
     <div class="cd-zero-side">
-      <pre class="cd-big cd-zero-big" aria-hidden="true" x-text="zeros"></pre>
+      <div class="cd-big cd-zero-big" aria-hidden="true" x-html="zeros"></div>
       <p class="cd-zero-hint">&gt; чтобы вернуть сайт, нужен ключ: unlock &lt;ключ&gt;</p>
     </div>
   </div>
   {% else %}
-  <pre class="cd-big" aria-hidden="true" x-text="big"></pre>
-  <pre class="cd-units" aria-hidden="true" x-text="units"></pre>
+  <div class="cd-big" aria-hidden="true" x-html="big"></div>
   <p class="sr-only" role="timer" x-text="say"></p>
-  <pre class="cd-bar" aria-hidden="true" x-text="bar"></pre>
+  <p class="cd-bar" aria-hidden="true">[<span class="cd-bar-track"><span :style="{ width: `${done}%` }"></span></span>] <span x-text="`${done}%`"></span></p>
   {% endif %}
 
   <div class="cd-con" x-data="terminal('{{ request.user.full_name|default:''|escapejs }}', '{% url 'countdown_ask' %}', '{{ csrf_token }}', {{ zero|yesno:'true,false' }})">

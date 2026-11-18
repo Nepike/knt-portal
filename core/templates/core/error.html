@@ -48,7 +48,7 @@
     <p class="skin-error-sys">{% block system %}{% endblock %}</p>
     {% block trace %}{% endblock %}
     <div class="flex items-center gap-7 mt-5">
-      <pre class="skin-error-big" aria-hidden="true">{{ code|blocks }}</pre>
+      <div class="skin-error-big" aria-hidden="true">{{ code|blocks }}</div>
       {% include "core/glitch/_smiley.html" with size="w-24 h-24 max-sm:w-16 max-sm:h-16" mode="masc-laugh" %}
     </div>
     {% endif %}

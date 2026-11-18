@@ -20,4 +20,4 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 CELERY_BROKER_URL = "redis://127.0.0.1:6379/1"
 CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/2"
 
-SITE_THEME = "party"  # ВРЕМЕННО: смотрим 2 декабря до срока, не коммитить
+SITE_THEME = "glitch"  # ВРЕМЕННО: смотрим 2 декабря до срока, не коммитить

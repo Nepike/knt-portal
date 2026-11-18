@@ -11,7 +11,7 @@ from economy.services import NotEnoughFunds, wallet_of
 from .cases import STOP, AllCollected, CaseClosed, on_show, open_case, reel
 from .models import Case, CosmeticItem, UserItem
 from .services import NotOwned, equip, outfit, unequip
-from .shop import DEFAULT_ORDER, ORDERS, AlreadyOwned, NotForSale, arrange, buy, marked, showcase
+from .shop import DEFAULT_ORDER, ORDERS, AlreadyOwned, NotForSale, arrange, buy, hacked, marked, masked, showcase
 
 
 @require_POST
@@ -45,6 +45,10 @@ def _coins(user):
     return wallet.balance if wallet else 0
 
 
+def _owns(user, item):
+    return UserItem.objects.filter(user=user, item=item).exists()
+
+
 def _picked(data):
     """Порядок и «по карману» из запроса; незнакомое значение — умолчание."""
     order = data.get("order")
@@ -72,8 +76,10 @@ def shop(request):
     order, affordable = _picked(request.GET)
     items = marked(request.user, coins)
     query = _query(order, affordable)
+    prize = hacked()
+    shelves = showcase(items, order, affordable, prize, coins, prize and _owns(request.user, prize))
     context = {
-        "coins": coins, "shelves": showcase(items, order, affordable),
+        "coins": coins, "shelves": shelves,
         "order": order, "affordable": affordable, "query": query,
     }
     if request.headers.get("HX-Request"):
@@ -99,12 +105,17 @@ def item_card(request, pk):
     coins = _coins(request.user)
     order, affordable = _picked(request.GET)
     kin = [one for one in marked(request.user, coins) if one.kind == item.kind]
+    prize = hacked()
+    if prize:
+        kin = masked(kin, prize, coins, _owns(request.user, prize))
     shelf = arrange(kin, order, affordable)
     # Вещи на отобранной полке может уже не быть (купили, потратили) — тогда листаем полку целиком.
     if item.pk not in {one.pk for one in shelf}:
         shelf = arrange(kin, order)
     at = [one.pk for one in shelf].index(item.pk)
     mine = shelf[at]
+    if prize:
+        item = mine  # подмена: призовая рамка с ценой взлома, pk — от вещи на полке
     on = outfit(request.user)
     return render(request, "cosmetics/_offer.html", {
         "item": item,
@@ -128,6 +139,10 @@ def item_card(request, pk):
 @require_POST
 def item_buy(request, pk):
     item = get_object_or_404(CosmeticItem, pk=pk)
+    back = redirect(_shop_url(_query(*_picked(request.POST))))
+    if hacked():
+        messages.error(request, "Касса взломана. Покупки вернутся 2 декабря.")
+        return back
     try:
         buy(request.user, item)
     except NotEnoughFunds:
@@ -140,7 +155,7 @@ def item_buy(request, pk):
         # Не надеваем: покупают и про запас.
         messages.success(request, f"Куплено: {item.name}. Надеть можно в профиле")
     # Обратно в витрину с тем же подбором.
-    return redirect(_shop_url(_query(*_picked(request.POST))))
+    return back
 
 
 def _shown_case(user, coins, pk):

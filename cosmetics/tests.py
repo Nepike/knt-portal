@@ -24,6 +24,7 @@ from economy.rewards import WELCOME
 from economy.services import NotEnoughFunds, credit, wallet_of
 # Разбор mp4 и построитель коробок живут в intake: их же берёт с собой пекарня.
 from intake.tests import make_mp4
+from quest.models import Broadcast
 from users.models import User
 
 from . import specs
@@ -32,7 +33,7 @@ from .cases import ODDS, REEL, REEL_ODDS, STOP, AllCollected, CaseClosed, _faces
 from .forms import CaseForm, CosmeticItemForm
 from .models import Case, CaseOpening, CosmeticItem, UserItem
 from .services import NotOwned, equip, grant, inventory, outfit, unequip, worn
-from .shop import AlreadyOwned, NotForSale, buy, on_sale
+from .shop import HACKED_PRICE, AlreadyOwned, NotForSale, buy, on_sale
 from .views import PREVIEWS
 
 MANUAL = BalanceLog.Reason.MANUAL
@@ -633,6 +634,70 @@ class ShowcaseTests(TestCase):
         self.assertRedirects(response, reverse("shop"), fetch_redirect_response=False)
 
 
+@override_settings(SITE_THEME="glitch")
+class HackedShopTests(TestCase):
+    """Дни глитча (quest): на месте каждой вещи — призовая рамка за HACKED_PRICE, купить нельзя."""
+
+    def setUp(self):
+        self.user = make_user()
+        self.flame = make_frame("Пламя", R.COMMON)
+        self.night = make_frame("Ночь", R.COMMON, CosmeticItem.Kind.PROFILE_BACKGROUND)
+        self.prize = make_frame("Битый смайл", R.MYTHICAL)
+        self.prize.sold = False
+        self.prize.save()
+        Broadcast.objects.create(frame=self.prize)
+        self.client.force_login(self.user)                                            # стартовые 500
+
+    def test_every_shelf_shows_the_prize_at_the_hacked_price(self):
+        response = self.client.get(reverse("shop"))
+
+        names = [item.name for _, _, items in response.context["shelves"] for item in items]
+        self.assertEqual(names, ["Битый смайл", "Битый смайл"])
+        self.assertNotContains(response, "Пламя")
+        self.assertContains(response, str(HACKED_PRICE))
+        self.assertContains(response, reverse("item_card", args=[self.flame.pk]))
+
+    def test_nothing_is_affordable(self):
+        response = self.client.get(reverse("shop"), {"afford": "1"})
+
+        self.assertEqual([items for _, _, items in response.context["shelves"]], [[], []])
+
+    def test_the_card_puts_the_prize_on_the_buyer_and_offers_no_button(self):
+        response = self.client.get(reverse("item_card", args=[self.night.pk]))
+
+        self.assertContains(response, "Битый смайл")
+        self.assertContains(response, f'alt="{self.prize.name}"')
+        self.assertContains(response, f"Не хватает {HACKED_PRICE - 500}")
+        self.assertNotContains(response, "Купить за")
+        self.assertTemplateUsed(response, "cosmetics/preview/card.html")
+
+    def test_whoever_unlocked_the_key_sees_the_prize_owned(self):
+        grant(self.user, self.prize)
+
+        response = self.client.get(reverse("shop"))
+
+        self.assertTrue(all(item.owned for _, _, items in response.context["shelves"] for item in items))
+
+    def test_the_till_refuses_to_sell(self):
+        self.client.post(reverse("item_buy", args=[self.flame.pk]))
+
+        self.assertFalse(UserItem.objects.filter(user=self.user, item=self.flame).exists())
+        self.assertEqual(wallet_of(self.user).balance, 500)
+
+    def test_without_a_prize_the_shop_stays_as_it_was(self):
+        Broadcast.objects.update(frame=None)
+
+        response = self.client.get(reverse("shop"))
+
+        self.assertContains(response, "Пламя")
+        self.client.post(reverse("item_buy", args=[self.flame.pk]))
+        self.assertTrue(UserItem.objects.filter(user=self.user, item=self.flame).exists())
+
+    @override_settings(SITE_THEME="party")
+    def test_on_the_party_day_the_shop_is_back(self):
+        self.assertContains(self.client.get(reverse("shop")), "Пламя")
+
+
 class OfferTests(TestCase):
     """Карточка товара: предпросмотр на себе, цена и кнопка."""
 
@@ -671,6 +736,16 @@ class OfferTests(TestCase):
         response = self.card(self.frame)
 
         self.assertContains(response, f'alt="{self.frame.name}"')
+
+    def test_the_worn_background_stays_under_the_card(self):
+        """Глитч-скин поднимает картинки в main на z-index 2: без своей стопки надетый фон лёг бы
+        поверх карточки, и от предпросмотра рамки оставался один фон."""
+        background = make_frame("Бездна", R.COMMON, CosmeticItem.Kind.PROFILE_BACKGROUND)
+        equip(self.user, grant(self.user, background).item)
+
+        for item in (self.frame, background):
+            with self.subTest(kind=item.kind):
+                self.assertContains(self.card(item), '<span class="absolute inset-0 z-0">')
 
     def test_a_thing_out_of_the_shop_has_no_card(self):
         self.frame.sold = False

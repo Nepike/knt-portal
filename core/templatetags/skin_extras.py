@@ -1,4 +1,5 @@
 from django import template
+from django.utils.html import format_html
 
 from core.context_processors import today
 
@@ -44,10 +45,17 @@ GLYPHS = {
 }
 
 
+# Клетка — как «██» в строке моноширинного шрифта; тот же рисунок, что у отсчёта (glitch.js).
+CELL_W, CELL_H = 12, 10
+
+
 @register.filter
 def blocks(digits):
-    """«404» → цифры из блоков, пять строк: клетка — «██». Тот же шрифт, что у отсчёта
-    в core/js/glitch.js. Не цифры пропускаются."""
-    digits = [ch for ch in str(digits) if ch in GLYPHS]
-    rows = ("  ".join(GLYPHS[ch][row] for ch in digits) for row in range(5))
-    return "\n".join(row.replace("1", "██").replace("0", "  ") for row in rows)
+    """«404» → svg из клеток 3×5. Рисунком, а не знаками «█»: в нашем шрифте их нет, а запасной
+    у телефона шире пробела — строки разъезжались. Не цифры пропускаются."""
+    x, cells = 0, []
+    for ch in (ch for ch in str(digits) if ch in GLYPHS):
+        for y, row in enumerate(GLYPHS[ch]):
+            cells += [f"M{x + i * CELL_W} {y * CELL_H}h{CELL_W}v{CELL_H}h-{CELL_W}z" for i, bit in enumerate(row) if bit == "1"]
+        x += 4 * CELL_W
+    return format_html('<svg viewBox="0 0 {} {}" fill="currentColor"><path d="{}"/></svg>', max(0, x - CELL_W), 5 * CELL_H, "".join(cells))

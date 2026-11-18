@@ -1,8 +1,8 @@
 """Всё, что меняет доску, идёт здесь: журнал и состояние в согласии.
 
-Placement.user — автор состояния клетки после события, а не тот, кто нажал: отмена и откат
-возвращают клетке прежнего автора. Поэтому «состояние до события» — это предыдущая запись
-журнала по той же клетке.
+Placement.user — автор состояния клетки после события. Мазок пишет того, кто рисовал; отмена
+свои события из журнала удаляет; откат модератора дописывает события с прежними авторами.
+Поэтому «состояние до события» — это предыдущая запись журнала по той же клетке.
 """
 
 import logging
@@ -19,7 +19,7 @@ from economy import rewards
 from notifications import services as notices
 
 from . import palette, rules
-from .events import notify_area
+from .events import notify_area, notify_restore
 from .models import FOREVER, Board, Pixel, Placement, ProtectedArea, WallProfile
 
 logger = logging.getLogger(__name__)
@@ -85,26 +85,34 @@ def erase(user, board, x, y):
 
 @transaction.atomic
 def undo(user, board, ids):
-    """Отменить свои события (id из ответа на мазок). Клетка возвращается к состоянию до
-    события — с прежним автором, — только если с тех пор её никто не менял."""
+    """Отменить свои события (id из ответа на мазок): они уходят из журнала, клетка становится
+    такой, какой была до них. Клетку, которую после них кто-то менял, не трогаем. Возвращает
+    [(x, y, цвет, автор, когда)] вернувшихся клеток."""
     _ready(user, board)
-    # Мазок мог пройти по клетке дважды: проверяем по последнему событию, возвращаем к первому.
-    spans = {}
-    for pk, x, y, color in board.placements.filter(pk__in=ids[: rules.STROKE_MAX], user=user).values_list("pk", "x", "y", "color"):
-        first, last, last_color = spans.get((x, y), (pk, pk, color))
-        spans[(x, y)] = (min(first, pk), max(last, pk), color if pk >= last else last_color)
-    now = _states(board, list(spans))
-    back = {}
-    for (x, y), (first, _, color) in spans.items():
-        if now.get((x, y), (palette.EMPTY, None)) != (color, user.pk):
-            continue
-        before = (
-            board.placements.filter(x=x, y=y, id__lt=first)
-            .order_by("-id").values_list("color", "user_id").first()
-        )
-        back[(x, y)] = before or (palette.EMPTY, None)
-    _spend(user, len(back))
-    return _restore(board, back)
+    first, doomed = {}, defaultdict(set)
+    for pk, x, y in board.placements.filter(pk__in=ids[: rules.STROKE_MAX], user=user).values_list("pk", "x", "y"):
+        first[(x, y)] = min(first.get((x, y), pk), pk)
+        doomed[(x, y)].add(pk)
+    if not first:
+        return []
+    # Под замок до проверки: мазок посреди отмены ляжет после неё, а не под неё.
+    list(_frame(board.pixels, list(first)).select_for_update().values_list("pk", flat=True))
+    for pk, x, y in _frame(board.placements, list(first)).filter(id__gte=min(first.values())).values_list("pk", "x", "y"):
+        if (x, y) in first and pk >= first[(x, y)] and pk not in doomed[(x, y)]:
+            del first[(x, y)]
+    _spend(user, len(first))
+    now = timezone.now()
+    back = []
+    for (x, y), start in first.items():
+        before = board.placements.filter(x=x, y=y, id__lt=start).order_by("-id").values_list("color", "user_id", "created").first()
+        back.append((x, y, *(before or (palette.EMPTY, None, now))))
+    board.placements.filter(pk__in=[pk for at in first for pk in doomed[at]]).delete()
+    Pixel.objects.bulk_create(
+        [Pixel(board=board, x=x, y=y, color=color, user_id=owner, placed=placed) for x, y, color, owner, placed in back],
+        update_conflicts=True, update_fields=["color", "user", "placed"], unique_fields=["board", "x", "y"],
+    )
+    transaction.on_commit(lambda: notify_restore(board, back))
+    return back
 
 
 # --- инструменты модератора ---
@@ -397,14 +405,19 @@ def _frozen(board, cells):
     }
 
 
+def _frame(qs, cells):
+    """Записи в рамке вокруг клеток: одним запросом, лишнее отсеивают по месту."""
+    xs = [x for x, _ in cells]
+    ys = [y for _, y in cells]
+    return qs.filter(x__range=(min(xs), max(xs)), y__range=(min(ys), max(ys)))
+
+
 def _states(board, cells):
     """Нынешнее {(x, y): (цвет, автор)} для перечня клеток — одним запросом по их рамке."""
     if not cells:
         return {}
-    xs = [x for x, _ in cells]
-    ys = [y for _, y in cells]
     wanted = set(cells)
-    rows = board.pixels.filter(x__range=(min(xs), max(xs)), y__range=(min(ys), max(ys)))
+    rows = _frame(board.pixels, cells)
     return {
         (x, y): (color, owner)
         for x, y, color, owner in rows.values_list("x", "y", "color", "user_id")

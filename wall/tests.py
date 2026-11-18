@@ -23,7 +23,7 @@ from notifications.models import Notification
 from users.models import User
 
 from . import palette, rules
-from .events import notify_area
+from .events import notify_area, notify_restore
 from .models import Board, Pixel, Placement, ProtectedArea, WallProfile
 from .services import (
     FROZEN,
@@ -347,7 +347,7 @@ class RewardTests(WallCase):
         self.fill_rows(range(8))
         with mock.patch("wall.services.timezone.localdate", return_value=timezone.localdate() + timedelta(days=1)):
             self.fill_rows(range(8, 10), color("основной зелёный"))
-        self.assertEqual(profile_of(self.user).painted, rules.COUNTED_PER_DAY + 32)
+        self.assertEqual(profile_of(self.user).painted, rules.COUNTED_PER_DAY + min(32, rules.COUNTED_PER_DAY))
 
     def test_erasing_does_not_count(self):
         self.fill_rows([0])
@@ -383,10 +383,14 @@ class UndoTests(WallCase):
         self.assertEqual(state(2, 1), (palette.EMPTY, None))
 
     def test_a_cell_someone_changed_since_is_left_alone(self):
-        mine, _ = draw(self.user, self.board, [(1, 1, self.green)])
+        mine, _ = draw(self.user, self.board, [(1, 1, self.green), (2, 1, self.green)])
         draw(self.other, self.board, [(1, 1, self.red)])
         undo(self.user, self.board, self.ids(mine))
         self.assertEqual(state(1, 1), (self.red, self.other.pk))
+        self.assertEqual(state(2, 1), (palette.EMPTY, None))
+        # Событие под чужим осталось в журнале: клетку отмена не вернула.
+        self.assertTrue(Placement.objects.filter(pk=mine[0].pk).exists())
+        self.assertFalse(Placement.objects.filter(pk=mine[1].pk).exists())
 
     def test_only_ones_own_events_are_undone(self):
         """Даже когда клетка сейчас моя и того же цвета, что в чужом событии."""
@@ -395,6 +399,12 @@ class UndoTests(WallCase):
         draw(self.user, self.board, [(1, 1, self.red)])
         undo(self.user, self.board, self.ids(theirs))
         self.assertEqual(state(1, 1), (self.red, self.user.pk))
+
+    def test_someone_elses_stroke_cannot_be_undone(self):
+        theirs, _ = draw(self.other, self.board, [(1, 1, self.red)])
+        undo(self.user, self.board, self.ids(theirs))
+        self.assertEqual(state(1, 1), (self.red, self.other.pk))
+        self.assertEqual(Placement.objects.count(), 1)
 
     def test_undo_after_undo_goes_further_back(self):
         first, _ = draw(self.user, self.board, [(1, 1, self.red)])
@@ -410,12 +420,29 @@ class UndoTests(WallCase):
         undo(self.user, self.board, self.ids(first) + self.ids(second))
         self.assertEqual(state(1, 1), (palette.EMPTY, None))
 
-    def test_undo_writes_the_journal_with_the_author_of_the_state(self):
+    def test_undo_takes_its_events_out_of_the_journal(self):
+        """Отмена не дописывает «возврат» от чужого имени: в журнале — только настоящие правки."""
+        theirs, _ = draw(self.other, self.board, [(1, 1, self.red)])
+        mine, _ = draw(self.user, self.board, [(1, 1, self.green), (2, 1, self.green)])
+        undo(self.user, self.board, self.ids(mine))
+        self.assertEqual(list(Placement.objects.values_list("pk", flat=True)), self.ids(theirs))
+
+    def test_the_cell_gets_back_its_old_time(self):
         draw(self.other, self.board, [(1, 1, self.red)])
+        then = timezone.now() - timedelta(hours=3)
+        Placement.objects.update(created=then)
+        Pixel.objects.update(placed=then)
         mine, _ = draw(self.user, self.board, [(1, 1, self.green)])
         undo(self.user, self.board, self.ids(mine))
-        last = Placement.objects.latest("id")
-        self.assertEqual((last.color, last.user_id), (self.red, self.other.pk))
+        self.assertEqual(Pixel.objects.get(x=1, y=1).placed, then)
+
+    def test_an_undo_in_another_tab_does_not_reach_past_a_newer_stroke(self):
+        """Свои же события, которых нет в отмене, держат клетку так же, как чужие."""
+        older, _ = draw(self.user, self.board, [(1, 1, self.red)])
+        draw(self.user, self.board, [(1, 1, self.green)])
+        undo(self.user, self.board, self.ids(older))
+        self.assertEqual(state(1, 1), (self.green, self.user.pk))
+        self.assertEqual(Placement.objects.count(), 2)
 
 
 class SnapshotTests(WallCase):
@@ -764,6 +791,30 @@ class BroadcastTests(WallCase):
                 with self.assertRaises(WallError):
                     draw(make_user(), make_board(), [(99, 99, DEFAULT_COLOR)])
             notify.assert_not_called()
+
+    def test_an_undo_is_announced_as_a_restore_after_the_commit(self):
+        user, other = make_user(), make_user("o@t.local")
+        board = make_board()
+        draw(other, board, [(1, 1, DEFAULT_COLOR)])
+        mine, _ = draw(user, board, [(1, 1, color("тушь"))])
+        with mock.patch("wall.services.notify_restore") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                back = undo(user, board, [p.pk for p in mine])
+                notify.assert_not_called()
+            notify.assert_called_once_with(board, back)
+        self.assertEqual([cell[:4] for cell in back], [(1, 1, DEFAULT_COLOR, other.pk)])
+
+    def test_the_restore_message_carries_the_old_time_and_no_number(self):
+        user = make_user()
+        board = make_board()
+        placed = board.created + timedelta(seconds=75)
+        with mock.patch("wall.events._publish") as publish:
+            notify_restore(board, [(1, 1, DEFAULT_COLOR, user.pk, placed), (2, 1, palette.EMPTY, None, placed)])
+        payload = publish.call_args[0][1]
+        self.assertTrue(payload["restore"])
+        self.assertNotIn("id", payload)
+        self.assertEqual(payload["pixels"], [[1, 1, DEFAULT_COLOR, user.pk, 75], [2, 1, palette.EMPTY, 0, 75]])
+        self.assertEqual(payload["people"], {str(user.pk): "Иванов Иван"})
 
     def test_the_message_carries_the_authors_and_their_names(self):
         user = make_user()
